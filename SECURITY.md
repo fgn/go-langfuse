@@ -26,6 +26,10 @@ costs, prompt references, completion timestamps, or third-party OpenTelemetry
 attributes and events. Applications using a borrowed tracer provider must
 separately configure or sanitize third-party instrumentors.
 
+`Score` fields are likewise explicit content: neither `DisableContentCapture`
+nor `Mask` applies to a score's comment, value, or metadata. Sanitize them
+before calling `RecordScore`.
+
 OpenTelemetry resource attributes are not masked. The isolated provider uses
 `resource.Default`, including `OTEL_SERVICE_NAME` and
 `OTEL_RESOURCE_ATTRIBUTES`; borrowed mode uses the caller's resource. Treat

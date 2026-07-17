@@ -512,8 +512,8 @@ split across requests automatically.
   are omitted and diagnosed without including their payload.
 - Batch export improves application latency but cannot survive an abrupt
   process exit. Graceful shutdown is required.
-- Custom filters, export-all mode, multiple projects on one provider, scores,
-  prompt fetching, datasets, and administrative APIs are outside v0.1.
+- Custom filters, export-all mode, multiple projects on one provider, prompt
+  fetching, datasets, and administrative APIs are outside v0.1.
 
 ## Development
 

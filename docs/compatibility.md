@@ -15,6 +15,10 @@ The SDK sends `x-langfuse-ingestion-version: 4` unconditionally. A server that
 does not recognize this version is incompatible; upgrade that deployment
 rather than weakening the header.
 
+Scores are submitted as JSON to the REST endpoint `/api/public/scores` on the
+same host, with the same Basic authentication. This endpoint is independent of
+the OTLP ingestion version.
+
 go-langfuse uses the instrumentation scope `langfuse-sdk.go`. Langfuse treats
 the `langfuse-sdk` prefix as an ingestion marker that prevents semantic
 attributes from being copied into generic `metadata.attributes`; the `.go`
