@@ -1,12 +1,9 @@
 # go-langfuse
 
 go-langfuse is an independent, observation-first community Langfuse client for
-Go, built on the official OpenTelemetry Go SDK, following the `go-github` /
-`go-redis` community-client naming convention. It sends traces using OTLP over
+Go, built on the official OpenTelemetry Go SDK. It sends traces using OTLP over
 HTTP/protobuf and always uses Langfuse ingestion version 4. go-langfuse is not
 affiliated with or endorsed by Langfuse.
-
-*The project was briefly named Lunte during early development.*
 
 <!-- PRE_RELEASE_WARNING: remove in the release-preparation PR before v0.1.0. -->
 This module is under active development. The public API below is the intended

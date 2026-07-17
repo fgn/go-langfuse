@@ -10,8 +10,8 @@ Versioning once the first release is tagged.
   client's credentials, base URL normalization, and environment. Synchronous
   with validation errors and no buffering; disabled clients no-op.
 
-- Renamed the module to `github.com/fgn/go-langfuse`, package `langfuse`,
-  following the `go-github`/`go-redis` community-client naming convention.
+- Renamed the module to `github.com/fgn/go-langfuse` with package name
+  `langfuse`.
 - New `Client.Observe` runs a callback inside a scoped observation: the
   callback receives the child context, the observation always ends (a panic
   is marked as a payload-free failure before propagating), and a returned
