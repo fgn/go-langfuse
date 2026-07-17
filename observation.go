@@ -1,4 +1,4 @@
-package langfuse
+package lunte
 
 import (
 	"context"
@@ -13,8 +13,8 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	lfattr "github.com/fgn/langfuse-go/internal/attributes"
-	"github.com/fgn/langfuse-go/internal/diagnostic"
+	lfattr "github.com/fgn/lunte/internal/attributes"
+	"github.com/fgn/lunte/internal/diagnostic"
 )
 
 // Observation is a concurrency-safe handle around one OpenTelemetry span.

@@ -1,8 +1,9 @@
-# Langfuse for Go
+# Lunte
 
-An observation-first Langfuse SDK for Go, built on the official OpenTelemetry
-Go SDK. It sends traces using OTLP over HTTP/protobuf and always uses Langfuse
-ingestion version 4.
+Lunte is an independent, observation-first community Langfuse client for Go,
+built on the official OpenTelemetry Go SDK. It sends traces using OTLP over
+HTTP/protobuf and always uses Langfuse ingestion version 4. Lunte is not
+affiliated with or endorsed by Langfuse.
 
 <!-- PRE_RELEASE_WARNING: remove in the release-preparation PR before v0.1.0. -->
 This module is under active development. The public API below is the intended
@@ -11,7 +12,7 @@ v0.1 contract; do not use it in production until a tagged release is available.
 ## Install
 
 ```sh
-go get github.com/fgn/langfuse-go
+go get github.com/fgn/lunte
 ```
 
 Set the project credentials from **Langfuse -> Settings -> API Keys**:
@@ -41,7 +42,7 @@ import (
 	"log"
 	"time"
 
-	langfuse "github.com/fgn/langfuse-go"
+	"github.com/fgn/lunte"
 )
 
 func main() {
@@ -51,9 +52,9 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	lf, err := langfuse.New(ctx, langfuse.ConfigFromEnv())
+	lf, err := lunte.New(ctx, lunte.ConfigFromEnv())
 	if err != nil {
-		return fmt.Errorf("create Langfuse client: %w", err)
+		return fmt.Errorf("create Lunte client: %w", err)
 	}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -61,19 +62,19 @@ func run(ctx context.Context) error {
 		_ = lf.Shutdown(shutdownCtx)
 	}()
 
-	ctx = lf.WithTraceAttributes(ctx, langfuse.TraceAttributes{
+	ctx = lf.WithTraceAttributes(ctx, lunte.TraceAttributes{
 		Name: "chat-turn", UserID: "user-123", SessionID: "conversation-456",
 		Tags: []string{"chat"},
 	})
 
 	question := "What is context in Go?"
-	rootCtx, root := lf.StartObservation(ctx, "chat-turn", langfuse.TypeAgent,
-		langfuse.ObservationAttributes{Input: question})
+	rootCtx, root := lf.StartObservation(ctx, "chat-turn", lunte.TypeAgent,
+		lunte.ObservationAttributes{Input: question})
 	defer root.End()
 
 	messages := []string{question}
 	generationCtx, generation := lf.StartObservation(rootCtx, "generate-answer",
-		langfuse.TypeGeneration, langfuse.ObservationAttributes{
+		lunte.TypeGeneration, lunte.ObservationAttributes{
 			Model: "gemini-2.5-flash", Input: messages,
 		})
 	defer generation.End()
@@ -85,17 +86,17 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	generation.Update(langfuse.ObservationAttributes{Output: answer, Usage: &usage})
-	root.Update(langfuse.ObservationAttributes{Output: answer})
+	generation.Update(lunte.ObservationAttributes{Output: answer, Usage: &usage})
+	root.Update(lunte.ObservationAttributes{Output: answer})
 	return nil
 }
 
 // Replace this stub with a provider SDK call and pass ctx to that SDK.
-func callModel(ctx context.Context, messages []string) (string, langfuse.Usage, error) {
+func callModel(ctx context.Context, messages []string) (string, lunte.Usage, error) {
 	if err := ctx.Err(); err != nil {
-		return "", langfuse.Usage{}, err
+		return "", lunte.Usage{}, err
 	}
-	return "Context carries cancellation and request-scoped values.", langfuse.Usage{
+	return "Context carries cancellation and request-scoped values.", lunte.Usage{
 		InputTokens: int64(len(messages) * 6), OutputTokens: 8,
 	}, nil
 }
@@ -129,8 +130,8 @@ Every operation uses the same API and differs only by its observation type:
 childCtx, observation := lf.StartObservation(
 	parentCtx,
 	"retrieve-documents",
-	langfuse.TypeRetriever,
-	langfuse.ObservationAttributes{Input: query},
+	lunte.TypeRetriever,
+	lunte.ObservationAttributes{Input: query},
 )
 defer observation.End()
 
@@ -139,7 +140,7 @@ if err != nil {
 	observation.RecordError(err)
 	return err
 }
-observation.Update(langfuse.ObservationAttributes{Output: documents})
+observation.Update(lunte.ObservationAttributes{Output: documents})
 ```
 
 When the work fits one function, prefer `Observe`. It removes the two
@@ -150,14 +151,14 @@ error returned by the callback is recorded on the observation and returned
 unchanged:
 
 ```go
-err := lf.Observe(parentCtx, "retrieve-documents", langfuse.TypeRetriever,
-	langfuse.ObservationAttributes{Input: query},
-	func(ctx context.Context, observation *langfuse.Observation) error {
+err := lf.Observe(parentCtx, "retrieve-documents", lunte.TypeRetriever,
+	lunte.ObservationAttributes{Input: query},
+	func(ctx context.Context, observation *lunte.Observation) error {
 		documents, err := retrieve(ctx, query)
 		if err != nil {
 			return err // recorded via RecordError automatically
 		}
-		observation.Update(langfuse.ObservationAttributes{Output: documents})
+		observation.Update(lunte.ObservationAttributes{Output: documents})
 		return nil
 	})
 ```
@@ -237,16 +238,16 @@ observations created through this client and never changes the global OTel
 provider:
 
 ```go
-lf, err := langfuse.New(ctx, langfuse.ConfigFromEnv())
+lf, err := lunte.New(ctx, lunte.ConfigFromEnv())
 ```
 
-If the application already owns an `*sdktrace.TracerProvider`, attach Langfuse
-as another processor:
+If the application already owns an `*sdktrace.TracerProvider`, attach Lunte as
+another processor:
 
 ```go
-cfg := langfuse.ConfigFromEnv()
+cfg := lunte.ConfigFromEnv()
 cfg.TracerProvider = existingProvider
-lf, err := langfuse.New(ctx, cfg)
+lf, err := lunte.New(ctx, cfg)
 ```
 
 See the [existing OpenTelemetry guide](docs/existing-opentelemetry.md) and
@@ -255,22 +256,22 @@ lifecycle.
 
 | Behavior | Isolated provider | Borrowed provider |
 | --- | --- | --- |
-| Provider owner | Langfuse client | Application |
+| Provider owner | Lunte client | Application |
 | SDK observations | Exported | Exported |
-| Selected third-party AI spans | Not observed | Exported by the Langfuse smart filter |
+| Selected third-party AI spans | Not observed | Exported by Lunte's Langfuse smart filter |
 | Sampler and resource | Always-sampled; SDK-owned resource | Existing provider remains authoritative |
 | Span limits | Fixed SDK-safe limits; ambient `OTEL_SPAN_*` ignored | Caller limits remain authoritative |
-| `Client.Shutdown` | Stops owned provider resources | Stops and unregisters only Langfuse's processor |
+| `Client.Shutdown` | Stops owned provider resources | Stops and unregisters only Lunte's processor |
 | Global OTel provider | Never replaced | Never replaced |
 
 Borrowed mode deliberately annotates shared spans at start with environment,
 release, and propagated trace attributes. Span processors share those spans,
 so these Langfuse annotations are also visible to the application's other
-exporters. The Langfuse processor does not remove or suppress spans seen by
+exporters. Lunte's processor does not remove or suppress spans seen by
 those exporters.
 
-SDK observation scopes include the Langfuse project public key so each
-Langfuse processor can reject another project's SDK spans. On a borrowed
+Lunte observation scopes include the Langfuse project public key so each
+processor can reject another project's Lunte spans. On a borrowed
 provider, unrelated exporters will therefore also see that public-key project
 identifier in the instrumentation scope. The secret key is never attached to
 telemetry.
@@ -289,8 +290,8 @@ not copy or sanitize arbitrary third-party attributes/events, so their
 in-memory size and the cost of marshaling one span remain the caller's trust
 boundary; configure instrumentor and provider limits accordingly.
 
-Only one active Langfuse client is supported per borrowed tracer provider. If
-`New` detects an existing Langfuse attachment, it reports a warning through
+Only one active Lunte client is supported per borrowed tracer provider. If
+`New` detects an existing Lunte attachment, it reports a warning through
 the standard OpenTelemetry error handler and succeeds with a true no-op client.
 That second client registers no processor, starts no exporter or background
 worker, exports nothing, and does not release the first client's attachment
@@ -332,7 +333,7 @@ Copy and recursively redact maps and slices rather than mutating caller-owned
 data:
 
 ```go
-cfg := langfuse.ConfigFromEnv()
+cfg := lunte.ConfigFromEnv()
 cfg.DisableContentCapture = true
 cfg.Mask = redactSDKValue
 
@@ -367,7 +368,7 @@ This example assumes nested values use the JSON-like `map[string]any` and
 `[]any` shapes shown. A production masker must cover every concrete value type
 the application supplies and must have tests proving its redaction policy.
 
-These controls apply **only to data supplied through this Langfuse client**.
+These controls apply **only to data supplied through this Lunte client**.
 They do not rewrite or remove attributes or events emitted by third-party OTel
 instrumentation. In borrowed-provider mode, configure those instrumentors not
 to capture sensitive content or sanitize them independently. The client emits
@@ -397,7 +398,7 @@ if err := lf.Shutdown(shutdownCtx); err != nil {
 }
 ```
 
-In borrowed mode, shut down Langfuse first and then let the application shut
+In borrowed mode, shut down Lunte first and then let the application shut
 down its tracer provider. The client never shuts down unrelated processors or
 exporters. Create a new timeout context immediately before each `Flush` or
 `Shutdown` call. Do not reuse a context across lifecycle calls: its deadline
@@ -440,7 +441,7 @@ observation calls do not turn telemetry failures into application failures.
 `Flush` and `Shutdown` return lifecycle/export errors to the caller.
 
 Generic `OTEL_EXPORTER_OTLP_*`, `OTEL_BSP_*`, and `OTEL_SPAN_*` variables are
-intentionally ignored by the isolated Langfuse transport/provider; they often
+intentionally ignored by Lunte's isolated transport/provider; they often
 configure an application's separate telemetry backend. Langfuse HTTPS uses
 Go's system trust configuration, and the HTTP client still follows standard
 `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` behavior. Borrowed mode continues to use
@@ -467,10 +468,10 @@ split across requests automatically.
 
 ## Sampling and current limitations
 
-- Isolated mode always samples its own Langfuse observations, including children
+- Isolated mode always samples its own Lunte observations, including children
   of an unsampled foreign parent, while retaining the foreign trace and parent
   IDs. In borrowed mode, spans rejected by the application's sampler cannot be
-  recovered by Langfuse. Smart filtering is an export selection step, not a
+  recovered by Lunte. Smart filtering is an export selection step, not a
   sampler.
 - The default smart filter exports SDK observations, spans with `gen_ai.*`
   attributes, known LLM instrumentation scopes, and required application roots.
@@ -501,7 +502,6 @@ go test -race ./...
 go vet ./...
 ```
 
-The design contract and release gates are documented in [`PLAN.md`](PLAN.md).
 Supported protocol and server combinations are tracked in the
 [compatibility matrix](docs/compatibility.md).
 The opt-in live gate and release checklist are documented in

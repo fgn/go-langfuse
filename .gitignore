@@ -7,6 +7,6 @@
 .DS_Store
 /coverage.out
 /coverage.html
-/langfuse-go
-/langfuse-go.test
+/lunte
+/lunte.test
 /*.test

@@ -15,7 +15,7 @@ Merge a release-preparation pull request that completes every item below:
    content-disclosure findings, then record a non-secret issue, checklist, or
    run URL as evidence.
 2. Pre-seed the dedicated synthetic Langfuse project with prompt
-   `langfuse-go-live-prompt` version 1 and the checklist evaluator. Run
+   `lunte-live-prompt` version 1 and the checklist evaluator. Run
    `go test -count=1 -tags=live -run TestLiveCompatibility -v .` with that
    project's credentials. Use the logged unique run marker to verify the
    UI/filter/evaluator checklist in

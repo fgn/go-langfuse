@@ -1,6 +1,6 @@
 //go:build live
 
-package langfuse_test
+package lunte_test
 
 import (
 	"context"
@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	langfuse "github.com/fgn/langfuse-go"
-	"github.com/fgn/langfuse-go/internal/transport"
+	"github.com/fgn/lunte"
+	"github.com/fgn/lunte/internal/transport"
 )
 
 // TestLiveCompatibility is opt-in, writes one synthetic trace to the
@@ -30,14 +30,14 @@ func TestLiveCompatibility(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	config := langfuse.ConfigFromEnv()
+	config := lunte.ConfigFromEnv()
 	if config.Disabled {
 		t.Fatal("LANGFUSE_TRACING_ENABLED disables tracing; refusing to pass without exporting")
 	}
 	if config.DisableContentCapture {
 		t.Fatal("LANGFUSE_CONTENT_CAPTURE_ENABLED disables content; the live compatibility fixture must exercise content ingestion")
 	}
-	client, err := langfuse.New(ctx, config)
+	client, err := lunte.New(ctx, config)
 	if err != nil {
 		t.Fatalf("New(): %v", err)
 	}
@@ -49,32 +49,32 @@ func TestLiveCompatibility(t *testing.T) {
 		}
 	}()
 
-	runMarker := fmt.Sprintf("langfuse-go-live-%d", time.Now().UTC().UnixNano())
-	ctx = client.WithTraceAttributes(ctx, langfuse.TraceAttributes{
+	runMarker := fmt.Sprintf("lunte-live-%d", time.Now().UTC().UnixNano())
+	ctx = client.WithTraceAttributes(ctx, lunte.TraceAttributes{
 		Name:      runMarker,
 		UserID:    "synthetic-live-user",
 		SessionID: runMarker,
-		Tags:      []string{"langfuse-go", "live-compatibility"},
-		Metadata:  map[string]any{"synthetic": true, "sdk": "go", "run_marker": runMarker},
+		Tags:      []string{"lunte", "live-compatibility"},
+		Metadata:  map[string]any{"synthetic": true, "sdk": "lunte", "run_marker": runMarker},
 		Version:   "v0.1-live",
 	})
-	ctx, root := client.StartObservation(ctx, "live-root", langfuse.TypeAgent,
-		langfuse.ObservationAttributes{Input: "synthetic question"})
+	ctx, root := client.StartObservation(ctx, "live-root", lunte.TypeAgent,
+		lunte.ObservationAttributes{Input: "synthetic question"})
 	if root.TraceID() == "" || root.ID() == "" {
 		t.Fatal("live root is not recording; refusing to pass without exporting")
 	}
-	_, generation := client.StartObservation(ctx, "live-generation", langfuse.TypeGeneration,
-		langfuse.ObservationAttributes{
+	_, generation := client.StartObservation(ctx, "live-generation", lunte.TypeGeneration,
+		lunte.ObservationAttributes{
 			Input:  "synthetic prompt",
 			Model:  "synthetic-model",
-			Prompt: &langfuse.PromptRef{Name: "langfuse-go-live-prompt", Version: 1},
+			Prompt: &lunte.PromptRef{Name: "lunte-live-prompt", Version: 1},
 		})
 	if generation.TraceID() == "" || generation.ID() == "" {
 		t.Fatal("live generation is not recording; refusing to pass without exporting")
 	}
-	generation.Update(langfuse.ObservationAttributes{
+	generation.Update(lunte.ObservationAttributes{
 		Output: "synthetic answer",
-		Usage: &langfuse.Usage{
+		Usage: &lunte.Usage{
 			InputTokens:           12,
 			OutputTokens:          7,
 			CacheReadInputTokens:  2,
@@ -84,7 +84,7 @@ func TestLiveCompatibility(t *testing.T) {
 		CostDetails: map[string]float64{"input": 0.0001, "output": 0.0002},
 	})
 	generation.End()
-	root.Update(langfuse.ObservationAttributes{Output: "synthetic answer"})
+	root.Update(lunte.ObservationAttributes{Output: "synthetic answer"})
 	root.End()
 
 	flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -104,6 +104,7 @@ func TestLiveCompatibility(t *testing.T) {
 	if readBack.Model != "synthetic-model" {
 		t.Errorf("read-back model = %q, want synthetic-model", readBack.Model)
 	}
+	assertLunteMetadata(t, "observation", readBack.Metadata)
 	// The SDK normalizes the inclusive Usage fields sent above (input 12 with
 	// 2 cached and 1 audio, output 7 with 1 reasoning) to exclusive buckets.
 	for bucket, want := range map[string]float64{"input": 9, "output": 6, "total": 19} {
@@ -120,6 +121,7 @@ func TestLiveCompatibility(t *testing.T) {
 	if got, want := trace.Output, any("synthetic answer"); got != want {
 		t.Errorf("read-back trace output = %#v, want root observation output %#v", got, want)
 	}
+	assertLunteMetadata(t, "trace", trace.Metadata)
 }
 
 type liveObservation struct {
@@ -129,12 +131,29 @@ type liveObservation struct {
 	Type         string             `json:"type"`
 	Model        string             `json:"model"`
 	UsageDetails map[string]float64 `json:"usageDetails"`
+	Metadata     map[string]any     `json:"metadata"`
 }
 
 type liveTrace struct {
-	ID     string `json:"id"`
-	Input  any    `json:"input"`
-	Output any    `json:"output"`
+	ID       string         `json:"id"`
+	Input    any            `json:"input"`
+	Output   any            `json:"output"`
+	Metadata map[string]any `json:"metadata"`
+}
+
+func assertLunteMetadata(t *testing.T, subject string, metadata map[string]any) {
+	t.Helper()
+	if _, duplicated := metadata["attributes"]; duplicated {
+		t.Errorf("read-back %s metadata redundantly contains semantic attributes", subject)
+	}
+	scope, ok := metadata["scope"].(map[string]any)
+	if !ok {
+		t.Errorf("read-back %s metadata scope = %#v, want object", subject, metadata["scope"])
+		return
+	}
+	if got := scope["name"]; got != "langfuse-sdk.lunte" {
+		t.Errorf("read-back %s metadata scope name = %#v, want langfuse-sdk.lunte", subject, got)
+	}
 }
 
 type liveAPI struct {

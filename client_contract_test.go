@@ -1,4 +1,4 @@
-package langfuse
+package lunte
 
 import (
 	"context"
@@ -226,7 +226,7 @@ func TestNewAppliesOwnedProviderDefaults(t *testing.T) {
 }
 
 func TestOwnedProviderHonorsOTELServiceName(t *testing.T) {
-	const helper = "LANGFUSE_GO_SERVICE_NAME_HELPER"
+	const helper = "LUNTE_SERVICE_NAME_HELPER"
 	if os.Getenv(helper) != "1" {
 		command := exec.Command(os.Args[0], "-test.run=^TestOwnedProviderHonorsOTELServiceName$")
 		command.Env = append(os.Environ(), helper+"=1")

@@ -1,4 +1,4 @@
-module github.com/fgn/langfuse-go
+module github.com/fgn/lunte
 
 go 1.25.0
 

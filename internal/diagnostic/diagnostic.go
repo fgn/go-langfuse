@@ -15,5 +15,5 @@ func Report(message string) {
 		// handler must not turn a telemetry diagnostic into an application panic.
 		_ = recover()
 	}()
-	otel.Handle(errors.New("langfuse: " + message))
+	otel.Handle(errors.New("lunte: " + message))
 }

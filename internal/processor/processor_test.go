@@ -11,7 +11,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	lfattr "github.com/fgn/langfuse-go/internal/attributes"
+	lfattr "github.com/fgn/lunte/internal/attributes"
 )
 
 func TestNewRequiresNextProcessor(t *testing.T) {
@@ -109,7 +109,7 @@ func TestSmartFilterUsesFinalAttributesAndExactModernSemconvPrefix(t *testing.T)
 	}
 }
 
-func TestLangfuseScopeIsIsolatedByPublicKey(t *testing.T) {
+func TestLunteScopeIsIsolatedByPublicKey(t *testing.T) {
 	t.Parallel()
 
 	next := newRecordingProcessor()
@@ -144,11 +144,12 @@ func TestLangfuseScopeIsIsolatedByPublicKey(t *testing.T) {
 	}
 }
 
-func TestKnownLLMInstrumentationScopesMatchPythonSnapshot(t *testing.T) {
+func TestKnownLLMInstrumentationScopesIncludeLunteAndPythonSnapshot(t *testing.T) {
 	t.Parallel()
 
 	want := []string{
 		lfattr.TracerName,
+		"langfuse-sdk",
 		"agent_framework",
 		"autogen-core",
 		"ai",

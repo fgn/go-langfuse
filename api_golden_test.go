@@ -1,4 +1,4 @@
-package langfuse_test
+package lunte_test
 
 import (
 	"bytes"
@@ -34,9 +34,9 @@ func renderPublicAPI(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("parse root package: %v", err)
 	}
-	pkg := packages["langfuse"]
+	pkg := packages["lunte"]
 	if pkg == nil {
-		t.Fatal("parsed root package does not contain package langfuse")
+		t.Fatal("parsed root package does not contain package lunte")
 	}
 
 	entries := make([]string, 0)

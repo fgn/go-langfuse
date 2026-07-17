@@ -1,4 +1,4 @@
-package langfuse_test
+package lunte_test
 
 import (
 	"bytes"
@@ -7,20 +7,20 @@ import (
 	"testing"
 	"time"
 
-	langfuse "github.com/fgn/langfuse-go"
+	"github.com/fgn/lunte"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 )
 
 func TestObserveEndsObservationAndParentsChildren(t *testing.T) {
 	client, receiver := newObservationWireClient(t, nil)
 
-	err := client.Observe(context.Background(), "observe-root", langfuse.TypeAgent,
-		langfuse.ObservationAttributes{Input: "question"},
-		func(ctx context.Context, observation *langfuse.Observation) error {
-			_, child := client.StartObservation(ctx, "observe-child", langfuse.TypeSpan,
-				langfuse.ObservationAttributes{})
+	err := client.Observe(context.Background(), "observe-root", lunte.TypeAgent,
+		lunte.ObservationAttributes{Input: "question"},
+		func(ctx context.Context, observation *lunte.Observation) error {
+			_, child := client.StartObservation(ctx, "observe-child", lunte.TypeSpan,
+				lunte.ObservationAttributes{})
 			child.End()
-			observation.Update(langfuse.ObservationAttributes{Output: "answer"})
+			observation.Update(lunte.ObservationAttributes{Output: "answer"})
 			return nil
 		})
 	if err != nil {
@@ -47,9 +47,9 @@ func TestObserveRecordsReturnedError(t *testing.T) {
 	client, receiver := newObservationWireClient(t, nil)
 
 	wantErr := errors.New("model exploded")
-	err := client.Observe(context.Background(), "observe-error", langfuse.TypeGeneration,
-		langfuse.ObservationAttributes{Model: "model-survives"},
-		func(ctx context.Context, observation *langfuse.Observation) error {
+	err := client.Observe(context.Background(), "observe-error", lunte.TypeGeneration,
+		lunte.ObservationAttributes{Model: "model-survives"},
+		func(ctx context.Context, observation *lunte.Observation) error {
 			return wantErr
 		})
 	if !errors.Is(err, wantErr) {
@@ -75,9 +75,9 @@ func TestObservePanicEndsObservationWithoutCapturingPanicValue(t *testing.T) {
 	const panicPayload = "PANIC-PAYLOAD-observe-51ce"
 	recovered := func() (recovered any) {
 		defer func() { recovered = recover() }()
-		_ = client.Observe(context.Background(), "observe-panic", langfuse.TypeSpan,
-			langfuse.ObservationAttributes{},
-			func(ctx context.Context, observation *langfuse.Observation) error {
+		_ = client.Observe(context.Background(), "observe-panic", lunte.TypeSpan,
+			lunte.ObservationAttributes{},
+			func(ctx context.Context, observation *lunte.Observation) error {
 				panic(panicPayload)
 			})
 		return nil
@@ -99,24 +99,24 @@ func TestObserveNilCallbackStartsNoObservation(t *testing.T) {
 	diagnostics := captureEdgeDiagnostics(t)
 	client, receiver := newObservationWireClient(t, nil)
 
-	if err := client.Observe(context.Background(), "observe-nil-callback", langfuse.TypeSpan,
-		langfuse.ObservationAttributes{}, nil); err != nil {
+	if err := client.Observe(context.Background(), "observe-nil-callback", lunte.TypeSpan,
+		lunte.ObservationAttributes{}, nil); err != nil {
 		t.Fatalf("Observe(nil callback) error = %v, want nil", err)
 	}
 	assertEdgeDiagnosticCount(t, diagnostics, "observe callback is nil", 1)
 
 	// A follow-up observation proves the nil-callback call exported nothing.
 	_, observation := client.StartObservation(context.Background(), "observe-follow-up",
-		langfuse.TypeSpan, langfuse.ObservationAttributes{})
+		lunte.TypeSpan, lunte.ObservationAttributes{})
 	observation.End()
 	exportObservationWireSpans(t, client, receiver, 1)
 }
 
 func TestObserveRunsCallbackOnNilDisabledAndStoppedClients(t *testing.T) {
 	captureEdgeDiagnostics(t)
-	disabled, err := langfuse.New(context.Background(), langfuse.Config{Disabled: true})
+	disabled, err := lunte.New(context.Background(), lunte.Config{Disabled: true})
 	if err != nil {
-		t.Fatalf("langfuse.New(disabled) error = %v", err)
+		t.Fatalf("lunte.New(disabled) error = %v", err)
 	}
 	stopped, _ := newObservationWireClient(t, nil)
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -128,14 +128,14 @@ func TestObserveRunsCallbackOnNilDisabledAndStoppedClients(t *testing.T) {
 	type contextKey struct{}
 	ctx := context.WithValue(context.Background(), contextKey{}, "caller-value")
 	wantErr := errors.New("callback error passes through")
-	for name, client := range map[string]*langfuse.Client{
+	for name, client := range map[string]*lunte.Client{
 		"nil":      nil,
 		"disabled": disabled,
 		"stopped":  stopped,
 	} {
 		ran := false
-		err := client.Observe(ctx, "observe-noop", langfuse.TypeSpan, langfuse.ObservationAttributes{},
-			func(callbackCtx context.Context, observation *langfuse.Observation) error {
+		err := client.Observe(ctx, "observe-noop", lunte.TypeSpan, lunte.ObservationAttributes{},
+			func(callbackCtx context.Context, observation *lunte.Observation) error {
 				ran = true
 				if callbackCtx != ctx {
 					t.Errorf("%s client: callback context differs from the caller context", name)

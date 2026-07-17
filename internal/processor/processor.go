@@ -1,4 +1,4 @@
-// Package processor contains Langfuse's OpenTelemetry span processor.
+// Package processor contains Lunte's OpenTelemetry span processor.
 package processor
 
 import (
@@ -12,8 +12,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	lfattr "github.com/fgn/langfuse-go/internal/attributes"
-	"github.com/fgn/langfuse-go/internal/diagnostic"
+	lfattr "github.com/fgn/lunte/internal/attributes"
+	"github.com/fgn/lunte/internal/diagnostic"
 )
 
 // ContextAttributesFunc returns already-normalized attributes belonging to
@@ -70,10 +70,10 @@ type spanKey struct {
 	spanID  oteltrace.SpanID
 }
 
-// New returns a Langfuse processor wrapping config.Next.
+// New returns a Lunte processor wrapping config.Next.
 func New(config Config) (*Processor, error) {
 	if config.Next == nil {
-		return nil, errors.New("langfuse processor: next span processor is required")
+		return nil, errors.New("lunte processor: next span processor is required")
 	}
 
 	return &Processor{
@@ -324,11 +324,12 @@ func ShouldExport(span sdktrace.ReadOnlySpan) bool {
 	return false
 }
 
-// This list is derived from langfuse-python's default span filter at commit
-// 25257a5 (research snapshot 2026-07-16). See THIRD_PARTY_NOTICES.md. Prefix
-// matching is namespace-aware.
+// The entries after Lunte's own scope are derived from langfuse-python's
+// default span filter at commit 25257a5 (research snapshot 2026-07-16). See
+// THIRD_PARTY_NOTICES.md. Prefix matching is namespace-aware.
 var knownLLMInstrumentationScopePrefixes = [...]string{
 	lfattr.TracerName,
+	"langfuse-sdk",
 	"agent_framework",
 	"autogen-core",
 	"ai",

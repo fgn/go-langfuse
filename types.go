@@ -1,4 +1,4 @@
-package langfuse
+package lunte
 
 import (
 	"time"
@@ -6,7 +6,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
-// Config configures a Langfuse client.
+// Config configures a Lunte client.
 type Config struct {
 	// BaseURL is the Langfuse host or OTLP traces endpoint. It defaults to
 	// https://cloud.langfuse.com.
@@ -17,7 +17,7 @@ type Config struct {
 	SecretKey string
 
 	// Environment and Release are stamped on every span observed by the
-	// Langfuse processor.
+	// Lunte processor.
 	Environment string
 	Release     string
 
@@ -26,7 +26,7 @@ type Config struct {
 	// OTEL_SERVICE_NAME. It is ignored when TracerProvider is set.
 	ServiceName string
 
-	// TracerProvider attaches Langfuse to a caller-owned provider. The client
+	// TracerProvider attaches Lunte to a caller-owned provider. The client
 	// never replaces the global provider or shuts this provider down.
 	TracerProvider *sdktrace.TracerProvider
 
