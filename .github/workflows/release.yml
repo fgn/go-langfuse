@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       dogfood_passed:
-        description: "I attest that staged production dogfood passed with no disclosure/duplication findings"
+        description: "I attest that the staged production dogfood passed with no disclosure/duplication findings"
         required: true
         default: false
         type: boolean
@@ -69,7 +69,7 @@ jobs:
           {
             echo "### Human release attestations"
             echo "- Live compatibility gate: $LIVE_GATE_EVIDENCE"
-            echo "- production staged dogfood: $DOGFOOD_EVIDENCE"
+            echo "- Staged production dogfood: $DOGFOOD_EVIDENCE"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0

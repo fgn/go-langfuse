@@ -49,7 +49,7 @@ From GitHub Actions, manually run the **Release** workflow on `main` and supply:
 
 - the exact stable version, such as `v0.1.0`;
 - an explicit live-gate attestation and its non-secret evidence URL or ID; and
-- an explicit production dogfood attestation and its non-secret evidence URL or
+- an explicit production-dogfood attestation and its non-secret evidence URL or
   ID.
 
 The `release` GitHub environment should require maintainer approval. The
