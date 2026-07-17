@@ -15,11 +15,12 @@ var (
 	_ func() langfuse.Config                                           = langfuse.ConfigFromEnv
 	_ func(context.Context, langfuse.Config) (*langfuse.Client, error) = langfuse.New
 
-	_ func(*langfuse.Client, context.Context, langfuse.TraceAttributes) context.Context                                                                  = (*langfuse.Client).WithTraceAttributes
-	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes) (context.Context, *langfuse.Observation) = (*langfuse.Client).StartObservation
-	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationAttributes)                                                                    = (*langfuse.Client).Event
-	_ func(*langfuse.Client, context.Context) error                                                                                                      = (*langfuse.Client).Flush
-	_ func(*langfuse.Client, context.Context) error                                                                                                      = (*langfuse.Client).Shutdown
+	_ func(*langfuse.Client, context.Context, langfuse.TraceAttributes) context.Context                                                                                   = (*langfuse.Client).WithTraceAttributes
+	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes) (context.Context, *langfuse.Observation)                  = (*langfuse.Client).StartObservation
+	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes, func(context.Context, *langfuse.Observation) error) error = (*langfuse.Client).Observe
+	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationAttributes)                                                                                     = (*langfuse.Client).Event
+	_ func(*langfuse.Client, context.Context) error                                                                                                                       = (*langfuse.Client).Flush
+	_ func(*langfuse.Client, context.Context) error                                                                                                                       = (*langfuse.Client).Shutdown
 
 	_ func(*langfuse.Observation, langfuse.ObservationAttributes) = (*langfuse.Observation).Update
 	_ func(*langfuse.Observation, error)                          = (*langfuse.Observation).RecordError
@@ -34,6 +35,7 @@ func TestPublicMethodSurface(t *testing.T) {
 	assertMethodNames(t, (*langfuse.Client)(nil), []string{
 		"Event",
 		"Flush",
+		"Observe",
 		"Shutdown",
 		"StartObservation",
 		"WithTraceAttributes",

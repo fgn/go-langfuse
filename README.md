@@ -142,6 +142,30 @@ if err != nil {
 observation.Update(langfuse.ObservationAttributes{Output: documents})
 ```
 
+When the work fits one function, prefer `Observe`. It removes the two
+mistakes the rules above guard against: the callback receives the child
+context, and the observation always ends — even when the callback panics,
+which is marked as a payload-free failure before the panic propagates. An
+error returned by the callback is recorded on the observation and returned
+unchanged:
+
+```go
+err := lf.Observe(parentCtx, "retrieve-documents", langfuse.TypeRetriever,
+	langfuse.ObservationAttributes{Input: query},
+	func(ctx context.Context, observation *langfuse.Observation) error {
+		documents, err := retrieve(ctx, query)
+		if err != nil {
+			return err // recorded via RecordError automatically
+		}
+		observation.Update(langfuse.ObservationAttributes{Output: documents})
+		return nil
+	})
+```
+
+Use `StartObservation` directly when an observation's lifetime cannot be
+scoped to one function, such as ending a generation only after a stream is
+fully consumed.
+
 Supported types are `span`, `generation`, `event`, `embedding`, `agent`,
 `tool`, `chain`, `retriever`, `evaluator`, and `guardrail`. `Event` is a
 shortcut that creates and immediately ends a point-in-time event.

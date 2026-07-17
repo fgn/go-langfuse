@@ -5,6 +5,12 @@ Versioning once the first release is tagged.
 
 ## Unreleased
 
+- New `Client.Observe` runs a callback inside a scoped observation: the
+  callback receives the child context, the observation always ends (a panic
+  is marked as a payload-free failure before propagating), and a returned
+  error is recorded through `RecordError` and returned unchanged.
+- `Update` now reports a payload-free diagnostic when `StartTime` is set,
+  matching `Event`, instead of silently ignoring the field.
 - Transport now uses the official `otlptracehttp` exporter with every
   environment-sensitive option pinned explicitly, wrapped for secret
   redaction and 4 MiB request-size splitting; the hand-rolled HTTP

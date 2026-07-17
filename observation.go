@@ -96,6 +96,43 @@ func (c *Client) StartObservation(
 	return spanCtx, observation
 }
 
+// Observe starts an observation, runs fn with the child context and the
+// observation handle, and always ends the observation, including when fn
+// panics. A non-nil error returned by fn is recorded through RecordError and
+// returned unchanged, so fn does not need to record it itself. When fn panics,
+// the observation is marked failed with the payload-free status "panic" — the
+// panic value is never captured — and the panic propagates. On a nil,
+// disabled, or stopped client fn still runs, receiving ctx unchanged and a
+// no-op handle. A nil fn reports a diagnostic and starts no observation.
+func (c *Client) Observe(
+	ctx context.Context,
+	name string,
+	observationType ObservationType,
+	values ObservationAttributes,
+	fn func(ctx context.Context, observation *Observation) error,
+) error {
+	if fn == nil {
+		diagnostic.Report("observe callback is nil; no observation started")
+		return nil
+	}
+	observationCtx, observation := c.StartObservation(ctx, name, observationType, values)
+	completed := false
+	defer func() {
+		if !completed {
+			// fn is unwinding from a panic. Record a payload-free failure: the
+			// panic value is not explicitly supplied telemetry content.
+			observation.Update(ObservationAttributes{Level: LevelError, StatusMessage: "panic"})
+		}
+		observation.End()
+	}()
+	err := fn(observationCtx, observation)
+	completed = true
+	if err != nil {
+		observation.RecordError(err)
+	}
+	return err
+}
+
 // Event records an instantaneous event observation.
 func (c *Client) Event(ctx context.Context, name string, values ObservationAttributes) {
 	if !values.StartTime.IsZero() && c != nil && !c.isDisabled() && ctx != nil && !c.stopped.Load() {
@@ -108,7 +145,8 @@ func (c *Client) Event(ctx context.Context, name string, values ObservationAttri
 
 // Update merges non-zero fields into an active observation. Structured model,
 // usage, and cost maps replace their complete serialized attributes when set;
-// metadata merges by top-level key.
+// metadata merges by top-level key. StartTime cannot be changed after start
+// and is ignored with a diagnostic.
 func (o *Observation) Update(values ObservationAttributes) {
 	if o == nil || o.client == nil || o.span == nil {
 		return
@@ -539,7 +577,7 @@ func (c *Client) buildObservationAttributes(
 	// bounded entry count preserves room for generation and processor fields.
 	result = append(result, lfattr.ObservationMetadataWithExisting(values.Metadata, c.mask, existingMetadata)...)
 	if !starting && !values.StartTime.IsZero() {
-		// StartTime is intentionally ignored by Update.
+		diagnostic.Report("update start time ignored; start time can be set only when the observation starts")
 	}
 	return result, explicit
 }

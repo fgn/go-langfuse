@@ -209,6 +209,14 @@ func (c *Client) Event(ctx context.Context, name string, values ObservationAttri
 
 func (c *Client) Flush(ctx context.Context) error
 
+func (c *Client) Observe(
+	ctx context.Context,
+	name string,
+	observationType ObservationType,
+	values ObservationAttributes,
+	fn func(ctx context.Context, observation *Observation) error,
+) error
+
 func (c *Client) Shutdown(ctx context.Context) error
 
 func (c *Client) StartObservation(

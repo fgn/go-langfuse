@@ -165,6 +165,7 @@ type ObservationAttributes struct {
 	Prompt              *PromptRef
 	CompletionStartTime time.Time
 
-	// StartTime is honored only by StartObservation.
+	// StartTime is honored only by StartObservation; Event and Update ignore
+	// it with a diagnostic.
 	StartTime time.Time
 }

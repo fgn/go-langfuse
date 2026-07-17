@@ -214,6 +214,7 @@ func TestEdgeContractUpdateAfterEndIsNoop(t *testing.T) {
 }
 
 func TestEdgeContractStartTimeIsIgnoredByUpdate(t *testing.T) {
+	diagnostics := captureEdgeDiagnostics(t)
 	client, receiver := newObservationWireClient(t, nil)
 	start := time.Date(2026, 7, 16, 14, 15, 16, 123456789, time.UTC)
 	ignored := time.Date(1999, 1, 2, 3, 4, 5, 6, time.UTC)
@@ -234,6 +235,7 @@ func TestEdgeContractStartTimeIsIgnoredByUpdate(t *testing.T) {
 	want := edgeBaseAttributes("span")
 	want["langfuse.observation.output"] = "update-survives"
 	assertObservationWireAttributes(t, span.span.Attributes, want)
+	assertEdgeDiagnosticCount(t, diagnostics, "update start time ignored", 1)
 }
 
 func TestEdgeContractEventIgnoresExplicitStartTime(t *testing.T) {
