@@ -98,8 +98,9 @@ func (c *Client) StartObservation(
 
 // Observe starts an observation, runs fn with the child context and the
 // observation handle, and always ends the observation, including when fn
-// panics. A non-nil error returned by fn is recorded through RecordError and
-// returned unchanged, so fn does not need to record it itself. When fn panics,
+// panics. A non-nil error returned by fn is recorded through
+// [Observation.RecordError] and returned unchanged, so fn does not need to
+// record it itself. When fn panics,
 // the observation is marked failed with the payload-free status "panic" — the
 // panic value is never captured — and the panic propagates. On a nil,
 // disabled, or stopped client fn still runs, receiving ctx unchanged and a

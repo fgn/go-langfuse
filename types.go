@@ -32,7 +32,7 @@ type Config struct {
 
 	// MaxQueueSize bounds how many ended export-eligible spans the client
 	// buffers in memory while waiting for batch export. Zero selects the
-	// default of 2048; negative values are a validation error in New.
+	// default of 2048; negative values are a validation error in [New].
 	MaxQueueSize int
 
 	// BlockOnQueueFull makes ending an exported observation wait for buffer
@@ -54,7 +54,8 @@ type Config struct {
 	// Mask applies only to Input, Output, and Metadata supplied through this
 	// Client. Each metadata map is passed as one complete value and must remain
 	// a map[string]any to be retained. It does not process identifiers, model
-	// fields, StatusMessage, RecordError text, or third-party spans and events.
+	// fields, StatusMessage, [Observation.RecordError] text, or third-party
+	// spans and events.
 	// Mask may be called concurrently and therefore must be concurrency-safe.
 	// A panic is recovered and the affected value is omitted.
 	Mask func(value any) any
