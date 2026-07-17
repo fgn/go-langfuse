@@ -790,8 +790,9 @@ func assertObservationWireEnvelope(t *testing.T, span wireSpan) {
 	if span.scope == nil {
 		t.Fatal("OTLP ScopeSpans.scope is nil")
 	}
-	if span.scope.Name != "langfuse-sdk.go" || span.scope.Version != "0.1.0" {
-		t.Fatalf("instrumentation scope = (%q, %q), want (langfuse-sdk.go, 0.1.0)", span.scope.Name, span.scope.Version)
+	if span.scope.Name != "langfuse-sdk.go" || span.scope.Version != langfuse.SDKVersion {
+		t.Fatalf("instrumentation scope = (%q, %q), want (langfuse-sdk.go, %s)",
+			span.scope.Name, span.scope.Version, langfuse.SDKVersion)
 	}
 	if span.scope.DroppedAttributesCount != 0 {
 		t.Fatalf("scope dropped attributes = %d, want 0", span.scope.DroppedAttributesCount)
