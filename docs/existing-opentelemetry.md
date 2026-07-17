@@ -38,6 +38,14 @@ status/error text, or provider/framework attributes and events. In particular,
 `RecordError` exports `err.Error()` without masking. Configure third-party
 instrumentation independently and use payload-free error/status values.
 
+SDK observation scopes carry the project public key so each processor can
+reject another project's SDK spans; other exporters on the shared provider see
+that identifier as well. The secret key is never attached to telemetry.
+
+The caller owns span limits. If they are unusually low, OpenTelemetry may drop
+SDK fields; the client emits a payload-free diagnostic when it detects that on
+an SDK observation.
+
 Only one active client is supported on a borrowed provider. A
 duplicate construction emits an OTel diagnostic and returns a true no-op
 client so unscoped AI spans cannot fan out to two projects.

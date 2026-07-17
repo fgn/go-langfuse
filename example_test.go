@@ -137,6 +137,26 @@ func ExampleClient_RecordScore() {
 	}
 }
 
+func ExampleClient_Flush() {
+	ctx := context.Background()
+	lf, err := langfuse.New(ctx, langfuse.ConfigFromEnv())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	lf.Event(ctx, "job-completed", langfuse.ObservationAttributes{
+		Metadata: map[string]any{"records": 42},
+	})
+
+	// Short-lived jobs and serverless handlers flush before returning so
+	// batched observations are exported while the client stays usable.
+	flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := lf.Flush(flushCtx); err != nil {
+		log.Printf("flush: %v", err)
+	}
+}
+
 func retrieve(ctx context.Context, query string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
