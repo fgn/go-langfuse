@@ -186,6 +186,30 @@ after an observation has ended are ignored. Each observation retains at most
 eight `RecordError` exception events; further errors are omitted with one
 payload-free diagnostic.
 
+## Scores
+
+`RecordScore` submits evaluations and user feedback through the Langfuse REST
+scores endpoint using the client's credentials and environment. Unlike
+observations, scores are synchronous with no buffering or retry: transport
+errors return to the caller, a disabled client is a no-op, and a shut-down
+client returns an error.
+
+```go
+rating := float64(feedback.Rating)
+err := lf.RecordScore(ctx, langfuse.Score{
+	ID:           "feedback-" + feedback.ID, // idempotent upsert key
+	Name:         "user-feedback",
+	SessionID:    "conversation-456",        // or TraceID / TraceID+ObservationID
+	NumericValue: &rating,
+	Comment:      feedback.Text,
+})
+```
+
+A score targets a trace, a session, or an observation within a trace; exactly
+one of `NumericValue` or `StringValue` must be set, and `DataType` is inferred
+by Langfuse when omitted. The serialized score is limited to 128 KiB, and
+`Comment` is explicit content that does not pass through `Config.Mask`.
+
 ## Trace attributes and context
 
 Call `WithTraceAttributes` near the start of request handling. It immediately

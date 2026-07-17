@@ -46,12 +46,14 @@ const (
 // Client owns all Langfuse exporter, processor, and lifecycle state. Its zero
 // value is a safe no-op.
 type Client struct {
-	tracer    oteltrace.Tracer
-	provider  *sdktrace.TracerProvider
-	processor *lfprocessor.Processor
-	owned     bool
-	reserved  bool
-	disabled  bool
+	tracer      oteltrace.Tracer
+	provider    *sdktrace.TracerProvider
+	processor   *lfprocessor.Processor
+	scores      *transport.ScoresClient
+	environment string
+	owned       bool
+	reserved    bool
+	disabled    bool
 
 	disableContentCapture bool
 	mask                  func(any) any
@@ -151,7 +153,13 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	client := &Client{
 		disableContentCapture: cfg.DisableContentCapture,
 		mask:                  cfg.Mask,
+		environment:           environment,
 	}
+	scores, err := transport.NewScoresClient(transportConfig)
+	if err != nil {
+		return nil, err
+	}
+	client.scores = scores
 	if cfg.TracerProvider != nil {
 		if !reserveBorrowedProvider(cfg.TracerProvider, client) {
 			diagnostic.Report("a Langfuse client is already attached to this tracer provider; duplicate client is disabled")
