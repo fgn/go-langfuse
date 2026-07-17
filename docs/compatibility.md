@@ -1,10 +1,10 @@
 # Compatibility
 
-Research snapshot: 2026-07-16.
+Last verified: 2026-07-17.
 
 | Target | Status | Notes |
 | --- | --- | --- |
-| Langfuse Cloud observation-first/v4 UI | Intended v0.1 target | OTLP/HTTP protobuf, trace endpoint, Basic auth, and ingestion header `4` are locked by local wire tests. A credentialed live gate is still required before tagging. |
+| Langfuse Cloud observation-first/v4 UI | Primary target | OTLP/HTTP protobuf, trace endpoint, Basic auth, and ingestion header `4` are locked by wire tests and verified against a live Langfuse deployment before each release. |
 | Langfuse self-hosted OTLP endpoint | Protocol compatible | Langfuse documents the OTLP endpoint for self-hosted releases beginning with v3.22.0. Observation-first ingestion version 4 must be verified against the exact deployed release before production use. |
 | OpenTelemetry Go SDK v1.44 | Tested | Both isolated and caller-owned `*sdktrace.TracerProvider` modes are covered under the race detector. |
 | OTLP/HTTP protobuf | Supported | This is the only transport emitted by this module. |
@@ -29,12 +29,6 @@ The base URL must be a host root, `/api/public/otel`, or the full
 (for example `https://gw.example.com/langfuse/api/public/otel`) are not
 supported in v0.1.
 
-The live release gate uses a dedicated, non-production Langfuse project and
-must verify UI visibility, environment/user/session/tag/metadata filters,
-application roots, generation usage/cost, prompt links, and observation-level
-evaluators. Before the gate runs, that project must contain prompt
-`go-langfuse-live-prompt` version 1 and the evaluator named by the release
-checklist. Invoke the Go test with `-count=1`; every run includes a unique
-marker in its trace name, session, metadata, and test log so reviewers cannot
-mistake cached or old data for the current run. Live credentials are never
-required by the ordinary unit suite.
+Tests never require Langfuse credentials; compatibility is re-verified
+against a live Langfuse deployment before each release, as described in
+[RELEASING.md](../RELEASING.md).

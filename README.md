@@ -8,9 +8,9 @@ controls. Prompt management, datasets, and administrative APIs are out of
 scope; use the Langfuse REST API for those. go-langfuse is not affiliated
 with or endorsed by Langfuse.
 
-The v0.x series follows the gated release process in
-[RELEASING.md](RELEASING.md): patch releases stay backward compatible, and
-minor releases may contain explicitly documented API changes until v1.0.
+go-langfuse follows semantic versioning. Until v1.0, minor releases may
+contain documented breaking changes; patch releases are always backward
+compatible.
 
 ## Install
 
@@ -228,5 +228,5 @@ go vet ./...
 ```
 
 The module language version is Go 1.25; `go.mod` records the suggested
-patched toolchain. The opt-in live gate and release checklist are documented
-in [RELEASING.md](RELEASING.md); ordinary tests never require credentials.
+patched toolchain. Tests never require Langfuse credentials. Release steps
+are documented in [RELEASING.md](RELEASING.md).

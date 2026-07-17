@@ -17,10 +17,13 @@ Merge a release-preparation pull request that completes every item below:
 2. Pre-seed the dedicated synthetic Langfuse project with prompt
    `go-langfuse-live-prompt` version 1 and the checklist evaluator. Run
    `go test -count=1 -tags=live -run TestLiveCompatibility -v .` with that
-   project's credentials. Use the logged unique run marker to verify the
-   UI/filter/evaluator checklist in
-   [docs/compatibility.md](docs/compatibility.md), then record non-secret
-   evidence. Never paste credentials or telemetry payloads into that evidence.
+   project's credentials. Use the logged unique run marker (present in the
+   trace name, session, metadata, and test log so cached data cannot be
+   mistaken for the current run) to verify in the Langfuse UI: trace
+   visibility, environment/user/session/tag/metadata filters, application
+   roots, generation usage and cost, prompt links, and observation-level
+   evaluators. Record non-secret evidence. Never paste credentials or
+   telemetry payloads into that evidence.
    The test fails closed when credentials are absent, tracing/content capture
    is disabled, or recording IDs are empty; a zero exit therefore cannot mean
    that it merely skipped export.
