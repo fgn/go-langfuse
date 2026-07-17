@@ -19,6 +19,7 @@ var (
 	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes) (context.Context, *langfuse.Observation)                  = (*langfuse.Client).StartObservation
 	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes, func(context.Context, *langfuse.Observation) error) error = (*langfuse.Client).Observe
 	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationAttributes)                                                                                     = (*langfuse.Client).Event
+	_ func(*langfuse.Client, context.Context, langfuse.Score) error                                                                                                       = (*langfuse.Client).RecordScore
 	_ func(*langfuse.Client, context.Context) error                                                                                                                       = (*langfuse.Client).Flush
 	_ func(*langfuse.Client, context.Context) error                                                                                                                       = (*langfuse.Client).Shutdown
 
@@ -36,6 +37,7 @@ func TestPublicMethodSurface(t *testing.T) {
 		"Event",
 		"Flush",
 		"Observe",
+		"RecordScore",
 		"Shutdown",
 		"StartObservation",
 		"WithTraceAttributes",
@@ -83,6 +85,18 @@ func TestPublicStructSurface(t *testing.T) {
 		"Details",
 	})
 	assertFieldNames(t, langfuse.PromptRef{}, []string{"Name", "Version"})
+	assertFieldNames(t, langfuse.Score{}, []string{
+		"ID",
+		"Name",
+		"TraceID",
+		"SessionID",
+		"ObservationID",
+		"NumericValue",
+		"StringValue",
+		"DataType",
+		"Comment",
+		"Metadata",
+	})
 	assertFieldNames(t, langfuse.ObservationAttributes{}, []string{
 		"Input",
 		"Output",
@@ -133,6 +147,19 @@ func TestPublicConstantValues(t *testing.T) {
 	for got, want := range types {
 		if string(got) != want {
 			t.Errorf("observation type %q = %q, want %q", want, got, want)
+		}
+	}
+
+	scoreTypes := map[langfuse.ScoreDataType]string{
+		langfuse.ScoreTypeBoolean:     "BOOLEAN",
+		langfuse.ScoreTypeCategorical: "CATEGORICAL",
+		langfuse.ScoreTypeCorrection:  "CORRECTION",
+		langfuse.ScoreTypeNumeric:     "NUMERIC",
+		langfuse.ScoreTypeText:        "TEXT",
+	}
+	for got, want := range scoreTypes {
+		if string(got) != want {
+			t.Errorf("score data type %q = %q, want %q", want, got, want)
 		}
 	}
 }

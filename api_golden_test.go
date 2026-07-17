@@ -185,6 +185,16 @@ const LevelError Level = "ERROR"
 
 const LevelWarning Level = "WARNING"
 
+const ScoreTypeBoolean ScoreDataType = "BOOLEAN"
+
+const ScoreTypeCategorical ScoreDataType = "CATEGORICAL"
+
+const ScoreTypeCorrection ScoreDataType = "CORRECTION"
+
+const ScoreTypeNumeric ScoreDataType = "NUMERIC"
+
+const ScoreTypeText ScoreDataType = "TEXT"
+
 const TypeAgent ObservationType = "agent"
 
 const TypeChain ObservationType = "chain"
@@ -216,6 +226,8 @@ func (c *Client) Observe(
 	values ObservationAttributes,
 	fn func(ctx context.Context, observation *Observation) error,
 ) error
+
+func (c *Client) RecordScore(ctx context.Context, score Score) error
 
 func (c *Client) Shutdown(ctx context.Context) error
 
@@ -287,6 +299,21 @@ type PromptRef struct {
 	Name string
 	Version int
 }
+
+type Score struct {
+	ID string
+	Name string
+	TraceID string
+	SessionID string
+	ObservationID string
+	NumericValue *float64
+	StringValue *string
+	DataType ScoreDataType
+	Comment string
+	Metadata map[string]any
+}
+
+type ScoreDataType string
 
 type TraceAttributes struct {
 	Name string

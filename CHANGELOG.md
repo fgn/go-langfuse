@@ -5,6 +5,11 @@ Versioning once the first release is tagged.
 
 ## Unreleased
 
+- New `Client.RecordScore` submits evaluations and user feedback to the
+  Langfuse REST scores endpoint (`Score`, `ScoreDataType`), reusing the
+  client's credentials, base URL normalization, and environment. Synchronous
+  with validation errors and no buffering; disabled clients no-op.
+
 - Renamed the module to `github.com/fgn/go-langfuse`, package `langfuse`,
   following the `go-github`/`go-redis` community-client naming convention.
 - New `Client.Observe` runs a callback inside a scoped observation: the
