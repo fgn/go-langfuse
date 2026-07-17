@@ -1,4 +1,4 @@
-package lunte_test
+package langfuse_test
 
 import (
 	"context"
@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fgn/lunte"
-	"github.com/fgn/lunte/internal/otlpreceiver"
+	"github.com/fgn/go-langfuse"
+	"github.com/fgn/go-langfuse/internal/otlpreceiver"
 )
 
-func newBufferingClient(t *testing.T, receiver *otlpreceiver.Receiver, change func(*lunte.Config)) *lunte.Client {
+func newBufferingClient(t *testing.T, receiver *otlpreceiver.Receiver, change func(*langfuse.Config)) *langfuse.Client {
 	t.Helper()
-	config := lunte.Config{
+	config := langfuse.Config{
 		BaseURL:   receiver.URL(),
 		PublicKey: "pk-lf-buffering",
 		SecretKey: "sk-lf-buffering",
@@ -21,9 +21,9 @@ func newBufferingClient(t *testing.T, receiver *otlpreceiver.Receiver, change fu
 	if change != nil {
 		change(&config)
 	}
-	client, err := lunte.New(context.Background(), config)
+	client, err := langfuse.New(context.Background(), config)
 	if err != nil {
-		t.Fatalf("lunte.New() error = %v", err)
+		t.Fatalf("langfuse.New() error = %v", err)
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -44,7 +44,7 @@ func deliveredSpanCount(receiver *otlpreceiver.Receiver) int {
 func TestNewRejectsNegativeMaxQueueSize(t *testing.T) {
 	t.Parallel()
 
-	_, err := lunte.New(context.Background(), lunte.Config{
+	_, err := langfuse.New(context.Background(), langfuse.Config{
 		BaseURL:      "https://cloud.langfuse.com",
 		PublicKey:    "pk-lf-negative-queue",
 		SecretKey:    "sk-lf-negative-queue",
@@ -63,16 +63,16 @@ func TestBlockOnQueueFullBlocksEndAndLosesNoObservations(t *testing.T) {
 	t.Cleanup(receiver.Release)
 	receiver.Stall()
 
-	client := newBufferingClient(t, receiver, func(config *lunte.Config) {
+	client := newBufferingClient(t, receiver, func(config *langfuse.Config) {
 		config.MaxQueueSize = 2
 		config.BlockOnQueueFull = true
 	})
 
 	const total = 6
-	observations := make([]*lunte.Observation, 0, total)
+	observations := make([]*langfuse.Observation, 0, total)
 	for index := range total {
 		_, observation := client.StartObservation(context.Background(),
-			fmt.Sprintf("blocked-%d", index), lunte.TypeSpan, lunte.ObservationAttributes{})
+			fmt.Sprintf("blocked-%d", index), langfuse.TypeSpan, langfuse.ObservationAttributes{})
 		observations = append(observations, observation)
 	}
 
@@ -122,15 +122,15 @@ func TestDefaultDropOnQueueFullNeverBlocksEnd(t *testing.T) {
 	t.Cleanup(receiver.Release)
 	receiver.Stall()
 
-	client := newBufferingClient(t, receiver, func(config *lunte.Config) {
+	client := newBufferingClient(t, receiver, func(config *langfuse.Config) {
 		config.MaxQueueSize = 2
 	})
 
 	const total = 20
-	observations := make([]*lunte.Observation, 0, total)
+	observations := make([]*langfuse.Observation, 0, total)
 	for index := range total {
 		_, observation := client.StartObservation(context.Background(),
-			fmt.Sprintf("dropped-%d", index), lunte.TypeSpan, lunte.ObservationAttributes{})
+			fmt.Sprintf("dropped-%d", index), langfuse.TypeSpan, langfuse.ObservationAttributes{})
 		observations = append(observations, observation)
 	}
 
@@ -168,18 +168,18 @@ func TestShutdownReturnsToBaselineGoroutineCount(t *testing.T) {
 
 	baseline := runtime.NumGoroutine()
 
-	client, err := lunte.New(context.Background(), lunte.Config{
+	client, err := langfuse.New(context.Background(), langfuse.Config{
 		BaseURL:   receiver.URL(),
 		PublicKey: "pk-lf-goroutines",
 		SecretKey: "sk-lf-goroutines",
 	})
 	if err != nil {
 		receiver.Close()
-		t.Fatalf("lunte.New() error = %v", err)
+		t.Fatalf("langfuse.New() error = %v", err)
 	}
 	for index := range 5 {
 		_, observation := client.StartObservation(context.Background(),
-			fmt.Sprintf("hygiene-%d", index), lunte.TypeSpan, lunte.ObservationAttributes{})
+			fmt.Sprintf("hygiene-%d", index), langfuse.TypeSpan, langfuse.ObservationAttributes{})
 		observation.End()
 	}
 	flushCtx, cancelFlush := context.WithTimeout(context.Background(), 10*time.Second)

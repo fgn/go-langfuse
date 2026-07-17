@@ -20,7 +20,7 @@ import (
 
 const (
 	defaultTimeout      = 10 * time.Second
-	sdkName             = "lunte"
+	sdkName             = "go"
 	maxHeaderValueBytes = 8 << 10
 )
 
@@ -77,7 +77,7 @@ func NewExporter(ctx context.Context, cfg Config) (sdktrace.SpanExporter, error)
 		timeout = defaultTimeout
 	}
 	if timeout < 0 {
-		return nil, errors.New("lunte transport: timeout must not be negative")
+		return nil, errors.New("langfuse transport: timeout must not be negative")
 	}
 
 	retry := defaultRetry
@@ -157,7 +157,7 @@ func ValidateConfig(cfg Config) error {
 		return err
 	}
 	if cfg.Timeout < 0 {
-		return errors.New("lunte transport: timeout must not be negative")
+		return errors.New("langfuse transport: timeout must not be negative")
 	}
 	if cfg.Retry != nil {
 		if err := validateRetry(*cfg.Retry); err != nil {
@@ -172,27 +172,27 @@ func validateCredential(name, value string) error {
 		return err
 	}
 	if strings.Contains(value, ":") {
-		return fmt.Errorf("lunte transport: %s must not contain a colon", name)
+		return fmt.Errorf("langfuse transport: %s must not contain a colon", name)
 	}
 	return nil
 }
 
 func validateHeaderValue(name, value string) error {
 	if value == "" {
-		return fmt.Errorf("lunte transport: %s is required", name)
+		return fmt.Errorf("langfuse transport: %s is required", name)
 	}
 	if len(value) > maxHeaderValueBytes {
-		return fmt.Errorf("lunte transport: %s exceeds the header size limit", name)
+		return fmt.Errorf("langfuse transport: %s exceeds the header size limit", name)
 	}
 	if strings.TrimSpace(value) != value {
-		return fmt.Errorf("lunte transport: %s must not have surrounding whitespace", name)
+		return fmt.Errorf("langfuse transport: %s must not have surrounding whitespace", name)
 	}
 	if !utf8.ValidString(value) {
-		return fmt.Errorf("lunte transport: %s must be valid UTF-8", name)
+		return fmt.Errorf("langfuse transport: %s must be valid UTF-8", name)
 	}
 	for _, r := range value {
 		if r < 0x21 || r > 0x7e {
-			return fmt.Errorf("lunte transport: %s must contain printable ASCII only", name)
+			return fmt.Errorf("langfuse transport: %s must contain printable ASCII only", name)
 		}
 	}
 	return nil
@@ -203,10 +203,10 @@ func validateRetry(retry RetryConfig) error {
 		return nil
 	}
 	if retry.InitialInterval <= 0 || retry.MaxInterval <= 0 || retry.MaxElapsedTime <= 0 {
-		return errors.New("lunte transport: enabled retry durations must be positive")
+		return errors.New("langfuse transport: enabled retry durations must be positive")
 	}
 	if retry.MaxInterval < retry.InitialInterval {
-		return errors.New("lunte transport: retry max interval must not be less than its initial interval")
+		return errors.New("langfuse transport: retry max interval must not be less than its initial interval")
 	}
 	return nil
 }

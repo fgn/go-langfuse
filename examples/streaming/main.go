@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fgn/lunte"
+	"github.com/fgn/go-langfuse"
 )
 
 func main() {
@@ -17,7 +17,7 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	client, err := lunte.New(ctx, lunte.ConfigFromEnv())
+	client, err := langfuse.New(ctx, langfuse.ConfigFromEnv())
 	if err != nil {
 		return err
 	}
@@ -27,8 +27,8 @@ func run(ctx context.Context) error {
 		_ = client.Shutdown(shutdownCtx)
 	}()
 
-	ctx, generation := client.StartObservation(ctx, "stream-answer", lunte.TypeGeneration,
-		lunte.ObservationAttributes{Input: "Explain streaming", Model: "example-model"})
+	ctx, generation := client.StartObservation(ctx, "stream-answer", langfuse.TypeGeneration,
+		langfuse.ObservationAttributes{Input: "Explain streaming", Model: "example-model"})
 
 	var answer strings.Builder
 	for chunk, streamErr := range streamModel(ctx) {
@@ -39,9 +39,9 @@ func run(ctx context.Context) error {
 		}
 		answer.WriteString(chunk)
 	}
-	generation.Update(lunte.ObservationAttributes{
+	generation.Update(langfuse.ObservationAttributes{
 		Output: answer.String(),
-		Usage:  &lunte.Usage{InputTokens: 2, OutputTokens: 4},
+		Usage:  &langfuse.Usage{InputTokens: 2, OutputTokens: 4},
 	})
 	// End only after the stream is fully consumed so duration and output are
 	// complete and the ended span can be flushed.

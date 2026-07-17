@@ -141,7 +141,7 @@ func TestExporterWireContract(t *testing.T) {
 		)
 		assertHeader(t, r, "Authorization", wantAuth)
 		assertHeader(t, r, "x-langfuse-ingestion-version", "4")
-		assertHeader(t, r, "x-langfuse-sdk-name", "lunte")
+		assertHeader(t, r, "x-langfuse-sdk-name", "go")
 		assertHeader(t, r, "x-langfuse-sdk-version", testSDKVersion)
 		assertHeader(t, r, "x-langfuse-public-key", testPublicKey)
 

@@ -1,4 +1,4 @@
-package lunte_test
+package langfuse_test
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/fgn/lunte"
+	"github.com/fgn/go-langfuse"
 	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -21,14 +21,14 @@ func TestEdgeContractInvalidAndEmptyEnums(t *testing.T) {
 	client, receiver := newObservationWireClient(t, nil)
 
 	_, empty := client.StartObservation(context.Background(), "empty-enums", "",
-		lunte.ObservationAttributes{})
+		langfuse.ObservationAttributes{})
 	empty.End()
 
 	const invalidType = "invalid-type-PAYLOAD-79f32"
 	const invalidLevel = "invalid-level-PAYLOAD-82dd1"
 	_, invalid := client.StartObservation(context.Background(), "invalid-enums",
-		lunte.ObservationType(invalidType), lunte.ObservationAttributes{
-			Level:         lunte.Level(invalidLevel),
+		langfuse.ObservationType(invalidType), langfuse.ObservationAttributes{
+			Level:         langfuse.Level(invalidLevel),
 			StatusMessage: "safe status survives",
 		})
 	invalid.End()
@@ -51,17 +51,17 @@ func TestEdgeContractInvalidPromptIsOmitted(t *testing.T) {
 	client, receiver := newObservationWireClient(t, nil)
 
 	_, emptyName := client.StartObservation(context.Background(), "prompt-empty-name",
-		lunte.TypeGeneration, lunte.ObservationAttributes{
+		langfuse.TypeGeneration, langfuse.ObservationAttributes{
 			Model:  "model-survives",
-			Prompt: &lunte.PromptRef{Name: "", Version: 3},
+			Prompt: &langfuse.PromptRef{Name: "", Version: 3},
 		})
 	emptyName.End()
 
 	const invalidPromptName = "prompt-name-PAYLOAD-a4981"
 	_, invalidVersion := client.StartObservation(context.Background(), "prompt-invalid-version",
-		lunte.TypeGeneration, lunte.ObservationAttributes{
+		langfuse.TypeGeneration, langfuse.ObservationAttributes{
 			Model:  "model-survives",
-			Prompt: &lunte.PromptRef{Name: invalidPromptName, Version: 0},
+			Prompt: &langfuse.PromptRef{Name: invalidPromptName, Version: 0},
 		})
 	invalidVersion.End()
 
@@ -85,10 +85,10 @@ func TestEdgeContractTypedNilValuesAreAbsent(t *testing.T) {
 	var metadata map[string]any
 	var modelParameters map[string]any
 	var costs map[string]float64
-	var prompt *lunte.PromptRef
+	var prompt *langfuse.PromptRef
 
 	_, observation := client.StartObservation(context.Background(), "typed-nil",
-		lunte.TypeGeneration, lunte.ObservationAttributes{
+		langfuse.TypeGeneration, langfuse.ObservationAttributes{
 			Input:           input,
 			Output:          output,
 			Metadata:        metadata,
@@ -122,7 +122,7 @@ func TestEdgeContractCyclicAndOversizePayloadsAreIsolated(t *testing.T) {
 	}
 
 	_, observation := client.StartObservation(context.Background(), "malformed-payloads",
-		lunte.TypeGeneration, lunte.ObservationAttributes{
+		langfuse.TypeGeneration, langfuse.ObservationAttributes{
 			Input:  cyclicInput,
 			Output: oversize,
 			Metadata: map[string]any{
@@ -130,7 +130,7 @@ func TestEdgeContractCyclicAndOversizePayloadsAreIsolated(t *testing.T) {
 				"safe": "metadata-survives",
 			},
 			Model: "model-survives",
-			Usage: &lunte.Usage{InputTokens: 5, OutputTokens: 3},
+			Usage: &langfuse.Usage{InputTokens: 5, OutputTokens: 3},
 		})
 	observation.End()
 
@@ -152,7 +152,7 @@ func TestEdgeContractPanickingUserMethodsAreContained(t *testing.T) {
 	client, receiver := newObservationWireClient(t, nil)
 
 	_, observation := client.StartObservation(context.Background(), "panicking-user-methods",
-		lunte.TypeGeneration, lunte.ObservationAttributes{
+		langfuse.TypeGeneration, langfuse.ObservationAttributes{
 			Input: edgePanickingJSON{},
 			Metadata: map[string]any{
 				"panic": edgePanickingJSON{},
@@ -182,7 +182,7 @@ func TestEdgeContractPanickingOTelErrorHandlerIsContained(t *testing.T) {
 
 	client, receiver := newObservationWireClient(t, nil)
 	_, observation := client.StartObservation(context.Background(), "handler-panic",
-		lunte.ObservationType("invalid-type"), lunte.ObservationAttributes{
+		langfuse.ObservationType("invalid-type"), langfuse.ObservationAttributes{
 			Input: edgePanickingJSON{},
 		})
 	observation.End()
@@ -194,13 +194,13 @@ func TestEdgeContractUpdateAfterEndIsNoop(t *testing.T) {
 	diagnostics := captureEdgeDiagnostics(t)
 	client, receiver := newObservationWireClient(t, nil)
 
-	_, observation := client.StartObservation(context.Background(), "ended-update", lunte.TypeSpan,
-		lunte.ObservationAttributes{Input: "before"})
+	_, observation := client.StartObservation(context.Background(), "ended-update", langfuse.TypeSpan,
+		langfuse.ObservationAttributes{Input: "before"})
 	observation.End()
 	const afterEndPayload = "after-end-PAYLOAD-c46d"
-	observation.Update(lunte.ObservationAttributes{
+	observation.Update(langfuse.ObservationAttributes{
 		Output:        afterEndPayload,
-		Level:         lunte.LevelError,
+		Level:         langfuse.LevelError,
 		StatusMessage: afterEndPayload,
 	})
 	observation.End()
@@ -220,8 +220,8 @@ func TestEdgeContractStartTimeIsIgnoredByUpdate(t *testing.T) {
 	ignored := time.Date(1999, 1, 2, 3, 4, 5, 6, time.UTC)
 
 	_, observation := client.StartObservation(context.Background(), "start-time-update",
-		lunte.TypeSpan, lunte.ObservationAttributes{StartTime: start})
-	observation.Update(lunte.ObservationAttributes{
+		langfuse.TypeSpan, langfuse.ObservationAttributes{StartTime: start})
+	observation.Update(langfuse.ObservationAttributes{
 		Output:    "update-survives",
 		StartTime: ignored,
 	})
@@ -243,7 +243,7 @@ func TestEdgeContractEventIgnoresExplicitStartTime(t *testing.T) {
 	client, receiver := newObservationWireClient(t, nil)
 	historical := time.Now().Add(-24 * time.Hour)
 	before := time.Now()
-	client.Event(context.Background(), "instant-event", lunte.ObservationAttributes{StartTime: historical})
+	client.Event(context.Background(), "instant-event", langfuse.ObservationAttributes{StartTime: historical})
 
 	span := observationWireSpanNamed(t, exportObservationWireSpans(t, client, receiver, 1), "instant-event")
 	start := time.Unix(0, int64(span.span.StartTimeUnixNano))
@@ -265,13 +265,13 @@ func TestEdgeContractObservationMetadataBudgetAppliesAcrossUpdates(t *testing.T)
 		metadata[fmt.Sprintf("z%02d", index)] = "initial"
 	}
 	_, observation := client.StartObservation(context.Background(), "metadata-lifetime",
-		lunte.TypeSpan, lunte.ObservationAttributes{Metadata: metadata})
+		langfuse.TypeSpan, langfuse.ObservationAttributes{Metadata: metadata})
 	update := make(map[string]any, 33)
 	for index := range 32 {
 		update[fmt.Sprintf("a%02d", index)] = "must-be-omitted"
 	}
 	update["z00"] = "updated"
-	observation.Update(lunte.ObservationAttributes{Metadata: update})
+	observation.Update(langfuse.ObservationAttributes{Metadata: update})
 	observation.End()
 
 	span := observationWireSpanNamed(t, exportObservationWireSpans(t, client, receiver, 1), "metadata-lifetime")
@@ -301,15 +301,15 @@ func TestEdgeContractTraceMetadataReplacementWinsAtFullBudget(t *testing.T) {
 	for index := range 32 {
 		initial[fmt.Sprintf("z%02d", index)] = "initial"
 	}
-	ctx := client.WithTraceAttributes(context.Background(), lunte.TraceAttributes{Metadata: initial})
+	ctx := client.WithTraceAttributes(context.Background(), langfuse.TraceAttributes{Metadata: initial})
 	update := make(map[string]any, 33)
 	for index := range 32 {
 		update[fmt.Sprintf("a%02d", index)] = "must-be-omitted"
 	}
 	update["z00"] = "updated"
-	ctx = client.WithTraceAttributes(ctx, lunte.TraceAttributes{Metadata: update})
+	ctx = client.WithTraceAttributes(ctx, langfuse.TraceAttributes{Metadata: update})
 	_, observation := client.StartObservation(ctx, "trace-metadata-replacement",
-		lunte.TypeSpan, lunte.ObservationAttributes{})
+		langfuse.TypeSpan, langfuse.ObservationAttributes{})
 	observation.End()
 
 	span := observationWireSpanNamed(t, exportObservationWireSpans(t, client, receiver, 1), "trace-metadata-replacement")
@@ -328,9 +328,9 @@ func TestEdgeContractAggregateObservationByteBudgetPreservesPriorityFields(t *te
 	client, receiver := newObservationWireClient(t, nil)
 	large := strings.Repeat("x", 900<<10)
 	_, observation := client.StartObservation(context.Background(), "aggregate-byte-budget",
-		lunte.TypeGeneration, lunte.ObservationAttributes{
+		langfuse.TypeGeneration, langfuse.ObservationAttributes{
 			Model:  "priority-model",
-			Usage:  &lunte.Usage{InputTokens: 3, OutputTokens: 2},
+			Usage:  &langfuse.Usage{InputTokens: 3, OutputTokens: 2},
 			Input:  large,
 			Output: large,
 			Metadata: map[string]any{
@@ -366,7 +366,7 @@ func TestEdgeContractCallerMutationAfterCallIsRaceSafe(t *testing.T) {
 
 	tags := []string{"stable-tag"}
 	traceMetadata := map[string]any{"stable": "trace-before"}
-	ctx := client.WithTraceAttributes(context.Background(), lunte.TraceAttributes{
+	ctx := client.WithTraceAttributes(context.Background(), langfuse.TraceAttributes{
 		Name:     "stable-trace",
 		Tags:     tags,
 		Metadata: traceMetadata,
@@ -376,10 +376,10 @@ func TestEdgeContractCallerMutationAfterCallIsRaceSafe(t *testing.T) {
 	metadata := map[string]any{"stable": "metadata-before"}
 	parameters := map[string]any{"temperature": 0.1}
 	details := map[string]int64{"input_audio_tokens": 2}
-	usage := &lunte.Usage{InputTokens: 20, OutputTokens: 10, Details: details}
+	usage := &langfuse.Usage{InputTokens: 20, OutputTokens: 10, Details: details}
 	costs := map[string]float64{"input": 0.01}
-	rootContext, root := client.StartObservation(ctx, "mutation-root", lunte.TypeGeneration,
-		lunte.ObservationAttributes{
+	rootContext, root := client.StartObservation(ctx, "mutation-root", langfuse.TypeGeneration,
+		langfuse.ObservationAttributes{
 			Input:           input,
 			Metadata:        metadata,
 			ModelParameters: parameters,
@@ -413,7 +413,7 @@ func TestEdgeContractCallerMutationAfterCallIsRaceSafe(t *testing.T) {
 			defer workers.Done()
 			<-start
 			_, child := client.StartObservation(rootContext, "mutation-child-"+string(rune('a'+index)),
-				lunte.TypeSpan, lunte.ObservationAttributes{})
+				langfuse.TypeSpan, langfuse.ObservationAttributes{})
 			child.End()
 		}()
 	}
@@ -459,17 +459,17 @@ func TestEdgeContractShutdownRejectsNewWork(t *testing.T) {
 	original := context.WithValue(context.Background(), edgeContextKey{}, "preserved")
 	const afterShutdownPayload = "after-shutdown-PAYLOAD-350a"
 	returned, observation := client.StartObservation(original, afterShutdownPayload,
-		lunte.TypeGeneration, lunte.ObservationAttributes{Input: afterShutdownPayload})
+		langfuse.TypeGeneration, langfuse.ObservationAttributes{Input: afterShutdownPayload})
 	if returned != original {
 		t.Fatal("StartObservation after shutdown returned a different context")
 	}
 	if observation.TraceID() != "" || observation.ID() != "" {
 		t.Fatalf("StartObservation after shutdown returned recording IDs (%q, %q)", observation.TraceID(), observation.ID())
 	}
-	observation.Update(lunte.ObservationAttributes{Output: afterShutdownPayload})
+	observation.Update(langfuse.ObservationAttributes{Output: afterShutdownPayload})
 	observation.RecordError(errors.New(afterShutdownPayload))
 	observation.End()
-	client.Event(original, afterShutdownPayload, lunte.ObservationAttributes{Input: afterShutdownPayload})
+	client.Event(original, afterShutdownPayload, langfuse.ObservationAttributes{Input: afterShutdownPayload})
 	if err := client.Flush(context.Background()); err != nil {
 		t.Fatalf("Flush after shutdown error = %v", err)
 	}
@@ -494,7 +494,7 @@ func TestEdgeContractShutdownLinearizesAgainstStartingObservation(t *testing.T) 
 
 	maskEntered := make(chan struct{})
 	releaseMask := make(chan struct{})
-	client, receiver := newObservationWireClient(t, func(config *lunte.Config) {
+	client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
 		config.TracerProvider = provider
 		config.Mask = func(value any) any {
 			close(maskEntered)
@@ -503,10 +503,10 @@ func TestEdgeContractShutdownLinearizesAgainstStartingObservation(t *testing.T) 
 		}
 	})
 
-	observationResult := make(chan *lunte.Observation, 1)
+	observationResult := make(chan *langfuse.Observation, 1)
 	go func() {
 		_, observation := client.StartObservation(context.Background(), "racing-start",
-			lunte.TypeSpan, lunte.ObservationAttributes{Input: "synthetic"})
+			langfuse.TypeSpan, langfuse.ObservationAttributes{Input: "synthetic"})
 		observationResult <- observation
 	}()
 	<-maskEntered
@@ -543,7 +543,7 @@ func TestEdgeContractUnicodePropagationUsesCharacterBoundary(t *testing.T) {
 			utf8.RuneCountInString(valid), len(valid))
 	}
 
-	validContext := client.WithTraceAttributes(context.Background(), lunte.TraceAttributes{
+	validContext := client.WithTraceAttributes(context.Background(), langfuse.TraceAttributes{
 		Name:      valid,
 		UserID:    valid,
 		SessionID: valid,
@@ -551,11 +551,11 @@ func TestEdgeContractUnicodePropagationUsesCharacterBoundary(t *testing.T) {
 		Metadata:  map[string]any{"unicode": valid},
 		Version:   valid,
 	})
-	_, validObservation := client.StartObservation(validContext, "unicode-200", lunte.TypeSpan,
-		lunte.ObservationAttributes{})
+	_, validObservation := client.StartObservation(validContext, "unicode-200", langfuse.TypeSpan,
+		langfuse.ObservationAttributes{})
 	validObservation.End()
 
-	invalidContext := client.WithTraceAttributes(context.Background(), lunte.TraceAttributes{
+	invalidContext := client.WithTraceAttributes(context.Background(), langfuse.TraceAttributes{
 		Name:      invalid,
 		UserID:    invalid,
 		SessionID: invalid,
@@ -563,8 +563,8 @@ func TestEdgeContractUnicodePropagationUsesCharacterBoundary(t *testing.T) {
 		Metadata:  map[string]any{"unicode": invalid},
 		Version:   invalid,
 	})
-	_, invalidObservation := client.StartObservation(invalidContext, "unicode-201", lunte.TypeSpan,
-		lunte.ObservationAttributes{})
+	_, invalidObservation := client.StartObservation(invalidContext, "unicode-201", langfuse.TypeSpan,
+		langfuse.ObservationAttributes{})
 	invalidObservation.End()
 
 	spans := exportObservationWireSpans(t, client, receiver, 2)
@@ -591,8 +591,8 @@ func TestEdgeContractTraceTagLifetimeBudgets(t *testing.T) {
 	for index := range shortTags {
 		shortTags[index] = fmt.Sprintf("tag-%03d", index)
 	}
-	shortCtx := client.WithTraceAttributes(context.Background(), lunte.TraceAttributes{Tags: shortTags})
-	_, shortObservation := client.StartObservation(shortCtx, "tag-count-budget", lunte.TypeSpan, lunte.ObservationAttributes{})
+	shortCtx := client.WithTraceAttributes(context.Background(), langfuse.TraceAttributes{Tags: shortTags})
+	_, shortObservation := client.StartObservation(shortCtx, "tag-count-budget", langfuse.TypeSpan, langfuse.ObservationAttributes{})
 	shortObservation.End()
 
 	longTags := make([]string, 100)
@@ -605,8 +605,8 @@ func TestEdgeContractTraceTagLifetimeBudgets(t *testing.T) {
 			longBytes += len(longTags[index])
 		}
 	}
-	longCtx := client.WithTraceAttributes(context.Background(), lunte.TraceAttributes{Tags: longTags})
-	_, longObservation := client.StartObservation(longCtx, "tag-byte-budget", lunte.TypeSpan, lunte.ObservationAttributes{})
+	longCtx := client.WithTraceAttributes(context.Background(), langfuse.TraceAttributes{Tags: longTags})
+	_, longObservation := client.StartObservation(longCtx, "tag-byte-budget", langfuse.TypeSpan, langfuse.ObservationAttributes{})
 	longObservation.End()
 
 	spans := exportObservationWireSpans(t, client, receiver, 2)

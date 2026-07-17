@@ -1,4 +1,4 @@
-package lunte_test
+package langfuse_test
 
 import (
 	"bytes"
@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fgn/lunte"
-	"github.com/fgn/lunte/internal/otlpreceiver"
+	"github.com/fgn/go-langfuse"
+	"github.com/fgn/go-langfuse/internal/otlpreceiver"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
@@ -45,7 +45,7 @@ func (e wireProviderError) Error() string { return e.message }
 func TestObservationWireRootAndNestedGolden(t *testing.T) {
 	client, receiver := newObservationWireClient(t, nil)
 
-	traceContext := client.WithTraceAttributes(context.Background(), lunte.TraceAttributes{
+	traceContext := client.WithTraceAttributes(context.Background(), langfuse.TraceAttributes{
 		Name:      "customer-turn",
 		UserID:    "user-42",
 		SessionID: "session-9",
@@ -58,11 +58,11 @@ func TestObservationWireRootAndNestedGolden(t *testing.T) {
 	})
 
 	rootStart := time.Date(2026, 7, 16, 10, 20, 30, 123456789, time.UTC)
-	rootContext, root := client.StartObservation(traceContext, "chat-turn", lunte.TypeAgent,
-		lunte.ObservationAttributes{
+	rootContext, root := client.StartObservation(traceContext, "chat-turn", langfuse.TypeAgent,
+		langfuse.ObservationAttributes{
 			Input:         map[string]any{"question": "hello"},
 			Metadata:      map[string]any{"stage": "start"},
-			Level:         lunte.LevelDebug,
+			Level:         langfuse.LevelDebug,
 			StatusMessage: "working",
 			Version:       "root-v2",
 			StartTime:     rootStart,
@@ -70,19 +70,19 @@ func TestObservationWireRootAndNestedGolden(t *testing.T) {
 	rootTraceID, rootSpanID := root.TraceID(), root.ID()
 
 	childStart := rootStart.Add(250 * time.Millisecond)
-	_, child := client.StartObservation(rootContext, "call-tool", lunte.TypeTool,
-		lunte.ObservationAttributes{
+	_, child := client.StartObservation(rootContext, "call-tool", langfuse.TypeTool,
+		langfuse.ObservationAttributes{
 			Input:         []any{"alpha", int64(7)},
 			Output:        map[string]any{"ok": true},
 			Metadata:      map[string]any{"tool": "search"},
-			Level:         lunte.LevelError,
+			Level:         langfuse.LevelError,
 			StatusMessage: "tool failed",
 			StartTime:     childStart,
 		})
 	childTraceID, childSpanID := child.TraceID(), child.ID()
 	child.End()
 
-	root.Update(lunte.ObservationAttributes{
+	root.Update(langfuse.ObservationAttributes{
 		Output:   "final answer",
 		Metadata: map[string]any{"stage": "done"},
 	})
@@ -151,29 +151,29 @@ func TestObservationWireRootAndNestedGolden(t *testing.T) {
 
 func TestObservationWireAllTenTypesAndPromptRestriction(t *testing.T) {
 	client, receiver := newObservationWireClient(t, nil)
-	types := []lunte.ObservationType{
-		lunte.TypeSpan,
-		lunte.TypeGeneration,
-		lunte.TypeEvent,
-		lunte.TypeEmbedding,
-		lunte.TypeAgent,
-		lunte.TypeTool,
-		lunte.TypeChain,
-		lunte.TypeRetriever,
-		lunte.TypeEvaluator,
-		lunte.TypeGuardrail,
+	types := []langfuse.ObservationType{
+		langfuse.TypeSpan,
+		langfuse.TypeGeneration,
+		langfuse.TypeEvent,
+		langfuse.TypeEmbedding,
+		langfuse.TypeAgent,
+		langfuse.TypeTool,
+		langfuse.TypeChain,
+		langfuse.TypeRetriever,
+		langfuse.TypeEvaluator,
+		langfuse.TypeGuardrail,
 	}
 	for _, observationType := range types {
 		name := "type-" + string(observationType)
-		if observationType == lunte.TypeEvent {
-			client.Event(context.Background(), name, lunte.ObservationAttributes{
-				Prompt: &lunte.PromptRef{Name: "wire-prompt", Version: 3},
+		if observationType == langfuse.TypeEvent {
+			client.Event(context.Background(), name, langfuse.ObservationAttributes{
+				Prompt: &langfuse.PromptRef{Name: "wire-prompt", Version: 3},
 			})
 			continue
 		}
 		_, observation := client.StartObservation(context.Background(), name, observationType,
-			lunte.ObservationAttributes{
-				Prompt: &lunte.PromptRef{Name: "wire-prompt", Version: 3},
+			langfuse.ObservationAttributes{
+				Prompt: &langfuse.PromptRef{Name: "wire-prompt", Version: 3},
 			})
 		observation.End()
 	}
@@ -188,7 +188,7 @@ func TestObservationWireAllTenTypesAndPromptRestriction(t *testing.T) {
 			"langfuse.observation.type":     string(observationType),
 			"langfuse.release":              wireRelease,
 		}
-		if observationType == lunte.TypeGeneration {
+		if observationType == langfuse.TypeGeneration {
 			want["langfuse.observation.prompt.name"] = "wire-prompt"
 			want["langfuse.observation.prompt.version"] = int64(3)
 		}
@@ -202,7 +202,7 @@ func TestObservationWireOwnedModeUsesStandardBatchGeometry(t *testing.T) {
 	const total = 600 // above one 512-span batch, below the 2048-span queue
 	for index := range total {
 		_, observation := client.StartObservation(context.Background(), fmt.Sprintf("batch-%03d", index),
-			lunte.TypeSpan, lunte.ObservationAttributes{})
+			langfuse.TypeSpan, langfuse.ObservationAttributes{})
 		observation.End()
 	}
 	_ = exportObservationWireSpans(t, client, receiver, total)
@@ -228,13 +228,13 @@ func TestObservationWireOwnedModeUsesStandardBatchGeometry(t *testing.T) {
 func TestObservationWireBorrowedProviderBatchesSpansPerRequest(t *testing.T) {
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
 	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
-	client, receiver := newObservationWireClient(t, func(config *lunte.Config) {
+	client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
 		config.TracerProvider = provider
 	})
 	const total = 10
 	for index := range total {
 		_, observation := client.StartObservation(context.Background(), fmt.Sprintf("borrowed-batch-%d", index),
-			lunte.TypeSpan, lunte.ObservationAttributes{})
+			langfuse.TypeSpan, langfuse.ObservationAttributes{})
 		observation.End()
 	}
 	_ = exportObservationWireSpans(t, client, receiver, total)
@@ -267,7 +267,7 @@ func TestObservationWireBatchProcessorIgnoresHostileEnvironmentSizing(t *testing
 
 	client, receiver := newObservationWireClient(t, nil)
 	_, observation := client.StartObservation(context.Background(), "hostile-bsp-environment",
-		lunte.TypeTool, lunte.ObservationAttributes{Input: "input-survives"})
+		langfuse.TypeTool, langfuse.ObservationAttributes{Input: "input-survives"})
 	observation.RecordError(wireProviderError{message: "error-survives"})
 	observation.End()
 	span := observationWireSpanNamed(t, exportObservationWireSpans(t, client, receiver, 1), "hostile-bsp-environment")
@@ -288,8 +288,8 @@ func TestObservationWireGenerationUsageGolden(t *testing.T) {
 	client, receiver := newObservationWireClient(t, nil)
 	completion := time.Date(2026, 7, 16, 11, 12, 13, 987654321, time.FixedZone("wire", -7*60*60))
 
-	_, observation := client.StartObservation(context.Background(), "generate", lunte.TypeGeneration,
-		lunte.ObservationAttributes{
+	_, observation := client.StartObservation(context.Background(), "generate", langfuse.TypeGeneration,
+		langfuse.ObservationAttributes{
 			Input:  "hello",
 			Output: "world",
 			Model:  "gemini-2.5-flash",
@@ -297,7 +297,7 @@ func TestObservationWireGenerationUsageGolden(t *testing.T) {
 				"max_tokens":  64,
 				"temperature": 0.2,
 			},
-			Usage: &lunte.Usage{
+			Usage: &langfuse.Usage{
 				InputTokens:              200,
 				OutputTokens:             100,
 				CacheReadInputTokens:     30,
@@ -312,7 +312,7 @@ func TestObservationWireGenerationUsageGolden(t *testing.T) {
 				"input":  0.00125,
 				"output": 0.0045,
 			},
-			Prompt:              &lunte.PromptRef{Name: "support-answer", Version: 7},
+			Prompt:              &langfuse.PromptRef{Name: "support-answer", Version: 7},
 			CompletionStartTime: completion,
 		})
 	observation.End()
@@ -344,33 +344,33 @@ func TestObservationWireGenerationUsageGolden(t *testing.T) {
 
 func TestObservationWireMetadataAndUpdateMerge(t *testing.T) {
 	client, receiver := newObservationWireClient(t, nil)
-	outer := client.WithTraceAttributes(context.Background(), lunte.TraceAttributes{
+	outer := client.WithTraceAttributes(context.Background(), langfuse.TraceAttributes{
 		Name:     "outer",
 		UserID:   "user-before",
 		Tags:     []string{"one", "two"},
 		Metadata: map[string]any{"keep": 1, "replace": "before"},
 		Version:  "trace-before",
 	})
-	rootContext, root := client.StartObservation(outer, "merge-root", lunte.TypeGeneration,
-		lunte.ObservationAttributes{
+	rootContext, root := client.StartObservation(outer, "merge-root", langfuse.TypeGeneration,
+		langfuse.ObservationAttributes{
 			Input:           "original-input",
 			Metadata:        map[string]any{"keep": "old", "replace": "old"},
 			ModelParameters: map[string]any{"old": 1},
 			Version:         "observation-version",
 		})
-	root.Update(lunte.ObservationAttributes{
+	root.Update(langfuse.ObservationAttributes{
 		Output:          false,
 		Metadata:        map[string]any{"replace": "new", "added": map[string]any{"ok": true}},
 		ModelParameters: map[string]any{"new": 2},
 	})
 
-	inner := client.WithTraceAttributes(rootContext, lunte.TraceAttributes{
+	inner := client.WithTraceAttributes(rootContext, langfuse.TraceAttributes{
 		Name:     "inner",
 		Tags:     []string{"two", "three"},
 		Metadata: map[string]any{"replace": "after", "added": 2},
 		Version:  "trace-after",
 	})
-	_, child := client.StartObservation(inner, "merge-child", lunte.TypeSpan, lunte.ObservationAttributes{})
+	_, child := client.StartObservation(inner, "merge-child", langfuse.TypeSpan, langfuse.ObservationAttributes{})
 	child.End()
 	root.End()
 
@@ -416,7 +416,7 @@ func TestObservationWireMetadataAndUpdateMerge(t *testing.T) {
 func TestObservationWireContentCaptureAndMask(t *testing.T) {
 	t.Run("mask before serialization", func(t *testing.T) {
 		var calls atomic.Int32
-		client, receiver := newObservationWireClient(t, func(config *lunte.Config) {
+		client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
 			config.Mask = func(value any) any {
 				calls.Add(1)
 				switch typed := value.(type) {
@@ -432,8 +432,8 @@ func TestObservationWireContentCaptureAndMask(t *testing.T) {
 				}
 			}
 		})
-		_, observation := client.StartObservation(context.Background(), "masked", lunte.TypeSpan,
-			lunte.ObservationAttributes{
+		_, observation := client.StartObservation(context.Background(), "masked", langfuse.TypeSpan,
+			langfuse.ObservationAttributes{
 				Input:    map[string]any{"content": "secret"},
 				Output:   "secret-output",
 				Metadata: map[string]any{"secret": "metadata"},
@@ -456,20 +456,20 @@ func TestObservationWireContentCaptureAndMask(t *testing.T) {
 
 	t.Run("disabled drops only content before mask", func(t *testing.T) {
 		var calls atomic.Int32
-		client, receiver := newObservationWireClient(t, func(config *lunte.Config) {
+		client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
 			config.DisableContentCapture = true
 			config.Mask = func(value any) any {
 				calls.Add(1)
 				return map[string]any{"safe": "masked"}
 			}
 		})
-		_, observation := client.StartObservation(context.Background(), "content-disabled", lunte.TypeGeneration,
-			lunte.ObservationAttributes{
+		_, observation := client.StartObservation(context.Background(), "content-disabled", langfuse.TypeGeneration,
+			langfuse.ObservationAttributes{
 				Input:    "must-not-export-input",
 				Output:   "must-not-export-output",
 				Metadata: map[string]any{"secret": "must-be-masked"},
 				Model:    "gemini-2.5-flash",
-				Usage:    &lunte.Usage{InputTokens: 9, OutputTokens: 4},
+				Usage:    &langfuse.Usage{InputTokens: 9, OutputTokens: 4},
 			})
 		observation.End()
 		span := observationWireSpanNamed(t, exportObservationWireSpans(t, client, receiver, 1), "content-disabled")
@@ -496,15 +496,15 @@ func TestObservationWireContentCaptureAndMask(t *testing.T) {
 
 func TestObservationWireRecordError(t *testing.T) {
 	client, receiver := newObservationWireClient(t, nil)
-	_, observation := client.StartObservation(context.Background(), "record-error", lunte.TypeTool,
-		lunte.ObservationAttributes{
-			Level:         lunte.LevelWarning,
+	_, observation := client.StartObservation(context.Background(), "record-error", langfuse.TypeTool,
+		langfuse.ObservationAttributes{
+			Level:         langfuse.LevelWarning,
 			StatusMessage: "before",
 		})
 	observation.RecordError(nil)
 	wantError := wireProviderError{message: "provider exploded"}
 	observation.RecordError(wantError)
-	observation.Update(lunte.ObservationAttributes{Output: "continued after error"})
+	observation.Update(langfuse.ObservationAttributes{Output: "continued after error"})
 	observation.End()
 
 	span := observationWireSpanNamed(t, exportObservationWireSpans(t, client, receiver, 1), "record-error")
@@ -539,14 +539,14 @@ func TestObservationWireRecordErrorBudgetsPreserveFinalStatusAndRequestHeadroom(
 	client, receiver := newObservationWireClient(t, nil)
 	largeContent := strings.Repeat("c", 900<<10)
 	_, observation := client.StartObservation(context.Background(), "record-error-budget",
-		lunte.TypeTool, lunte.ObservationAttributes{
+		langfuse.TypeTool, langfuse.ObservationAttributes{
 			Input:  largeContent,
 			Output: largeContent,
 		})
 	firstPrefix := "error-0-"
 	firstMessage := firstPrefix + strings.Repeat("e", (64<<10)-len(firstPrefix))
 	observation.RecordError(wireProviderError{message: firstMessage})
-	observation.Update(lunte.ObservationAttributes{
+	observation.Update(langfuse.ObservationAttributes{
 		StatusMessage: "x",
 		Metadata: map[string]any{
 			"would_consume_error_reserve": strings.Repeat("m", 220<<10),
@@ -599,7 +599,7 @@ func TestObservationWireMetadataBudgetPreservesRequiredFields(t *testing.T) {
 		observationMetadata[fmt.Sprintf("observation-%03d", index)] = index
 	}
 
-	ctx := client.WithTraceAttributes(context.Background(), lunte.TraceAttributes{
+	ctx := client.WithTraceAttributes(context.Background(), langfuse.TraceAttributes{
 		Name:      "budgeted-trace",
 		UserID:    "budgeted-user",
 		SessionID: "budgeted-session",
@@ -608,16 +608,16 @@ func TestObservationWireMetadataBudgetPreservesRequiredFields(t *testing.T) {
 		Version:   "budgeted-version",
 	})
 	completion := time.Now().UTC().Add(-time.Second).Truncate(time.Nanosecond)
-	_, observation := client.StartObservation(ctx, "metadata-budget", lunte.TypeGeneration,
-		lunte.ObservationAttributes{
+	_, observation := client.StartObservation(ctx, "metadata-budget", langfuse.TypeGeneration,
+		langfuse.ObservationAttributes{
 			Input:               "input",
 			Output:              "output",
 			Metadata:            observationMetadata,
 			Model:               "budgeted-model",
 			ModelParameters:     map[string]any{"temperature": 0.2},
-			Usage:               &lunte.Usage{InputTokens: 10, OutputTokens: 5},
+			Usage:               &langfuse.Usage{InputTokens: 10, OutputTokens: 5},
 			CostDetails:         map[string]float64{"input": 0.01},
-			Prompt:              &lunte.PromptRef{Name: "budgeted-prompt", Version: 2},
+			Prompt:              &langfuse.PromptRef{Name: "budgeted-prompt", Version: 2},
 			CompletionStartTime: completion,
 		})
 	observation.End()
@@ -668,8 +668,8 @@ func TestObservationWireMetadataBudgetPreservesRequiredFields(t *testing.T) {
 
 func TestObservationWireClientSendsExactLangfuseHeaders(t *testing.T) {
 	client, receiver := newObservationWireClient(t, nil)
-	_, observation := client.StartObservation(context.Background(), "header-check", lunte.TypeSpan,
-		lunte.ObservationAttributes{})
+	_, observation := client.StartObservation(context.Background(), "header-check", langfuse.TypeSpan,
+		langfuse.ObservationAttributes{})
 	observation.End()
 	_ = exportObservationWireSpans(t, client, receiver, 1)
 
@@ -678,8 +678,8 @@ func TestObservationWireClientSendsExactLangfuseHeaders(t *testing.T) {
 		for header, want := range map[string]string{
 			"Authorization":                wantAuth,
 			"x-langfuse-ingestion-version": "4",
-			"x-langfuse-sdk-name":          "lunte",
-			"x-langfuse-sdk-version":       lunte.SDKVersion,
+			"x-langfuse-sdk-name":          "go",
+			"x-langfuse-sdk-version":       langfuse.SDKVersion,
 			"x-langfuse-public-key":        wirePublicKey,
 		} {
 			if got := request.Header.Get(header); got != want {
@@ -689,11 +689,11 @@ func TestObservationWireClientSendsExactLangfuseHeaders(t *testing.T) {
 	}
 }
 
-func newObservationWireClient(t *testing.T, change func(*lunte.Config)) (*lunte.Client, *otlpreceiver.Receiver) {
+func newObservationWireClient(t *testing.T, change func(*langfuse.Config)) (*langfuse.Client, *otlpreceiver.Receiver) {
 	t.Helper()
 	receiver := otlpreceiver.New()
 	t.Cleanup(receiver.Close)
-	config := lunte.Config{
+	config := langfuse.Config{
 		BaseURL:     receiver.URL(),
 		PublicKey:   wirePublicKey,
 		SecretKey:   wireSecretKey,
@@ -704,9 +704,9 @@ func newObservationWireClient(t *testing.T, change func(*lunte.Config)) (*lunte.
 	if change != nil {
 		change(&config)
 	}
-	client, err := lunte.New(context.Background(), config)
+	client, err := langfuse.New(context.Background(), config)
 	if err != nil {
-		t.Fatalf("lunte.New() error = %v", err)
+		t.Fatalf("langfuse.New() error = %v", err)
 	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -718,7 +718,7 @@ func newObservationWireClient(t *testing.T, change func(*lunte.Config)) (*lunte.
 	return client, receiver
 }
 
-func exportObservationWireSpans(t *testing.T, client *lunte.Client, receiver *otlpreceiver.Receiver, want int) []wireSpan {
+func exportObservationWireSpans(t *testing.T, client *langfuse.Client, receiver *otlpreceiver.Receiver, want int) []wireSpan {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -789,8 +789,8 @@ func assertObservationWireEnvelope(t *testing.T, span wireSpan) {
 	if span.scope == nil {
 		t.Fatal("OTLP ScopeSpans.scope is nil")
 	}
-	if span.scope.Name != "langfuse-sdk.lunte" || span.scope.Version != "0.1.0" {
-		t.Fatalf("instrumentation scope = (%q, %q), want (langfuse-sdk.lunte, 0.1.0)", span.scope.Name, span.scope.Version)
+	if span.scope.Name != "langfuse-sdk.go" || span.scope.Version != "0.1.0" {
+		t.Fatalf("instrumentation scope = (%q, %q), want (langfuse-sdk.go, 0.1.0)", span.scope.Name, span.scope.Version)
 	}
 	if span.scope.DroppedAttributesCount != 0 {
 		t.Fatalf("scope dropped attributes = %d, want 0", span.scope.DroppedAttributesCount)

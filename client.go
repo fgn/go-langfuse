@@ -1,4 +1,4 @@
-package lunte
+package langfuse
 
 import (
 	"context"
@@ -18,10 +18,10 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	lfattr "github.com/fgn/lunte/internal/attributes"
-	"github.com/fgn/lunte/internal/diagnostic"
-	lfprocessor "github.com/fgn/lunte/internal/processor"
-	"github.com/fgn/lunte/internal/transport"
+	lfattr "github.com/fgn/go-langfuse/internal/attributes"
+	"github.com/fgn/go-langfuse/internal/diagnostic"
+	lfprocessor "github.com/fgn/go-langfuse/internal/processor"
+	"github.com/fgn/go-langfuse/internal/transport"
 )
 
 // Go's regexp package has no lookahead, so the prefix rule is checked
@@ -102,7 +102,7 @@ func parseEnvironmentBool(name, raw string) (bool, error) {
 	case "false":
 		return false, nil
 	default:
-		return false, fmt.Errorf("lunte: %s must be true or false", name)
+		return false, fmt.Errorf("langfuse: %s must be true or false", name)
 	}
 }
 
@@ -113,10 +113,10 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		return &Client{disabled: true}, nil
 	}
 	if ctx == nil {
-		return nil, errors.New("lunte: context is nil")
+		return nil, errors.New("langfuse: context is nil")
 	}
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("lunte: context is not usable: %w", err)
+		return nil, fmt.Errorf("langfuse: context is not usable: %w", err)
 	}
 	if cfg.envErr != nil {
 		return nil, cfg.envErr
@@ -135,7 +135,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, err
 	}
 	if cfg.MaxQueueSize < 0 {
-		return nil, errors.New("lunte: max queue size must not be negative")
+		return nil, errors.New("langfuse: max queue size must not be negative")
 	}
 
 	transportConfig := transport.Config{
@@ -154,7 +154,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	if cfg.TracerProvider != nil {
 		if !reserveBorrowedProvider(cfg.TracerProvider, client) {
-			diagnostic.Report("a Lunte client is already attached to this tracer provider; duplicate client is disabled")
+			diagnostic.Report("a Langfuse client is already attached to this tracer provider; duplicate client is disabled")
 			return &Client{disabled: true}, nil
 		}
 		client.reserved = true
@@ -194,7 +194,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err != nil {
 		_ = batch.Shutdown(context.Background())
 		client.releaseReservation()
-		return nil, fmt.Errorf("lunte: create span processor: %w", err)
+		return nil, fmt.Errorf("langfuse: create span processor: %w", err)
 	}
 	client.processor = processor
 
@@ -240,10 +240,10 @@ func ownedSpanLimits() sdktrace.SpanLimits {
 
 func validateEnvironment(value string) error {
 	if len(value) > 40 {
-		return errors.New("lunte: environment must be at most 40 characters")
+		return errors.New("langfuse: environment must be at most 40 characters")
 	}
 	if strings.HasPrefix(value, "langfuse") || !environmentCharacters.MatchString(value) {
-		return errors.New("lunte: environment must use lowercase letters, numbers, underscores, or hyphens and must not start with langfuse")
+		return errors.New("langfuse: environment must use lowercase letters, numbers, underscores, or hyphens and must not start with langfuse")
 	}
 	return nil
 }
@@ -253,7 +253,7 @@ func validateConfigString(field, value string, emptyAllowed bool) error {
 		return nil
 	}
 	if value == "" || !utf8.ValidString(value) || len(value) > lfattr.MaxDirectStringBytes {
-		return fmt.Errorf("lunte: %s is invalid or exceeds the internal size limit", field)
+		return fmt.Errorf("langfuse: %s is invalid or exceeds the internal size limit", field)
 	}
 	return nil
 }
@@ -269,7 +269,7 @@ func ownedResource(serviceName string) (*resource.Resource, error) {
 	service := resource.NewSchemaless(semconv.ServiceNameKey.String(serviceName))
 	result, err := resource.Merge(resource.Default(), service)
 	if err != nil {
-		return nil, errors.New("lunte: create OpenTelemetry resource")
+		return nil, errors.New("langfuse: create OpenTelemetry resource")
 	}
 	return result, nil
 }
@@ -312,7 +312,7 @@ func (c *Client) Flush(ctx context.Context) error {
 		return nil
 	}
 	if ctx == nil {
-		return errors.New("lunte: flush context is nil")
+		return errors.New("langfuse: flush context is nil")
 	}
 	if c.owned {
 		return c.provider.ForceFlush(ctx)
@@ -321,14 +321,14 @@ func (c *Client) Flush(ctx context.Context) error {
 }
 
 // Shutdown permanently stops this Client. In borrowed mode it shuts down the
-// Lunte processor using ctx before unregistering it; the provider and all
+// Langfuse processor using ctx before unregistering it; the provider and all
 // unrelated processors remain owned by the application.
 func (c *Client) Shutdown(ctx context.Context) error {
 	if c == nil || c.isDisabled() {
 		return nil
 	}
 	if ctx == nil {
-		return errors.New("lunte: shutdown context is nil")
+		return errors.New("langfuse: shutdown context is nil")
 	}
 	// Publish the stopped state before invoking OpenTelemetry. Its processor,
 	// exporter, and diagnostic callbacks are application-extensible and may

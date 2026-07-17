@@ -1,4 +1,4 @@
-package lunte
+package langfuse
 
 import (
 	"context"
@@ -8,8 +8,8 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	lfattr "github.com/fgn/lunte/internal/attributes"
-	"github.com/fgn/lunte/internal/diagnostic"
+	lfattr "github.com/fgn/go-langfuse/internal/attributes"
+	"github.com/fgn/go-langfuse/internal/diagnostic"
 )
 
 const (

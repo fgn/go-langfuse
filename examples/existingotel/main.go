@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/fgn/lunte"
+	"github.com/fgn/go-langfuse"
 	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
@@ -23,37 +23,38 @@ func run(ctx context.Context) error {
 	// sampler, resource, and one or more unrelated span processors.
 	provider := sdktrace.NewTracerProvider()
 
-	cfg := lunte.ConfigFromEnv()
+	cfg := langfuse.ConfigFromEnv()
 	cfg.TracerProvider = provider
-	lf, err := lunte.New(ctx, cfg)
+	lf, err := langfuse.New(ctx, cfg)
 	if err != nil {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = provider.Shutdown(shutdownCtx)
-		return fmt.Errorf("attach Lunte: %w", err)
+		return fmt.Errorf("attach Langfuse client: %w", err)
 	}
 
 	workErr := handleRequest(ctx, provider, lf)
 
-	// End application work first, then unregister and stop Lunte's processor,
-	// then let the application shut down its provider and remaining processors.
-	lunteCtx, cancelLunte := context.WithTimeout(context.Background(), 5*time.Second)
-	lunteErr := lf.Shutdown(lunteCtx)
-	cancelLunte()
+	// End application work first, then unregister and stop the Langfuse
+	// processor, then let the application shut down its provider and
+	// remaining processors.
+	langfuseCtx, cancelLangfuse := context.WithTimeout(context.Background(), 5*time.Second)
+	langfuseErr := lf.Shutdown(langfuseCtx)
+	cancelLangfuse()
 
 	providerCtx, cancelProvider := context.WithTimeout(context.Background(), 5*time.Second)
 	providerErr := provider.Shutdown(providerCtx)
 	cancelProvider()
 
-	return errors.Join(workErr, lunteErr, providerErr)
+	return errors.Join(workErr, langfuseErr, providerErr)
 }
 
-func handleRequest(ctx context.Context, provider *sdktrace.TracerProvider, lf *lunte.Client) error {
+func handleRequest(ctx context.Context, provider *sdktrace.TracerProvider, lf *langfuse.Client) error {
 	tracer := provider.Tracer("example.com/backend/http")
 	ctx, requestSpan := tracer.Start(ctx, "POST /chat")
 	defer requestSpan.End()
 
-	ctx = lf.WithTraceAttributes(ctx, lunte.TraceAttributes{
+	ctx = lf.WithTraceAttributes(ctx, langfuse.TraceAttributes{
 		Name:      "chat-request",
 		UserID:    "user-123",
 		SessionID: "conversation-456",
@@ -68,17 +69,17 @@ func handleRequest(ctx context.Context, provider *sdktrace.TracerProvider, lf *l
 	_, generation := lf.StartObservation(
 		ctx,
 		"generate-answer",
-		lunte.TypeGeneration,
-		lunte.ObservationAttributes{
+		langfuse.TypeGeneration,
+		langfuse.ObservationAttributes{
 			Model: "gemini-2.5-flash",
 			Input: "Explain borrowed tracer providers.",
 		},
 	)
 	defer generation.End()
 
-	generation.Update(lunte.ObservationAttributes{
-		Output: "Lunte registers one additional processor on the existing provider.",
-		Usage: &lunte.Usage{
+	generation.Update(langfuse.ObservationAttributes{
+		Output: "The Langfuse client registers one additional processor on the existing provider.",
+		Usage: &langfuse.Usage{
 			InputTokens:  6,
 			OutputTokens: 11,
 		},

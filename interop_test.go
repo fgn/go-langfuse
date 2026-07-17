@@ -1,4 +1,4 @@
-package lunte
+package langfuse
 
 import (
 	"bytes"
@@ -15,8 +15,8 @@ import (
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 
-	lfattr "github.com/fgn/lunte/internal/attributes"
-	"github.com/fgn/lunte/internal/otlpreceiver"
+	lfattr "github.com/fgn/go-langfuse/internal/attributes"
+	"github.com/fgn/go-langfuse/internal/otlpreceiver"
 )
 
 func TestOwnedProviderAlwaysSamplesForeignUnsampledParentsAndPreservesIDs(t *testing.T) {
