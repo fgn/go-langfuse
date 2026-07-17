@@ -2,6 +2,7 @@ package langfuse
 
 import (
 	"context"
+	"maps"
 	"sort"
 	"unicode/utf8"
 
@@ -17,9 +18,11 @@ const (
 	maxTraceTagBytes = 16 << 10
 )
 
-type traceStateContextKey struct{ client *Client }
-type observationContextKey struct{ client *Client }
-type traceClaimContextKey struct{ client *Client }
+type (
+	traceStateContextKey  struct{ client *Client }
+	observationContextKey struct{ client *Client }
+	traceClaimContextKey  struct{ client *Client }
+)
 
 type traceState struct {
 	name      string
@@ -66,9 +69,7 @@ func (s traceState) clone() traceState {
 	result.tags = append([]string(nil), s.tags...)
 	if s.metadata != nil {
 		result.metadata = make(map[string]string, len(s.metadata))
-		for key, value := range s.metadata {
-			result.metadata[key] = value
-		}
+		maps.Copy(result.metadata, s.metadata)
 	}
 	return result
 }

@@ -48,7 +48,6 @@ func TestNormalizeEndpoint(t *testing.T) {
 	}
 
 	for input, want := range tests {
-		input, want := input, want
 		t.Run(input, func(t *testing.T) {
 			t.Parallel()
 			got, err := NormalizeEndpoint(input)
@@ -80,7 +79,6 @@ func TestNormalizeEndpointRejectsUnsafeOrAmbiguousURLs(t *testing.T) {
 	}
 
 	for _, input := range tests {
-		input := input
 		t.Run(input, func(t *testing.T) {
 			t.Parallel()
 			if got, err := NormalizeEndpoint(input); err == nil {
@@ -328,7 +326,6 @@ func TestExporterRetriesTransientFailure(t *testing.T) {
 		{name: "504", status: http.StatusGatewayTimeout},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 

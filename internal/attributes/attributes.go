@@ -8,6 +8,7 @@ import (
 	"errors"
 	"math"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -297,7 +298,7 @@ func ValidMetadataKey(key string) bool {
 	if key == "" || !utf8.ValidString(key) || len(key) > MaxAttributeKeyBytes {
 		return false
 	}
-	for _, segment := range strings.Split(key, ".") {
+	for segment := range strings.SplitSeq(key, ".") {
 		switch segment {
 		case "", "__proto__", "constructor", "prototype":
 			return false
@@ -477,7 +478,7 @@ func estimateJSONSize(
 		if value.IsNil() {
 			return 4, nil
 		}
-		return estimateJSONReference(value, limit, depth, active, func() (int, error) {
+		return estimateJSONReference(value, active, func() (int, error) {
 			return estimateJSONSize(value.Elem(), limit, depth+1, active)
 		})
 	case reflect.Bool:
@@ -510,7 +511,7 @@ func estimateJSONSize(
 			}
 			return boundedSize(2+base64.StdEncoding.EncodedLen(value.Len()), limit)
 		}
-		return estimateJSONReference(value, limit, depth, active, func() (int, error) {
+		return estimateJSONReference(value, active, func() (int, error) {
 			return estimateJSONSequence(value, limit, depth, active)
 		})
 	case reflect.Array:
@@ -519,7 +520,7 @@ func estimateJSONSize(
 		if value.IsNil() {
 			return 4, nil
 		}
-		return estimateJSONReference(value, limit, depth, active, func() (int, error) {
+		return estimateJSONReference(value, active, func() (int, error) {
 			total := 2
 			iterator := value.MapRange()
 			for index := 0; iterator.Next(); index++ {
@@ -549,10 +550,10 @@ func estimateJSONSize(
 		total := 2
 		fieldCount := 0
 		typeOf := value.Type()
-		for index := 0; index < value.NumField(); index++ {
+		for index := range value.NumField() {
 			field := typeOf.Field(index)
 			fieldValue := value.Field(index)
-			if field.PkgPath != "" && !(field.Anonymous && indirectKind(field.Type) == reflect.Struct) {
+			if field.PkgPath != "" && (!field.Anonymous || indirectKind(field.Type) != reflect.Struct) {
 				continue
 			}
 			tag := field.Tag.Get("json")
@@ -593,8 +594,6 @@ func estimateJSONSize(
 
 func estimateJSONReference(
 	value reflect.Value,
-	limit int,
-	depth int,
 	active map[jsonVisit]struct{},
 	estimate func() (int, error),
 ) (int, error) {
@@ -617,7 +616,7 @@ func estimateJSONSequence(
 	active map[jsonVisit]struct{},
 ) (int, error) {
 	total := 2
-	for index := 0; index < value.Len(); index++ {
+	for index := range value.Len() {
 		if index != 0 {
 			total++
 		}
@@ -664,12 +663,7 @@ func hasCustomJSON(value reflect.Value) bool {
 }
 
 func hasJSONTagOption(parts []string, option string) bool {
-	for _, item := range parts[1:] {
-		if item == option {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(parts[1:], option)
 }
 
 func indirectKind(typeOf reflect.Type) reflect.Kind {

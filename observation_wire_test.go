@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -530,7 +531,7 @@ func TestObservationWireRecordError(t *testing.T) {
 	}
 	assertObservationWireAttributes(t, event.Attributes, map[string]any{
 		"exception.message": "provider exploded",
-		"exception.type":    reflect.TypeOf(wantError).PkgPath() + "." + reflect.TypeOf(wantError).Name(),
+		"exception.type":    reflect.TypeFor[wireProviderError]().PkgPath() + "." + reflect.TypeFor[wireProviderError]().Name(),
 	})
 }
 
@@ -732,7 +733,7 @@ func exportObservationWireSpans(t *testing.T, client *langfuse.Client, receiver 
 
 	var result []wireSpan
 	for _, request := range requests {
-		if request.Method != "POST" || request.Path != "/api/public/otel/v1/traces" {
+		if request.Method != http.MethodPost || request.Path != "/api/public/otel/v1/traces" {
 			t.Fatalf("OTLP request = %s %s, want POST /api/public/otel/v1/traces", request.Method, request.Path)
 		}
 		if got := request.Header.Get("Content-Type"); got != "application/x-protobuf" {
@@ -875,8 +876,14 @@ func assertObservationWireAttributes(t *testing.T, attributes []*commonpb.KeyVal
 	if reflect.DeepEqual(got, want) {
 		return
 	}
-	gotJSON, _ := json.MarshalIndent(got, "", "  ")
-	wantJSON, _ := json.MarshalIndent(want, "", "  ")
+	gotJSON, err := json.MarshalIndent(got, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal actual attributes: %v", err)
+	}
+	wantJSON, err := json.MarshalIndent(want, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal expected attributes: %v", err)
+	}
 	t.Fatalf("attributes differ\ngot:  %s\nwant: %s", gotJSON, wantJSON)
 }
 

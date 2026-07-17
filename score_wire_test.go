@@ -131,8 +131,14 @@ func TestScoreWireSubmitsAuthenticatedJSON(t *testing.T) {
 		if !exists {
 			t.Fatalf("score payload is missing %q; payload: %v", key, request.body)
 		}
-		gotJSON, _ := json.Marshal(got)
-		wantJSON, _ := json.Marshal(wantValue)
+		gotJSON, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("marshal score payload %q: %v", key, err)
+		}
+		wantJSON, err := json.Marshal(wantValue)
+		if err != nil {
+			t.Fatalf("marshal expected score payload %q: %v", key, err)
+		}
 		if string(gotJSON) != string(wantJSON) {
 			t.Fatalf("score payload %q = %s, want %s", key, gotJSON, wantJSON)
 		}

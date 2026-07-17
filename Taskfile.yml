@@ -1,0 +1,94 @@
+# https://taskfile.dev
+version: "3"
+
+vars:
+  GOLANGCI_LINT_VERSION: 2.9.0
+  GOVULNCHECK_VERSION: 1.1.4
+
+tasks:
+  install:golangci-lint:
+    internal: true
+    status:
+      - test -x ./bin/golangci-lint
+      - ./bin/golangci-lint --version | grep -F 'version {{.GOLANGCI_LINT_VERSION}}'
+    cmds:
+      - mkdir -p ./bin
+      - >-
+        curl -sSfL
+        https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh
+        | sh -s -- -b ./bin v{{.GOLANGCI_LINT_VERSION}}
+
+  format:
+    desc: Format Go sources and module files
+    deps: [install:golangci-lint]
+    cmds:
+      - ./bin/golangci-lint fmt
+      - go mod edit -fmt
+      - go mod tidy
+
+  format:check:
+    desc: Check Go source formatting and module tidiness
+    deps: [install:golangci-lint]
+    cmds:
+      - ./bin/golangci-lint fmt --diff
+      - go mod tidy -diff
+
+  lint:
+    desc: Run Go linters
+    deps: [install:golangci-lint]
+    cmds:
+      - ./bin/golangci-lint run --timeout 2m
+
+  test:
+    desc: Run the race-enabled test suite
+    cmds:
+      - go test -race -mod=readonly {{.CLI_ARGS | default "./..."}}
+
+  build:
+    desc: Compile examples and the opt-in live test suite
+    cmds:
+      - go build -mod=readonly ./examples/...
+      - go test -tags=live -run='^$' -mod=readonly ./...
+
+  readme:check:
+    desc: Compile the standalone README quickstart
+    cmds:
+      - ./scripts/check-readme-quickstart.sh
+
+  fuzz:check:
+    desc: Run short fuzz smoke tests
+    cmds:
+      - go test -mod=readonly ./internal/attributes -run='^$' -fuzz=FuzzEncode -fuzztime=2s
+      - go test -mod=readonly ./internal/attributes -run='^$' -fuzz=FuzzNormalizeUsage -fuzztime=2s
+      - go test -mod=readonly ./internal/transport -run='^$' -fuzz=FuzzNormalizeEndpoint -fuzztime=2s
+
+  vuln:check:
+    desc: Scan dependencies for known vulnerabilities
+    cmds:
+      - go run golang.org/x/vuln/cmd/govulncheck@v{{.GOVULNCHECK_VERSION}} ./...
+
+  policy:check:
+    desc: Check repository and module policy
+    cmds:
+      - test -f LICENSE
+      - grep -q "Apache License" LICENSE
+      - test "$(go mod edit -json | jq -r .Go)" = "1.25.0"
+      - test "$(go mod edit -json | jq -r .Toolchain)" = "go1.25.12"
+
+  ci:
+    desc: Run all continuous-integration checks
+    cmds:
+      - go mod download
+      - task: format:check
+      - task: lint
+      - task: readme:check
+      - task: build
+      - task: test
+      - go vet -mod=readonly ./...
+      - task: fuzz:check
+      - task: vuln:check
+      - task: policy:check
+
+  default:
+    cmds:
+      - task: ci

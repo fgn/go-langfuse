@@ -389,11 +389,9 @@ func TestEdgeContractCallerMutationAfterCallIsRaceSafe(t *testing.T) {
 
 	start := make(chan struct{})
 	var workers sync.WaitGroup
-	workers.Add(1)
-	go func() {
-		defer workers.Done()
+	workers.Go(func() {
 		<-start
-		for index := 0; index < 2_000; index++ {
+		for range 2_000 {
 			tags[0] = "caller-mutated-tag"
 			traceMetadata["stable"] = "caller-mutated-trace"
 			input["message"] = "caller-mutated-input"
@@ -404,18 +402,15 @@ func TestEdgeContractCallerMutationAfterCallIsRaceSafe(t *testing.T) {
 			usage.OutputTokens = 88
 			costs["input"] = 42
 		}
-	}()
+	})
 	const childCount = 8
-	for index := 0; index < childCount; index++ {
-		index := index
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+	for index := range childCount {
+		workers.Go(func() {
 			<-start
 			_, child := client.StartObservation(rootContext, "mutation-child-"+string(rune('a'+index)),
 				langfuse.TypeSpan, langfuse.ObservationAttributes{})
 			child.End()
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()
@@ -433,7 +428,7 @@ func TestEdgeContractCallerMutationAfterCallIsRaceSafe(t *testing.T) {
 	wantRoot["langfuse.trace.name"] = "stable-trace"
 	wantRoot["langfuse.trace.tags"] = []any{"stable-tag"}
 	assertObservationWireAttributes(t, rootSpan.span.Attributes, wantRoot)
-	for index := 0; index < childCount; index++ {
+	for index := range childCount {
 		span := observationWireSpanNamed(t, spans, "mutation-child-"+string(rune('a'+index)))
 		wantChild := map[string]any{
 			"langfuse.environment":           wireEnv,

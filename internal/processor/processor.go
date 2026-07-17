@@ -303,7 +303,7 @@ func isAppRootEligible(span sdktrace.ReadOnlySpan) bool {
 		return true
 	}
 
-	return !(span.InstrumentationScope().Name == "litellm" && span.Name() == "raw_gen_ai_request")
+	return span.InstrumentationScope().Name != "litellm" || span.Name() != "raw_gen_ai_request"
 }
 
 // ShouldExport applies the Langfuse v4 smart default filter.

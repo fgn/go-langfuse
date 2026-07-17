@@ -181,8 +181,8 @@ func (o *Observation) Update(values ObservationAttributes) {
 	stagedMetadata := make(map[string]struct{})
 	for _, item := range spanAttributes {
 		key := string(item.Key)
-		if strings.HasPrefix(key, lfattr.ObservationMetadataKey+".") {
-			metadataKey := strings.TrimPrefix(key, lfattr.ObservationMetadataKey+".")
+		if after, ok := strings.CutPrefix(key, lfattr.ObservationMetadataKey+"."); ok {
+			metadataKey := after
 			if _, exists := o.metadataKeys[metadataKey]; !exists {
 				if _, staged := stagedMetadata[metadataKey]; !staged && len(o.metadataKeys)+len(stagedMetadata) >= lfattr.MaxMetadataEntries {
 					metadataOmitted = true
@@ -618,11 +618,12 @@ func generationAttributes(typeName ObservationType, values ObservationAttributes
 		))
 	}
 	if values.Prompt != nil {
-		if typeName != TypeGeneration {
+		switch {
+		case typeName != TypeGeneration:
 			diagnostic.Report("prompt reference omitted from a non-generation observation")
-		} else if values.Prompt.Name == "" || values.Prompt.Version < 1 {
+		case values.Prompt.Name == "" || values.Prompt.Version < 1:
 			diagnostic.Report("invalid prompt reference omitted")
-		} else {
+		default:
 			result = append(result,
 				attribute.String(lfattr.ObservationPromptNameKey, values.Prompt.Name),
 				attribute.Int(lfattr.ObservationPromptVersionKey, values.Prompt.Version),
