@@ -13,7 +13,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 
-	lfattr "github.com/fgn/lunte/internal/attributes"
+	lfattr "github.com/fgn/go-langfuse/internal/attributes"
 )
 
 type pointerOnlyLargeString string

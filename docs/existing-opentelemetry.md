@@ -5,10 +5,10 @@ Use borrowed-provider mode when the application already owns an
 and Langfuse.
 
 ```go
-cfg := lunte.ConfigFromEnv()
+cfg := langfuse.ConfigFromEnv()
 cfg.TracerProvider = provider
 
-lf, err := lunte.New(ctx, cfg)
+lf, err := langfuse.New(ctx, cfg)
 if err != nil {
 	return err
 }
@@ -20,7 +20,7 @@ remains authoritative: non-recording or record-only spans are not exported to
 Langfuse.
 
 Call `WithTraceAttributes` before starting provider spans that need trace name,
-user, session, tags, metadata, or version. The Lunte processor writes these
+user, session, tags, metadata, or version. The Langfuse processor writes these
 attributes, plus configured environment and release, at span start. Because
 processors share an SDK span, existing exporters see those annotations too.
 
@@ -38,7 +38,7 @@ status/error text, or provider/framework attributes and events. In particular,
 `RecordError` exports `err.Error()` without masking. Configure third-party
 instrumentation independently and use payload-free error/status values.
 
-Only one active Lunte client is supported on a borrowed provider. A
+Only one active client is supported on a borrowed provider. A
 duplicate construction emits an OTel diagnostic and returns a true no-op
 client so unscoped AI spans cannot fan out to two projects.
 
@@ -56,22 +56,22 @@ instrumentor/provider limits and watch for sustained export saturation.
 Path-prefixed reverse-proxy base URLs (for example
 `https://gw.example.com/langfuse/api/public/otel`) are not supported in v0.1.
 
-At graceful shutdown, stop Lunte before the application-owned provider:
+At graceful shutdown, stop the Langfuse client before the application-owned provider:
 
 ```go
-lunteCtx, cancelLunte := context.WithTimeout(context.Background(), 5*time.Second)
-lunteErr := lf.Shutdown(lunteCtx)
-cancelLunte()
+langfuseCtx, cancelLangfuse := context.WithTimeout(context.Background(), 5*time.Second)
+langfuseErr := lf.Shutdown(langfuseCtx)
+cancelLangfuse()
 
 providerCtx, cancelProvider := context.WithTimeout(context.Background(), 5*time.Second)
 providerErr := provider.Shutdown(providerCtx)
 cancelProvider()
 
-return errors.Join(lunteErr, providerErr)
+return errors.Join(langfuseErr, providerErr)
 ```
 
 Create each timeout context immediately before its lifecycle call. Reusing the
-Lunte context for provider shutdown can leave the provider no time if the
+Langfuse client's context for provider shutdown can leave the provider no time if the
 first shutdown consumes the deadline.
 
 `Client.Shutdown` first stops its batch processor with the supplied context,

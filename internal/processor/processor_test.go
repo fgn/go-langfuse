@@ -11,7 +11,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
 
-	lfattr "github.com/fgn/lunte/internal/attributes"
+	lfattr "github.com/fgn/go-langfuse/internal/attributes"
 )
 
 func TestNewRequiresNextProcessor(t *testing.T) {
@@ -109,7 +109,7 @@ func TestSmartFilterUsesFinalAttributesAndExactModernSemconvPrefix(t *testing.T)
 	}
 }
 
-func TestLunteScopeIsIsolatedByPublicKey(t *testing.T) {
+func TestOwnScopeIsIsolatedByPublicKey(t *testing.T) {
 	t.Parallel()
 
 	next := newRecordingProcessor()
@@ -144,7 +144,7 @@ func TestLunteScopeIsIsolatedByPublicKey(t *testing.T) {
 	}
 }
 
-func TestKnownLLMInstrumentationScopesIncludeLunteAndPythonSnapshot(t *testing.T) {
+func TestKnownLLMInstrumentationScopesIncludeOwnAndPythonSnapshot(t *testing.T) {
 	t.Parallel()
 
 	want := []string{

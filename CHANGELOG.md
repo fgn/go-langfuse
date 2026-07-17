@@ -5,9 +5,8 @@ Versioning once the first release is tagged.
 
 ## Unreleased
 
-- Renamed the independent community client to Lunte, with module path
-  `github.com/fgn/lunte`, package name `lunte`, and explicit Lunte transport
-  and instrumentation identity.
+- Renamed the module to `github.com/fgn/go-langfuse`, package `langfuse`,
+  following the `go-github`/`go-redis` community-client naming convention.
 - New `Client.Observe` runs a callback inside a scoped observation: the
   callback receives the child context, the observation always ends (a panic
   is marked as a payload-free failure before propagating), and a returned

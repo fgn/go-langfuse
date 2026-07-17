@@ -15,10 +15,10 @@ The SDK sends `x-langfuse-ingestion-version: 4` unconditionally. A server that
 does not recognize this version is incompatible; upgrade that deployment
 rather than weakening the header.
 
-Lunte uses the instrumentation scope `langfuse-sdk.lunte`. Langfuse treats the
-`langfuse-sdk` prefix as an ingestion marker that prevents semantic attributes
-from being copied into generic `metadata.attributes`; the `.lunte` suffix and
-`x-langfuse-sdk-name: lunte` identify the independent client.
+go-langfuse uses the instrumentation scope `langfuse-sdk.go`. Langfuse treats
+the `langfuse-sdk` prefix as an ingestion marker that prevents semantic
+attributes from being copied into generic `metadata.attributes`; the `.go`
+suffix and `x-langfuse-sdk-name: go` identify the independent client.
 
 The base URL must be a host root, `/api/public/otel`, or the full
 `/api/public/otel/v1/traces` endpoint. Path-prefixed reverse-proxy base URLs
@@ -29,7 +29,7 @@ The live release gate uses a dedicated, non-production Langfuse project and
 must verify UI visibility, environment/user/session/tag/metadata filters,
 application roots, generation usage/cost, prompt links, and observation-level
 evaluators. Before the gate runs, that project must contain prompt
-`lunte-live-prompt` version 1 and the evaluator named by the release
+`go-langfuse-live-prompt` version 1 and the evaluator named by the release
 checklist. Invoke the Go test with `-count=1`; every run includes a unique
 marker in its trace name, session, metadata, and test log so reviewers cannot
 mistake cached or old data for the current run. Live credentials are never

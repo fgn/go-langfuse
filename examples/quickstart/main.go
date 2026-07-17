@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/fgn/lunte"
+	"github.com/fgn/go-langfuse"
 )
 
 func main() {
@@ -16,19 +16,19 @@ func main() {
 }
 
 func run(ctx context.Context) error {
-	lf, err := lunte.New(ctx, lunte.ConfigFromEnv())
+	lf, err := langfuse.New(ctx, langfuse.ConfigFromEnv())
 	if err != nil {
-		return fmt.Errorf("create Lunte client: %w", err)
+		return fmt.Errorf("create Langfuse client: %w", err)
 	}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := lf.Shutdown(shutdownCtx); err != nil {
-			log.Printf("shut down Lunte: %v", err)
+			log.Printf("shut down Langfuse client: %v", err)
 		}
 	}()
 
-	ctx = lf.WithTraceAttributes(ctx, lunte.TraceAttributes{
+	ctx = lf.WithTraceAttributes(ctx, langfuse.TraceAttributes{
 		Name:      "chat-turn",
 		UserID:    "user-123",
 		SessionID: "conversation-456",
@@ -39,8 +39,8 @@ func run(ctx context.Context) error {
 	rootCtx, root := lf.StartObservation(
 		ctx,
 		"chat-turn",
-		lunte.TypeAgent,
-		lunte.ObservationAttributes{Input: question},
+		langfuse.TypeAgent,
+		langfuse.ObservationAttributes{Input: question},
 	)
 	defer root.End()
 
@@ -48,8 +48,8 @@ func run(ctx context.Context) error {
 	generationCtx, generation := lf.StartObservation(
 		rootCtx,
 		"generate-answer",
-		lunte.TypeGeneration,
-		lunte.ObservationAttributes{
+		langfuse.TypeGeneration,
+		langfuse.ObservationAttributes{
 			Model: "gemini-2.5-flash",
 			Input: messages,
 		},
@@ -63,11 +63,11 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	generation.Update(lunte.ObservationAttributes{
+	generation.Update(langfuse.ObservationAttributes{
 		Output: answer,
 		Usage:  &usage,
 	})
-	root.Update(lunte.ObservationAttributes{Output: answer})
+	root.Update(langfuse.ObservationAttributes{Output: answer})
 
 	return nil
 }
@@ -75,14 +75,14 @@ func run(ctx context.Context) error {
 // callModel stands in for a provider SDK. Pass ctx to the real provider so
 // cancellation and any provider-created child spans retain the generation as
 // their parent.
-func callModel(ctx context.Context, messages []string) (string, lunte.Usage, error) {
+func callModel(ctx context.Context, messages []string) (string, langfuse.Usage, error) {
 	select {
 	case <-ctx.Done():
-		return "", lunte.Usage{}, ctx.Err()
+		return "", langfuse.Usage{}, ctx.Err()
 	default:
 	}
 
-	return "Context carries deadlines, cancellation, and request-scoped values.", lunte.Usage{
+	return "Context carries deadlines, cancellation, and request-scoped values.", langfuse.Usage{
 		InputTokens:  int64(len(messages) * 6),
 		OutputTokens: 10,
 	}, nil

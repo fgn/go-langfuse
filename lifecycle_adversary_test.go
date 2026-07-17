@@ -1,4 +1,4 @@
-package lunte
+package langfuse
 
 import (
 	"context"
@@ -16,8 +16,8 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 
-	lfattr "github.com/fgn/lunte/internal/attributes"
-	"github.com/fgn/lunte/internal/otlpreceiver"
+	lfattr "github.com/fgn/go-langfuse/internal/attributes"
+	"github.com/fgn/go-langfuse/internal/otlpreceiver"
 )
 
 func TestBorrowedProviderOnStartCanReenterClientShutdown(t *testing.T) {

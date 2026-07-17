@@ -14,7 +14,7 @@ import (
 
 	otelattr "go.opentelemetry.io/otel/attribute"
 
-	"github.com/fgn/lunte/internal/diagnostic"
+	"github.com/fgn/go-langfuse/internal/diagnostic"
 )
 
 var (
@@ -32,7 +32,7 @@ const (
 	// TracerName retains Langfuse's server-recognized SDK scope prefix so the
 	// ingestion pipeline does not duplicate semantic attributes into generic
 	// metadata. The suffix identifies this independent community client.
-	TracerName = "langfuse-sdk.lunte"
+	TracerName = "langfuse-sdk.go"
 
 	TraceNameKey      = "langfuse.trace.name"
 	TraceUserIDKey    = "user.id"

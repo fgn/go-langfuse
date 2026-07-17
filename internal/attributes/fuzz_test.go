@@ -5,7 +5,7 @@ import (
 	"math"
 	"testing"
 
-	lfattr "github.com/fgn/lunte/internal/attributes"
+	lfattr "github.com/fgn/go-langfuse/internal/attributes"
 )
 
 func FuzzEncode(f *testing.F) {

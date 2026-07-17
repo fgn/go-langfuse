@@ -22,27 +22,27 @@ func NormalizeEndpoint(raw string) (string, error) {
 
 	u, err := url.Parse(value)
 	if err != nil {
-		return "", errors.New("lunte transport: invalid base URL")
+		return "", errors.New("langfuse transport: invalid base URL")
 	}
 
 	u.Scheme = strings.ToLower(u.Scheme)
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return "", errors.New("lunte transport: base URL must use http or https")
+		return "", errors.New("langfuse transport: base URL must use http or https")
 	}
 	if u.Opaque != "" || u.Host == "" || u.Hostname() == "" {
-		return "", errors.New("lunte transport: base URL must include a host")
+		return "", errors.New("langfuse transport: base URL must include a host")
 	}
 	if u.User != nil {
-		return "", errors.New("lunte transport: base URL must not contain credentials")
+		return "", errors.New("langfuse transport: base URL must not contain credentials")
 	}
 	if u.RawQuery != "" || u.ForceQuery {
-		return "", errors.New("lunte transport: base URL must not contain a query")
+		return "", errors.New("langfuse transport: base URL must not contain a query")
 	}
 	if u.Fragment != "" || strings.Contains(value, "#") {
-		return "", errors.New("lunte transport: base URL must not contain a fragment")
+		return "", errors.New("langfuse transport: base URL must not contain a fragment")
 	}
 	if u.RawPath != "" {
-		return "", errors.New("lunte transport: base URL path must not be escaped")
+		return "", errors.New("langfuse transport: base URL path must not be escaped")
 	}
 
 	path := strings.TrimSuffix(u.Path, "/")
@@ -50,7 +50,7 @@ func NormalizeEndpoint(raw string) (string, error) {
 	case "", otelBasePath, tracesPath:
 		u.Path = tracesPath
 	default:
-		return "", errors.New("lunte transport: base URL has an unsupported path")
+		return "", errors.New("langfuse transport: base URL has an unsupported path")
 	}
 
 	u.RawPath = ""

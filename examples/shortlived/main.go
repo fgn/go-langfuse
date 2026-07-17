@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fgn/lunte"
+	"github.com/fgn/go-langfuse"
 )
 
 // This example shows a short-lived job, an event, masking, and an explicit
@@ -20,12 +20,12 @@ func main() {
 }
 
 func run(ctx context.Context) (runErr error) {
-	cfg := lunte.ConfigFromEnv()
+	cfg := langfuse.ConfigFromEnv()
 	cfg.Mask = redactSDKValue
 
-	client, err := lunte.New(ctx, cfg)
+	client, err := langfuse.New(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("create Lunte client: %w", err)
+		return fmt.Errorf("create Langfuse client: %w", err)
 	}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -33,19 +33,19 @@ func run(ctx context.Context) (runErr error) {
 		runErr = errors.Join(runErr, client.Shutdown(shutdownCtx))
 	}()
 
-	ctx = client.WithTraceAttributes(ctx, lunte.TraceAttributes{
+	ctx = client.WithTraceAttributes(ctx, langfuse.TraceAttributes{
 		Name: "nightly-summary",
 		Tags: []string{"job", "nightly"},
 	})
-	client.Event(ctx, "job-started", lunte.ObservationAttributes{
+	client.Event(ctx, "job-started", langfuse.ObservationAttributes{
 		Metadata: map[string]any{"attempt": 1, "customer_id": "secret-customer-123"},
 	})
 
-	_, observation := client.StartObservation(ctx, "summarize", lunte.TypeGeneration,
-		lunte.ObservationAttributes{Input: "secret source text", Model: "example-model"})
-	observation.Update(lunte.ObservationAttributes{
+	_, observation := client.StartObservation(ctx, "summarize", langfuse.TypeGeneration,
+		langfuse.ObservationAttributes{Input: "secret source text", Model: "example-model"})
+	observation.Update(langfuse.ObservationAttributes{
 		Output: "summary",
-		Usage:  &lunte.Usage{InputTokens: 3, OutputTokens: 1},
+		Usage:  &langfuse.Usage{InputTokens: 3, OutputTokens: 1},
 	})
 	observation.End()
 

@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve Lunte.
+Thanks for helping improve go-langfuse.
 
 ## Development
 
