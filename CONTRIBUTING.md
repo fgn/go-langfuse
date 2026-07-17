@@ -16,7 +16,7 @@ go vet ./...
 Changes to the public root-package API, Langfuse attribute names, endpoint,
 authentication headers, ingestion version, usage normalization, filtering, or
 provider lifecycle require focused tests. Wire changes must be verified by
-decoding OTLP protobuf—not by inspecting implementation state.
+decoding OTLP protobuf, not by inspecting implementation state.
 
 Keep pull requests narrow and explain any compatibility or privacy impact.
 Never include Langfuse credentials, production telemetry, or end-user

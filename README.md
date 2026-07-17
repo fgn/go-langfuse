@@ -110,17 +110,14 @@ Additional compiled examples cover [streaming](examples/streaming/main.go) and
 
 Three rules prevent most tracing mistakes:
 
-1. Pass the context returned by `StartObservation` to child work. Go context is
-   the parent-child relationship; there is no package-global current
-   observation.
+1. Pass the context returned by `StartObservation` to child work, and keep
+   parent contexts in distinct variables as the example does with `rootCtx`
+   and `generationCtx`. Go context is the parent-child relationship; there is
+   no package-global current observation.
 2. End an observation only after its work is complete. For streaming model
    calls, consume the stream before ending the generation.
 3. End observations before flushing or shutting down, and use a fresh timeout
    context rather than a canceled request context for lifecycle calls.
-
-Keep parent contexts in distinct variables, as the example does with `rootCtx`
-and `generationCtx`. Reusing the generation context for later work would make
-that work a child of the generation.
 
 ## Observations
 
@@ -143,12 +140,10 @@ if err != nil {
 observation.Update(langfuse.ObservationAttributes{Output: documents})
 ```
 
-When the work fits one function, prefer `Observe`. It removes the two
-mistakes the rules above guard against: the callback receives the child
-context, and the observation always ends — even when the callback panics,
-which is marked as a payload-free failure before the panic propagates. An
-error returned by the callback is recorded on the observation and returned
-unchanged:
+When the work fits one function, prefer `Observe`: the callback receives the
+child context, the observation always ends (a panic is marked as a
+payload-free failure before it propagates), and a returned error is recorded
+on the observation and passed through unchanged:
 
 ```go
 err := lf.Observe(parentCtx, "retrieve-documents", langfuse.TypeRetriever,
@@ -209,12 +204,12 @@ by Langfuse when omitted. The serialized score is limited to 128 KiB, and
 
 ## Trace attributes and context
 
-Call `WithTraceAttributes` near the start of request handling. It immediately
-updates a Langfuse observation started through this client, when that
-observation's returned context is active, and stores the fields in the returned
-process-local context. Spans subsequently started on the client or its borrowed
-provider receive the same trace name, user ID, session ID, tags, metadata, and
-version. It does not retroactively rewrite an already-started third-party span.
+Call `WithTraceAttributes` near the start of request handling. It stores the
+fields in the returned context, applies them to the client's active
+observation if its context is current, and stamps them on spans subsequently
+started from that context: trace name, user ID, session ID, tags, metadata,
+and version. It does not retroactively rewrite an already-started third-party
+span.
 
 The client preserves a valid parent `SpanContext`, including a parent created
 by another provider, so ordinary W3C trace IDs continue across services and
@@ -224,36 +219,27 @@ internal application-root claim propagate only through the local Go context.
 Consequently, a downstream service can correctly continue the trace ID while
 still being shown as a separate Langfuse application root.
 
-Scalar trace values and tags are limited to 200 characters. Environment names
-must be at most 40 characters, use lowercase letters, numbers, `_` or `-`, and
-must not start with `langfuse`. Trace metadata and observation metadata each
-retain at most 32 distinct top-level keys. That budget leaves room for routing,
-trace, model, usage, and cost fields under the owned provider's fixed
-128-attribute span limit.
-Metadata keys are limited to 200 bytes; `Usage.Details` retains at most 64
-provider-specific buckets with the same key limit. Tags retain caller order
-and are capped at 64 unique values and 16 KiB of UTF-8 data per trace context.
+Limits, applied to SDK-authored observations (not third-party spans from a
+borrowed provider):
 
-Each JSON-serialized input, output, metadata value, model-parameter map, or
-cost map is limited to 1 MiB. Direct observation text such as names, model
-names, versions, prompts, and status messages is limited to 16 KiB, while
-`RecordError` replaces invalid UTF-8 or messages over 64 KiB with `"error"`.
-Observation-level payload attributes are additionally capped at 2 MiB in
-aggregate; separately bounded trace/client propagation and exception events
-sit outside that budget. Lower-priority fields that would cross it are omitted
-with a payload-free diagnostic. One OTLP request is capped at 4 MiB; larger
-batches are split automatically and only a span that alone exceeds the cap is
-dropped with a diagnostic. Queue sizing and drop/block behavior are described
-under [Buffering and backpressure](#buffering-and-backpressure). These bounds
-cover SDK-authored observations, not arbitrary third-party spans accepted
-from a borrowed provider.
-
-For ordinary maps, slices, arrays, structs, and scalar values, the SDK performs
-a bounded structural preflight before `encoding/json` creates an encoded copy;
-nesting beyond 100 levels is rejected. Caller-provided `Mask`, `MarshalJSON`,
-`MarshalText`, and related serialization methods are trusted application
-callbacks: their returned output is still rejected above 1 MiB, but the SDK
-cannot bound work or allocations performed inside callback code.
+- Scalar trace values and tags: 200 characters. Environment names: at most 40
+  characters of lowercase letters, numbers, `_`, or `-`, not starting with
+  `langfuse`.
+- Trace and observation metadata: 32 top-level keys each, keys up to 200
+  bytes. `Usage.Details`: 64 buckets with the same key limit. Tags: caller
+  order, at most 64 unique values and 16 KiB per trace context.
+- Each JSON-serialized input, output, metadata value, model-parameter map, or
+  cost map: 1 MiB. Direct text (names, model names, versions, prompts, status
+  messages): 16 KiB. `RecordError` replaces invalid UTF-8 or text over 64 KiB
+  with `"error"`.
+- Observation payload attributes: 2 MiB in aggregate; lower-priority fields
+  over the budget are omitted with a payload-free diagnostic. One OTLP request
+  is capped at 4 MiB, with automatic splitting described under
+  [Buffering and backpressure](#buffering-and-backpressure).
+- Serialization rejects nesting beyond 100 levels using a bounded structural
+  preflight. Caller-provided `Mask`, `MarshalJSON`, and `MarshalText` are
+  trusted callbacks: their output is still rejected above 1 MiB, but work
+  inside the callback cannot be bounded by the SDK.
 
 ## Provider ownership
 
@@ -288,39 +274,24 @@ lifecycle.
 | `Client.Shutdown` | Stops owned provider resources | Stops and unregisters only the SDK's processor |
 | Global OTel provider | Never replaced | Never replaced |
 
-Borrowed mode deliberately annotates shared spans at start with environment,
-release, and propagated trace attributes. Span processors share those spans,
-so these Langfuse annotations are also visible to the application's other
-exporters. The SDK's processor does not remove or suppress spans seen by
-those exporters.
+Notes for borrowed mode:
 
-SDK observation scopes include the Langfuse project public key so each
-processor can reject another project's SDK spans. On a borrowed
-provider, unrelated exporters will therefore also see that public-key project
-identifier in the instrumentation scope. The secret key is never attached to
-telemetry.
-
-The caller also owns borrowed-provider span limits. If they are unusually low,
-OpenTelemetry may drop SDK fields; the client reports a payload-free diagnostic
-when it detects dropped attributes on an SDK observation. Isolated mode's
-metadata budget is tested to preserve required generation and trace fields
-under the standard limits.
-
-Borrowed mode batches accepted spans exactly like the isolated mode. The
-transport's 4 MiB request cap isolates otherwise-valid telemetry from a
-single oversized third-party span: oversized batches are split across
-requests, and only a span that alone exceeds the cap is dropped. The SDK does
-not copy or sanitize arbitrary third-party attributes/events, so their
-in-memory size and the cost of marshaling one span remain the caller's trust
-boundary; configure instrumentor and provider limits accordingly.
-
-Only one active client is supported per borrowed tracer provider. If
-`New` detects an existing client attachment, it reports a warning through
-the standard OpenTelemetry error handler and succeeds with a true no-op client.
-That second client registers no processor, starts no exporter or background
-worker, exports nothing, and does not release the first client's attachment
-when shut down. This behavior prevents spans from being copied into two
-Langfuse projects. Use isolated providers for multiple projects.
+- Langfuse annotations (environment, release, propagated trace attributes) are
+  written onto shared spans at start, so the application's other exporters see
+  them too. The SDK never removes or suppresses spans for those exporters.
+- SDK observation scopes carry the project public key so each processor can
+  reject another project's SDK spans; other exporters see that identifier as
+  well. The secret key is never attached to telemetry.
+- The caller owns span limits. If they are unusually low, OpenTelemetry may
+  drop SDK fields; the client emits a payload-free diagnostic when it detects
+  that on an SDK observation.
+- Batching matches isolated mode, including the 4 MiB request splitting. The
+  SDK does not copy or sanitize third-party attributes and events; their size
+  and marshaling cost remain the caller's trust boundary.
+- Only one active client per borrowed provider: a duplicate `New` reports a
+  warning through the OTel error handler and returns a true no-op client that
+  exports nothing and does not release the first attachment. Use isolated
+  providers for multiple projects.
 
 ## Content and sensitive data
 
@@ -388,24 +359,18 @@ func redactSDKValue(value any) any {
 }
 ```
 
-This example assumes nested values use the JSON-like `map[string]any` and
-`[]any` shapes shown. A production masker must cover every concrete value type
-the application supplies and must have tests proving its redaction policy.
+The example assumes JSON-like `map[string]any` and `[]any` shapes. A
+production masker must cover every concrete value type the application
+supplies, must be concurrency-safe, and should have tests proving its
+redaction policy.
 
-These controls apply **only to data supplied through this Langfuse client**.
-They do not rewrite or remove attributes or events emitted by third-party OTel
-instrumentation. In borrowed-provider mode, configure those instrumentors not
-to capture sensitive content or sanitize them independently. The client emits
-a warning when content capture is disabled on a borrowed provider so this
-boundary is not mistaken for a provider-wide privacy control. `Mask` may run
-concurrently and therefore must be concurrency-safe. It is a field
-transformer, not an exporter-wide scrubber or an error sanitizer.
-
-Resource attributes are another independent OpenTelemetry input. Isolated
-mode intentionally preserves `resource.Default`, including
-`OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`; borrowed mode preserves the
-caller's complete resource. Audit those values before export because neither
-content capture nor `Mask` removes them.
+These controls apply **only to data supplied through this client**; they never
+rewrite third-party OTel instrumentation, so configure or sanitize those
+instrumentors independently in borrowed mode (the client warns when content
+capture is disabled there). Resource attributes are also untouched: isolated
+mode preserves `resource.Default` (including `OTEL_SERVICE_NAME` and
+`OTEL_RESOURCE_ATTRIBUTES`) and borrowed mode preserves the caller's resource,
+so audit them before export.
 
 ## Flush and shutdown
 
@@ -422,14 +387,12 @@ if err := lf.Shutdown(shutdownCtx); err != nil {
 }
 ```
 
-In borrowed mode, shut down the Langfuse client first and then let the application shut
-down its tracer provider. The client never shuts down unrelated processors or
-exporters. Create a new timeout context immediately before each `Flush` or
-`Shutdown` call. Do not reuse a context across lifecycle calls: its deadline
-keeps running and an earlier call may consume all of it. Repeated and
-concurrent `Flush` and `Shutdown` calls are safe. The first `Shutdown` call to
-begin teardown owns and waits for it; concurrent or re-entrant calls return
-without starting a second teardown.
+In borrowed mode, shut down the Langfuse client before the application's
+tracer provider; the client never shuts down unrelated processors or
+exporters. Create a fresh timeout context for each `Flush` or `Shutdown` call,
+since a reused deadline keeps running. Repeated and concurrent lifecycle calls
+are safe: the first `Shutdown` owns teardown and later calls return without
+starting another.
 
 ## Configuration
 
@@ -458,37 +421,32 @@ OpenTelemetry resource (including `OTEL_SERVICE_NAME`). Set `ServiceName` only
 when an explicit SDK-local override is desired. A borrowed provider always
 keeps the application's resource.
 
-`New` validates configuration without making a network request. A deliberately
-disabled client does not require credentials and all its operations are safe
-no-ops. Runtime exporter failures are sent to the standard OTel error handler;
-observation calls do not turn telemetry failures into application failures.
-`Flush` and `Shutdown` return lifecycle/export errors to the caller.
+`New` validates configuration without a network request; a disabled client
+needs no credentials and every operation is a safe no-op. Runtime exporter
+failures go to the standard OTel error handler, so observation calls never
+turn telemetry failures into application failures; `Flush` and `Shutdown`
+return lifecycle errors to the caller.
 
 Generic `OTEL_EXPORTER_OTLP_*`, `OTEL_BSP_*`, and `OTEL_SPAN_*` variables are
-intentionally ignored by the SDK's isolated transport/provider; they often
-configure an application's separate telemetry backend. Langfuse HTTPS uses
-Go's system trust configuration, and the HTTP client still follows standard
-`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` behavior. Borrowed mode continues to use
-the caller provider's sampler and span limits, while its Langfuse exporter and
-queue remain SDK-owned and isolated.
-
-Use HTTPS whenever credentials leave a trusted host. Plain HTTP remains
-available for local development and explicitly secured self-hosted networks,
-but Basic authentication does not encrypt credentials by itself.
+intentionally ignored by the isolated transport and provider; they often
+configure an application's separate telemetry backend. HTTPS uses Go's system
+trust configuration and the client follows standard
+`HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY` behavior. Use HTTPS whenever credentials
+leave a trusted host; plain HTTP remains available for local development, but
+Basic authentication does not encrypt credentials by itself.
 
 ### Buffering and backpressure
 
 Ended observations wait in a bounded in-memory queue (2048 spans by default)
-and are exported in batches of up to 512 spans, at the latest every 5
-seconds. When the queue is full — for example during a sustained Langfuse
-outage — newly ended observations are dropped rather than blocking
-application work, matching OpenTelemetry defaults. Set `Config.MaxQueueSize`
-to resize the queue and `Config.BlockOnQueueFull` to opt into backpressure:
-ending an exported observation then waits for buffer space instead of
-dropping. Choose blocking only when delivery matters more than latency,
-because an export outage can stall goroutines that end observations. One
-OTLP/HTTP request is capped at 4 MiB before compression; larger batches are
-split across requests automatically.
+and are exported in batches of up to 512 spans, at the latest every 5 seconds.
+When the queue is full, for example during a sustained Langfuse outage, newly
+ended observations are dropped rather than blocking application work, matching
+OpenTelemetry defaults. `Config.MaxQueueSize` resizes the queue and
+`Config.BlockOnQueueFull` opts into backpressure; choose blocking only when
+delivery matters more than latency, because an export outage can then stall
+goroutines that end observations. One OTLP/HTTP request is capped at 4 MiB
+before compression; larger batches are split across requests, and only a span
+that alone exceeds the cap is dropped with a diagnostic.
 
 ## Sampling and current limitations
 

@@ -20,7 +20,7 @@ The intended content of the first release, v0.1.0:
   instrumentation scopes, and application-root marking.
 - Privacy controls: a content-capture switch, the `Mask` hook, payload-free
   diagnostics, and bounded payload and metadata budgets.
-- Deterministic transport and batching — a 2048-span queue, 512-span batches,
-  and 4 MiB request splitting — isolated from ambient `OTEL_*` environment
+- Deterministic transport and batching (a 2048-span queue, 512-span batches,
+  and 4 MiB request splitting) isolated from ambient `OTEL_*` environment
   variables, with optional blocking backpressure through `Config.MaxQueueSize`
   and `Config.BlockOnQueueFull`.
