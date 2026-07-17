@@ -1,0 +1,12 @@
+/.foo/
+/ref/
+/PLAN.md
+/.env
+/.env.*
+!/.env.example
+.DS_Store
+/coverage.out
+/coverage.html
+/langfuse-go
+/langfuse-go.test
+/*.test

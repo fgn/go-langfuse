@@ -1,0 +1,173 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Exact stable tag to create (for example v0.1.0)"
+        required: true
+        type: string
+      live_gate_passed:
+        description: "I attest that the credentialed synthetic-project live gate passed"
+        required: true
+        default: false
+        type: boolean
+      live_gate_evidence:
+        description: "Non-secret URL or run/checklist ID for the live-gate evidence"
+        required: true
+        type: string
+      dogfood_passed:
+        description: "I attest that staged production dogfood passed with no disclosure/duplication findings"
+        required: true
+        default: false
+        type: boolean
+      dogfood_evidence:
+        description: "Non-secret URL or issue/checklist ID for the dogfood evidence"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: release
+    env:
+      RELEASE_TAG: ${{ inputs.version }}
+      LIVE_GATE_PASSED: ${{ inputs.live_gate_passed }}
+      LIVE_GATE_EVIDENCE: ${{ inputs.live_gate_evidence }}
+      DOGFOOD_PASSED: ${{ inputs.dogfood_passed }}
+      DOGFOOD_EVIDENCE: ${{ inputs.dogfood_evidence }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 0
+
+      - name: Validate dispatch and attestations
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF_TYPE" = "branch"
+          test "$GITHUB_REF_NAME" = "main"
+          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          test "$LIVE_GATE_PASSED" = "true"
+          test "$DOGFOOD_PASSED" = "true"
+          live_evidence="${LIVE_GATE_EVIDENCE//[[:space:]]/}"
+          dogfood_evidence="${DOGFOOD_EVIDENCE//[[:space:]]/}"
+          test -n "$live_evidence"
+          test -n "$dogfood_evidence"
+          test "${live_evidence,,}" != "n/a"
+          test "${dogfood_evidence,,}" != "n/a"
+          git fetch origin main --tags
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+          {
+            echo "### Human release attestations"
+            echo "- Live compatibility gate: $LIVE_GATE_EVIDENCE"
+            echo "- production staged dogfood: $DOGFOOD_EVIDENCE"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.25.12"
+          cache: true
+
+      - run: go mod download
+
+      - name: Check module files are tidy
+        run: go mod tidy -diff
+
+      - name: Check formatting
+        run: |
+          git ls-files -z '*.go' | xargs -0 gofmt -l | tee /tmp/gofmt.out
+          test ! -s /tmp/gofmt.out
+
+      - name: Compile standalone README quickstart
+        run: |
+          readme_go="$(mktemp "$RUNNER_TEMP/readme-quickstart.XXXXXX.go")"
+          readme_bin="$(mktemp "$RUNNER_TEMP/readme-quickstart.XXXXXX")"
+          trap 'rm -f "$readme_go" "$readme_bin"' EXIT
+          awk '
+            /<!-- README_QUICKSTART_BEGIN -->/ { in_block=1; next }
+            in_block && /^```go[[:space:]]*$/ { in_code=1; next }
+            in_block && in_code && /^```[[:space:]]*$/ { exit }
+            in_code { print }
+          ' README.md > "$readme_go"
+          test -s "$readme_go"
+          test "$(grep -c '^package main$' "$readme_go")" = 1
+          go build -mod=readonly -o "$readme_bin" "$readme_go"
+
+      - name: Build examples
+        run: go build -mod=readonly ./examples/...
+
+      - name: Compile opt-in live suite without running it
+        run: go test -tags=live -run='^$' -mod=readonly ./...
+
+      - name: Run normal tests
+        run: go test -mod=readonly ./...
+
+      - name: Run race tests
+        run: go test -race -mod=readonly ./...
+
+      - name: Run vet
+        run: go vet -mod=readonly ./...
+
+      - name: Fuzz smoke tests
+        run: |
+          go test -mod=readonly ./internal/attributes -run='^$' -fuzz=FuzzEncode -fuzztime=2s
+          go test -mod=readonly ./internal/attributes -run='^$' -fuzz=FuzzNormalizeUsage -fuzztime=2s
+          go test -mod=readonly ./internal/transport -run='^$' -fuzz=FuzzNormalizeEndpoint -fuzztime=2s
+
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+
+      - name: Verify repository and release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f LICENSE
+          grep -q "Apache License" LICENSE
+          test "$(go mod edit -json | jq -r .Go)" = "1.25.0"
+          test "$(go mod edit -json | jq -r .Toolchain)" = "go1.25.12"
+          version="${RELEASE_TAG#v}"
+          test "$RELEASE_TAG" = "v$(awk -F'\"' '/sdkVersion/{print $2}' version.go)"
+          grep -Eq "^## \\[${version}\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md
+          ! grep -Fq '<!-- PRE_RELEASE_WARNING:' README.md
+          ! grep -Fq 'do not use it in production until a tagged release is available' README.md
+          git diff --exit-code
+
+      # Tag inspection and creation deliberately happen only after every gate
+      # above. An existing same-commit tag is accepted solely to recover from a
+      # prior run that pushed the tag but failed while creating release notes.
+      - name: Create or verify annotated tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
+            git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+            test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = "tag"
+            test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$RELEASE_TAG" "$GITHUB_SHA" -m "Release $RELEASE_TAG"
+            git push origin "refs/tags/$RELEASE_TAG"
+          fi
+          git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
+          test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = "tag"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+
+      - name: Create or verify GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            test "$(gh release view "$RELEASE_TAG" --json tagName --jq .tagName)" = "$RELEASE_TAG"
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes
+          fi
