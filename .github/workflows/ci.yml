@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.25.12"
+          cache: true
+      - run: go mod download
+      - name: Check module files are tidy
+        run: go mod tidy -diff
+      - name: Check formatting
+        run: |
+          git ls-files -z '*.go' | xargs -0 gofmt -l | tee /tmp/gofmt.out
+          test ! -s /tmp/gofmt.out
+      - name: Compile standalone README quickstart
+        run: |
+          readme_go="$(mktemp "$RUNNER_TEMP/readme-quickstart.XXXXXX.go")"
+          readme_bin="$(mktemp "$RUNNER_TEMP/readme-quickstart.XXXXXX")"
+          trap 'rm -f "$readme_go" "$readme_bin"' EXIT
+          awk '
+            /<!-- README_QUICKSTART_BEGIN -->/ { in_block=1; next }
+            in_block && /^```go[[:space:]]*$/ { in_code=1; next }
+            in_block && in_code && /^```[[:space:]]*$/ { exit }
+            in_code { print }
+          ' README.md > "$readme_go"
+          test -s "$readme_go"
+          test "$(grep -c '^package main$' "$readme_go")" = 1
+          go build -mod=readonly -o "$readme_bin" "$readme_go"
+      - run: go build -mod=readonly ./examples/...
+      - name: Compile opt-in live suite without running it
+        run: go test -tags=live -run='^$' -mod=readonly ./...
+      - run: go test -race -mod=readonly ./...
+      - run: go vet -mod=readonly ./...
+      - name: Fuzz smoke tests
+        run: |
+          go test -mod=readonly ./internal/attributes -run='^$' -fuzz=FuzzEncode -fuzztime=2s
+          go test -mod=readonly ./internal/attributes -run='^$' -fuzz=FuzzNormalizeUsage -fuzztime=2s
+          go test -mod=readonly ./internal/transport -run='^$' -fuzz=FuzzNormalizeEndpoint -fuzztime=2s
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - name: License and module policy
+        run: |
+          test -f LICENSE
+          grep -q "Apache License" LICENSE
+          test "$(go mod edit -json | jq -r .Go)" = "1.25.0"
+          test "$(go mod edit -json | jq -r .Toolchain)" = "go1.25.12"
+
+  minimum-go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # Pin the minimum supported toolchain instead of auto-upgrading to the
+      # go.mod toolchain line, so this job proves Go 1.25.0 really works.
+      GOTOOLCHAIN: local
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.25.0"
+          cache: true
+      - run: go mod download
+      - run: go build -mod=readonly ./...
+      - run: go build -mod=readonly ./examples/...
+      - run: go test -count=1 -mod=readonly ./...
