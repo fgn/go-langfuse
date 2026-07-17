@@ -222,10 +222,12 @@ sit outside both controls; the exact boundary and a masker example are in the
 ## Development
 
 ```sh
-go test ./...
-go test -race ./...
-go vet ./...
+task ci
 ```
+
+This checks formatting and module tidiness, runs static analysis, compiles the
+examples and README quickstart, and runs the test, fuzz-smoke, and vulnerability
+suites. Run `task format` to apply source and module formatting.
 
 The module language version is Go 1.25; `go.mod` records the suggested
 patched toolchain. Tests never require Langfuse credentials. Release steps

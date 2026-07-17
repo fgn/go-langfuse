@@ -3,6 +3,12 @@
 All notable changes will be documented here. This project follows Semantic
 Versioning once the first release is tagged.
 
+## [0.1.1] - 2026-07-17
+
+- Add a unified `task ci` development and continuous-integration gate covering
+  formatting, static analysis, builds, tests, fuzz smoke tests, vulnerability
+  scanning, and repository policy checks.
+
 ## [0.1.0] - 2026-07-17
 
 The first release:

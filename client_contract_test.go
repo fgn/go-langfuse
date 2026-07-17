@@ -113,10 +113,8 @@ func TestConfigFromEnvStrictBooleanValues(t *testing.T) {
 	}
 
 	for _, variable := range []string{"LANGFUSE_TRACING_ENABLED", "LANGFUSE_CONTENT_CAPTURE_ENABLED"} {
-		variable := variable
 		t.Run(variable, func(t *testing.T) {
 			for _, test := range tests {
-				test := test
 				t.Run(test.name, func(t *testing.T) {
 					clearLangfuseEnvironment(t)
 					t.Setenv(variable, test.raw)
@@ -140,10 +138,8 @@ func TestConfigFromEnvStrictBooleanValues(t *testing.T) {
 func TestConfigFromEnvRejectsInvalidBooleanValues(t *testing.T) {
 	invalid := []string{"", "0", "1", "yes", "no", "enabled", "disabled", "truthy"}
 	for _, variable := range []string{"LANGFUSE_TRACING_ENABLED", "LANGFUSE_CONTENT_CAPTURE_ENABLED"} {
-		variable := variable
 		t.Run(variable, func(t *testing.T) {
 			for _, raw := range invalid {
-				raw := raw
 				t.Run(raw, func(t *testing.T) {
 					clearLangfuseEnvironment(t)
 					t.Setenv("LANGFUSE_PUBLIC_KEY", testClientPublicKey)
@@ -388,11 +384,9 @@ func TestDisabledAndZeroValuesAreConcurrencySafe(t *testing.T) {
 	ctx := context.Background()
 
 	var workers sync.WaitGroup
-	for i := 0; i < 32; i++ {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
-			for j := 0; j < 100; j++ {
+	for range 32 {
+		workers.Go(func() {
+			for j := range 100 {
 				for _, client := range []*Client{disabled, zeroClient, nil} {
 					childCtx, observation := client.StartObservation(ctx, "ignored", TypeSpan, ObservationAttributes{})
 					if childCtx != ctx {
@@ -407,7 +401,7 @@ func TestDisabledAndZeroValuesAreConcurrencySafe(t *testing.T) {
 				zeroObservation.RecordError(errors.New("printable concurrent error"))
 				zeroObservation.End()
 			}
-		}()
+		})
 	}
 	workers.Wait()
 
@@ -510,16 +504,13 @@ func TestConcurrentNewOnBorrowedProviderCreatesExactlyOneOwner(t *testing.T) {
 	start := make(chan struct{})
 	var workers sync.WaitGroup
 	for i := range clients {
-		i := i
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			<-start
 			clients[i], errorsByIndex[i] = New(
 				context.Background(),
 				borrowedTestConfig(provider, receiver.server.URL, "concurrent"),
 			)
-		}()
+		})
 	}
 	close(start)
 	workers.Wait()
@@ -790,7 +781,6 @@ func clearLangfuseEnvironment(t *testing.T) {
 		if err := os.Unsetenv(name); err != nil {
 			t.Fatalf("unset %s: %v", name, err)
 		}
-		name, value, present := name, value, present
 		t.Cleanup(func() {
 			if present {
 				_ = os.Setenv(name, value)

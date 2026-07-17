@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -530,7 +531,7 @@ func TestObservationWireRecordError(t *testing.T) {
 	}
 	assertObservationWireAttributes(t, event.Attributes, map[string]any{
 		"exception.message": "provider exploded",
-		"exception.type":    reflect.TypeOf(wantError).PkgPath() + "." + reflect.TypeOf(wantError).Name(),
+		"exception.type":    reflect.TypeFor[wireProviderError]().PkgPath() + "." + reflect.TypeFor[wireProviderError]().Name(),
 	})
 }
 
@@ -732,7 +733,7 @@ func exportObservationWireSpans(t *testing.T, client *langfuse.Client, receiver 
 
 	var result []wireSpan
 	for _, request := range requests {
-		if request.Method != "POST" || request.Path != "/api/public/otel/v1/traces" {
+		if request.Method != http.MethodPost || request.Path != "/api/public/otel/v1/traces" {
 			t.Fatalf("OTLP request = %s %s, want POST /api/public/otel/v1/traces", request.Method, request.Path)
 		}
 		if got := request.Header.Get("Content-Type"); got != "application/x-protobuf" {
@@ -789,8 +790,9 @@ func assertObservationWireEnvelope(t *testing.T, span wireSpan) {
 	if span.scope == nil {
 		t.Fatal("OTLP ScopeSpans.scope is nil")
 	}
-	if span.scope.Name != "langfuse-sdk.go" || span.scope.Version != "0.1.0" {
-		t.Fatalf("instrumentation scope = (%q, %q), want (langfuse-sdk.go, 0.1.0)", span.scope.Name, span.scope.Version)
+	if span.scope.Name != "langfuse-sdk.go" || span.scope.Version != langfuse.SDKVersion {
+		t.Fatalf("instrumentation scope = (%q, %q), want (langfuse-sdk.go, %s)",
+			span.scope.Name, span.scope.Version, langfuse.SDKVersion)
 	}
 	if span.scope.DroppedAttributesCount != 0 {
 		t.Fatalf("scope dropped attributes = %d, want 0", span.scope.DroppedAttributesCount)
@@ -875,8 +877,14 @@ func assertObservationWireAttributes(t *testing.T, attributes []*commonpb.KeyVal
 	if reflect.DeepEqual(got, want) {
 		return
 	}
-	gotJSON, _ := json.MarshalIndent(got, "", "  ")
-	wantJSON, _ := json.MarshalIndent(want, "", "  ")
+	gotJSON, err := json.MarshalIndent(got, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal actual attributes: %v", err)
+	}
+	wantJSON, err := json.MarshalIndent(want, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal expected attributes: %v", err)
+	}
 	t.Fatalf("attributes differ\ngot:  %s\nwant: %s", gotJSON, wantJSON)
 }
 

@@ -169,7 +169,7 @@ func assertMethodNames(t *testing.T, value any, want []string) {
 
 	typeOf := reflect.TypeOf(value)
 	got := make([]string, 0, typeOf.NumMethod())
-	for i := 0; i < typeOf.NumMethod(); i++ {
+	for i := range typeOf.NumMethod() {
 		got = append(got, typeOf.Method(i).Name)
 	}
 	slices.Sort(got)
@@ -184,7 +184,7 @@ func assertFieldNames(t *testing.T, value any, want []string) {
 
 	typeOf := reflect.TypeOf(value)
 	got := make([]string, 0, typeOf.NumField())
-	for i := 0; i < typeOf.NumField(); i++ {
+	for i := range typeOf.NumField() {
 		field := typeOf.Field(i)
 		if field.IsExported() {
 			got = append(got, field.Name)
@@ -199,7 +199,7 @@ func assertNoExportedFields(t *testing.T, value any) {
 	t.Helper()
 
 	typeOf := reflect.TypeOf(value)
-	for i := 0; i < typeOf.NumField(); i++ {
+	for i := range typeOf.NumField() {
 		field := typeOf.Field(i)
 		if field.IsExported() {
 			t.Errorf("%v unexpectedly exports field %s", typeOf, field.Name)
