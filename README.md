@@ -2,11 +2,18 @@
 
 go-langfuse is an independent, observation-first community Langfuse client for
 Go, built on the official OpenTelemetry Go SDK: tracing over OTLP/HTTP
-protobuf (Langfuse ingestion version 4), request-scoped trace identity,
-scores for evaluations and user feedback, and strict content-privacy
-controls. Prompt management, datasets, and administrative APIs are out of
-scope; use the Langfuse REST API for those. go-langfuse is not affiliated
-with or endorsed by Langfuse.
+protobuf (Langfuse ingestion version 4), all ten observation types,
+request-scoped trace identity, scores for evaluations and user feedback, and
+strict content-privacy controls. Prompt management, datasets, and
+administrative APIs are out of scope; use the Langfuse REST API for those.
+go-langfuse is not affiliated with or endorsed by Langfuse.
+
+Observation types are first-class: alongside `span`, `generation`, and
+`event`, go-langfuse supports the typed observations Langfuse introduced in
+2025 — `agent`, `tool`, `chain`, `retriever`, `evaluator`, `embedding`, and
+`guardrail` — with the same semantics as `as_type` in the Python SDK (v3.3+)
+and `asType` in the JS/TS SDK (v4+). These types give traces clearer,
+filterable structure in the Langfuse UI.
 
 go-langfuse follows semantic versioning. Until v1.0, minor releases may
 contain documented breaking changes; patch releases are always backward
@@ -123,7 +130,10 @@ Three rules prevent most tracing mistakes:
 
 Every operation uses the same API and differs only by its observation type:
 `span`, `generation`, `event`, `embedding`, `agent`, `tool`, `chain`,
-`retriever`, `evaluator`, or `guardrail`. When the work fits one function,
+`retriever`, `evaluator`, or `guardrail` — the full set defined by the
+current Langfuse platform ([observation
+types](https://langfuse.com/docs/observability/features/observation-types)).
+When the work fits one function,
 prefer `Observe`: the callback receives the child context, the observation
 always ends (a panic is marked as a payload-free failure before it
 propagates), and a returned error is recorded and passed through unchanged:
