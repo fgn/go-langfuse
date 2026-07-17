@@ -8,9 +8,9 @@ controls. Prompt management, datasets, and administrative APIs are out of
 scope; use the Langfuse REST API for those. go-langfuse is not affiliated
 with or endorsed by Langfuse.
 
-<!-- PRE_RELEASE_WARNING: remove in the release-preparation PR before v0.1.0. -->
-This module is under active development. The public API is the intended v0.1
-contract; do not use it in production until a tagged release is available.
+The v0.x series follows the gated release process in
+[RELEASING.md](RELEASING.md): patch releases stay backward compatible, and
+minor releases may contain explicitly documented API changes until v1.0.
 
 ## Install
 

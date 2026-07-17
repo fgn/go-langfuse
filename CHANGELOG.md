@@ -3,9 +3,9 @@
 All notable changes will be documented here. This project follows Semantic
 Versioning once the first release is tagged.
 
-## Unreleased
+## [0.1.0] - 2026-07-17
 
-The intended content of the first release, v0.1.0:
+The first release:
 
 - Observation-first tracing over OTLP/HTTP protobuf with Langfuse ingestion
   version 4: `StartObservation`, `Observe`, `Event`, and the `Update`,
