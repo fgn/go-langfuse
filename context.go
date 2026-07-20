@@ -64,29 +64,15 @@ func (c *Client) WithTraceAttributes(ctx context.Context, values TraceAttributes
 	return result
 }
 
-// WithDetachedTrace returns a context whose next observation starts a new
-// trace root. It removes the ambient OpenTelemetry span context together with
-// this client's active-observation and application-root state, while trace
-// attributes set through [Client.WithTraceAttributes] continue to propagate.
-// Use it when work outlives the request that started it — for example a
-// goroutine handed a context.WithoutCancel context whose HTTP span ends
-// before the work completes — so observations become roots of a new trace
-// instead of children of a span that already ended. Because the span context
-// is shared OpenTelemetry state, spans started from the returned context by
-// other tracers also lose the previous parent. On a nil, disabled, or stopped
-// client, or a nil context, the context is returned unchanged.
-func (c *Client) WithDetachedTrace(ctx context.Context) context.Context {
-	if c == nil || c.isDisabled() || ctx == nil {
-		return ctx
-	}
-	if c.stopped.Load() {
-		c.reportStoppedOnce()
-		return ctx
-	}
-	ctx = oteltrace.ContextWithSpanContext(ctx, oteltrace.SpanContext{})
-	ctx = context.WithValue(ctx, observationContextKey{client: c}, (*Observation)(nil))
-	return context.WithValue(ctx, traceClaimContextKey{client: c}, oteltrace.TraceID{})
-}
+// Detaching background work into a new trace needs no SDK API: clearing the
+// ambient span context with
+// oteltrace.ContextWithSpanContext(ctx, oteltrace.SpanContext{}) makes the
+// next observation a new application root. The client-scoped state keys below
+// stay correct without cleanup — the fresh random trace ID cannot match a
+// stale application-root claim, and the active-observation pointer is only
+// consulted while the ambient span context still matches that observation.
+// This contract is locked by TestDetachedContextStartsNewApplicationRoot and
+// documented in docs/reference.md.
 
 func (s traceState) clone() traceState {
 	result := s

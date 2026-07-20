@@ -158,10 +158,12 @@ an observation failed without ending it. Instrumentation that records
 already-finished work can reproduce the observed timeline with
 `ObservationAttributes.StartTime`, `CompletionStartTime`, and `EndAt`. For
 work that outlives its request — a goroutine that keeps running after the
-handler returned — derive the context with `WithDetachedTrace` so the work
-becomes a new trace root with the propagated user and session intact, instead
-of a child of an already-ended request span. Semantics and limits are detailed
-in the [reference](docs/reference.md).
+handler returned — clear the parent span context with the standard
+OpenTelemetry helper (`oteltrace.ContextWithSpanContext(ctx,
+oteltrace.SpanContext{})`) so the work becomes a new trace root with the
+propagated user and session intact, instead of a child of an already-ended
+request span; the [reference](docs/reference.md) shows the full pattern along
+with semantics and limits.
 
 ## Scores
 

@@ -329,7 +329,12 @@ func TestContextsAndTraceClaimsAreClientScoped(t *testing.T) {
 	assertInteropBoolAttribute(t, spanB, lfattr.AppRootKey, true)
 }
 
-func TestWithDetachedTraceStartsNewApplicationRoot(t *testing.T) {
+// TestDetachedContextStartsNewApplicationRoot locks the documented pattern
+// for handing tracing to work that outlives its request: clearing the ambient
+// span context with the standard OpenTelemetry helper starts a new
+// application-root trace while propagated trace attributes survive, without
+// any SDK-specific API.
+func TestDetachedContextStartsNewApplicationRoot(t *testing.T) {
 	receiver := otlpreceiver.New()
 	t.Cleanup(receiver.Close)
 	client := newInteropClient(t, receiver, Config{})
@@ -344,7 +349,7 @@ func TestWithDetachedTraceStartsNewApplicationRoot(t *testing.T) {
 	// HTTP handler that spawns a goroutine and returns.
 	request.End()
 
-	detached := client.WithDetachedTrace(requestCtx)
+	detached := oteltrace.ContextWithSpanContext(requestCtx, oteltrace.SpanContext{})
 	jobCtx, job := client.StartObservation(detached, "background-job", TypeChain, ObservationAttributes{})
 	_, child := client.StartObservation(jobCtx, "job-child", TypeGeneration, ObservationAttributes{})
 	child.End()

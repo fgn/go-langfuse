@@ -8,10 +8,11 @@ Versioning once the first release is tagged.
 - Add `Observation.EndAt` to end an observation at an explicit time, so
   instrumentation that records already-finished work can reproduce the
   observed timeline together with `StartTime` and `CompletionStartTime`.
-- Add `Client.WithDetachedTrace` to start background work as a new trace
-  root — for example a goroutine that outlives its HTTP request — while
-  propagated trace attributes (user, session, tags, metadata, version)
-  survive the handoff.
+- Document and test-lock the detached-trace pattern for background work that
+  outlives its request: clearing the parent span context with the standard
+  OpenTelemetry helper starts a new application-root trace while propagated
+  trace attributes (user, session, tags, metadata, version) survive the
+  handoff. No new API.
 - Add `Score.Timestamp` to backdate scores and `Score.ConfigID` to bind a
   score to a Langfuse score config.
 - **Behavior**: scores are now delivered as single-event `score-create`

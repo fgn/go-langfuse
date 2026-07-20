@@ -51,16 +51,26 @@ internal application-root claim propagate only through the local Go context.
 Consequently, a downstream service can correctly continue the trace ID while
 still being shown as a separate Langfuse application root.
 
-`WithDetachedTrace` is the supported way to hand tracing to work that
-outlives its request, such as a goroutine started from an HTTP handler with
-`context.WithoutCancel`. The returned context drops the ambient parent span
-and the client's active-observation and application-root state, so the next
-observation starts a new trace marked as an application root, while trace
-attributes already set through `WithTraceAttributes` — user, session, tags,
-metadata, version — continue to propagate. Session and user grouping in
-Langfuse therefore survive the handoff even though the background work is a
-separate trace. The span-context reset is shared OpenTelemetry state: other
-tracers using the returned context also start new traces.
+Work that outlives its request — a goroutine started from an HTTP handler
+with `context.WithoutCancel`, for example — should not attach observations to
+the handler's already-ended span. Detach it with the standard OpenTelemetry
+helper; no SDK-specific API is involved:
+
+```go
+import oteltrace "go.opentelemetry.io/otel/trace"
+
+jobCtx := oteltrace.ContextWithSpanContext(ctx, oteltrace.SpanContext{})
+jobCtx, job := lf.StartObservation(jobCtx, "background-job", langfuse.TypeChain,
+	langfuse.ObservationAttributes{})
+```
+
+Clearing the span context makes the next observation the root of a new trace,
+marked as an application root, while trace attributes already set through
+`WithTraceAttributes` — user, session, tags, metadata, version — continue to
+propagate. Session and user grouping in Langfuse therefore survive the
+handoff even though the background work is a separate trace. This contract is
+locked by the SDK's tests. The span-context reset is shared OpenTelemetry
+state: other tracers using the detached context also start new traces.
 
 ## Observation semantics
 

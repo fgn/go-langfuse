@@ -238,8 +238,6 @@ func (c *Client) StartObservation(
 	values ObservationAttributes,
 ) (context.Context, *Observation)
 
-func (c *Client) WithDetachedTrace(ctx context.Context) context.Context
-
 func (c *Client) WithTraceAttributes(ctx context.Context, values TraceAttributes) context.Context
 
 func (o *Observation) End()
