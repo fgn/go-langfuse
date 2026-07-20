@@ -91,16 +91,19 @@ func (c *Client) RecordScore(ctx context.Context, score Score) error {
 	if ctx == nil {
 		return errors.New("langfuse: score context is nil")
 	}
-	payload, err := c.scorePayload(score)
+	payload, eventID, err := c.scorePayload(score)
 	if err != nil {
 		return err
 	}
-	return c.scores.Enqueue(ctx, payload)
+	return c.scores.Enqueue(ctx, payload, eventID)
 }
 
-func (c *Client) scorePayload(score Score) ([]byte, error) {
+// scorePayload validates score and serializes it as a complete single-event
+// ingestion request, returning the envelope event ID the ingestion result
+// must account for.
+func (c *Client) scorePayload(score Score) ([]byte, string, error) {
 	if err := validScoreString("score name", score.Name, false); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	for field, value := range map[string]string{
 		"score ID":             score.ID,
@@ -110,25 +113,25 @@ func (c *Client) scorePayload(score Score) ([]byte, error) {
 		"score config ID":      score.ConfigID,
 	} {
 		if err := validScoreString(field, value, true); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
 	if score.TraceID == "" && score.SessionID == "" {
-		return nil, errors.New("langfuse: score requires a trace ID or session ID target")
+		return nil, "", errors.New("langfuse: score requires a trace ID or session ID target")
 	}
 	if score.ObservationID != "" && score.TraceID == "" {
-		return nil, errors.New("langfuse: score observation ID requires a trace ID")
+		return nil, "", errors.New("langfuse: score observation ID requires a trace ID")
 	}
 	if (score.NumericValue == nil) == (score.StringValue == nil) {
-		return nil, errors.New("langfuse: score requires exactly one of numeric value or string value")
+		return nil, "", errors.New("langfuse: score requires exactly one of numeric value or string value")
 	}
 	switch score.DataType {
 	case "", ScoreTypeBoolean, ScoreTypeCategorical, ScoreTypeCorrection, ScoreTypeNumeric, ScoreTypeText:
 	default:
-		return nil, errors.New("langfuse: unsupported score data type")
+		return nil, "", errors.New("langfuse: unsupported score data type")
 	}
 	if score.Comment != "" && !utf8.ValidString(score.Comment) {
-		return nil, errors.New("langfuse: score comment is not valid UTF-8")
+		return nil, "", errors.New("langfuse: score comment is not valid UTF-8")
 	}
 
 	payload := map[string]any{
@@ -139,7 +142,7 @@ func (c *Client) scorePayload(score Score) ([]byte, error) {
 		payload["value"] = *score.NumericValue
 	} else {
 		if !utf8.ValidString(*score.StringValue) {
-			return nil, errors.New("langfuse: score string value is not valid UTF-8")
+			return nil, "", errors.New("langfuse: score string value is not valid UTF-8")
 		}
 		payload["value"] = *score.StringValue
 	}
@@ -148,7 +151,7 @@ func (c *Client) scorePayload(score Score) ([]byte, error) {
 	if scoreID == "" {
 		generated, err := newScoreID()
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		scoreID = generated
 	}
@@ -186,11 +189,11 @@ func (c *Client) scorePayload(score Score) ([]byte, error) {
 	} else if year := timestamp.Year(); year < 0 || year > 9999 {
 		// RFC 3339 timestamps carry a four-digit year; anything else would
 		// serialize to an invalid wire value.
-		return nil, errors.New("langfuse: score timestamp year is outside the RFC 3339 range")
+		return nil, "", errors.New("langfuse: score timestamp year is outside the RFC 3339 range")
 	}
 	eventID, err := newScoreID()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	event := map[string]any{
 		"batch": []any{map[string]any{
@@ -203,12 +206,12 @@ func (c *Client) scorePayload(score Score) ([]byte, error) {
 
 	encoded, err := json.Marshal(event)
 	if err != nil {
-		return nil, errors.New("langfuse: score could not be serialized")
+		return nil, "", errors.New("langfuse: score could not be serialized")
 	}
 	if len(encoded) > maxScorePayloadBytes {
-		return nil, errors.New("langfuse: score exceeds the 128 KiB payload limit")
+		return nil, "", errors.New("langfuse: score exceeds the 128 KiB payload limit")
 	}
-	return encoded, nil
+	return encoded, eventID, nil
 }
 
 // newScoreID returns a random UUID version 4 string, used both as the score

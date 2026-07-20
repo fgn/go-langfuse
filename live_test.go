@@ -261,11 +261,11 @@ func (api *liveAPI) awaitGeneration(t *testing.T, deadline time.Time, traceID, n
 	}
 }
 
-// awaitScore polls GET /api/public/v2/scores?traceId=... until the named
+// awaitScore polls GET /api/public/v3/scores?traceId=... until the named
 // score is ingested or the deadline passes.
 func (api *liveAPI) awaitScore(t *testing.T, deadline time.Time, traceID, name string) liveScore {
 	t.Helper()
-	route := api.baseURL + "/api/public/v2/scores?traceId=" + url.QueryEscape(traceID)
+	route := api.baseURL + "/api/public/v3/scores?traceId=" + url.QueryEscape(traceID)
 	for {
 		var page struct {
 			Data []liveScore `json:"data"`

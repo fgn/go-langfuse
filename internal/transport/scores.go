@@ -57,7 +57,7 @@ type ScoresClient struct {
 	diagSlots chan struct{}
 
 	mu  sync.Mutex
-	buf [][]byte
+	buf []scoreEvent
 	// accepted counts scores appended to buf over the client lifetime and
 	// completed counts scores delivered or dropped, so completed trails
 	// accepted by the queued-plus-in-flight amount. Each Flush call waits on
@@ -82,6 +82,14 @@ type ScoresClient struct {
 type scoreFlushWaiter struct {
 	target uint64
 	done   chan struct{}
+}
+
+// scoreEvent is one queued delivery: the serialized single-event ingestion
+// request and the envelope event ID it must be accounted under in the
+// endpoint's 207 result.
+type scoreEvent struct {
+	payload []byte
+	eventID string
 }
 
 // maxConcurrentScoreDiagnostics bounds concurrently running error handlers;
@@ -132,12 +140,13 @@ func NewScoresClient(cfg Config) (*ScoresClient, error) {
 	}, nil
 }
 
-// Enqueue accepts one JSON-encoded score payload for asynchronous delivery.
-// It returns an error only when the client is shut down or, in blocking mode,
-// when ctx ends while waiting for queue space. In non-blocking mode a full
-// queue drops the score with a payload-free diagnostic and returns nil,
-// matching the span pipeline's backpressure default.
-func (s *ScoresClient) Enqueue(ctx context.Context, payload []byte) error {
+// Enqueue accepts one JSON-encoded score ingestion request for asynchronous
+// delivery; eventID is the envelope event ID the ingestion result must
+// account for. It returns an error only when the client is shut down or, in
+// blocking mode, when ctx ends while waiting for queue space. In non-blocking
+// mode a full queue drops the score with a payload-free diagnostic and
+// returns nil, matching the span pipeline's backpressure default.
+func (s *ScoresClient) Enqueue(ctx context.Context, payload []byte, eventID string) error {
 	for {
 		s.mu.Lock()
 		if s.stopped {
@@ -152,7 +161,7 @@ func (s *ScoresClient) Enqueue(ctx context.Context, payload []byte) error {
 				s.stop = lifecycleCtx.Done()
 				go s.dispatch(lifecycleCtx)
 			}
-			s.buf = append(s.buf, payload)
+			s.buf = append(s.buf, scoreEvent{payload: payload, eventID: eventID})
 			s.accepted++
 			s.mu.Unlock()
 			signal(s.wake)
@@ -265,12 +274,12 @@ func (s *ScoresClient) dispatch(lifecycleCtx context.Context) {
 			<-s.wake
 			continue
 		}
-		payload := s.buf[0]
-		s.buf[0] = nil
+		event := s.buf[0]
+		s.buf[0] = scoreEvent{}
 		s.buf = s.buf[1:]
 		s.mu.Unlock()
 		signal(s.space)
-		s.deliver(lifecycleCtx, payload)
+		s.deliver(lifecycleCtx, event)
 		s.finishOne()
 	}
 }
@@ -296,7 +305,7 @@ func (s *ScoresClient) finishOne() {
 // deliver posts one score, retrying transient failures with exponential
 // backoff and jitter until the retry budget or the client lifecycle ends.
 // Every terminal failure emits one payload-free diagnostic.
-func (s *ScoresClient) deliver(ctx context.Context, payload []byte) {
+func (s *ScoresClient) deliver(ctx context.Context, event scoreEvent) {
 	deadline := time.Now().Add(s.retry.MaxElapsedTime)
 	interval := s.retry.InitialInterval
 	for {
@@ -304,7 +313,7 @@ func (s *ScoresClient) deliver(ctx context.Context, payload []byte) {
 			s.reportAsync("score dropped during client shutdown")
 			return
 		}
-		retryable, retryAfter, failure := s.post(ctx, payload)
+		retryable, retryAfter, failure := s.post(ctx, event)
 		if failure == "" {
 			return
 		}
@@ -340,8 +349,8 @@ func (s *ScoresClient) deliver(ctx context.Context, payload []byte) {
 // server-controlled content (an echoed score, redirect targets, certificate
 // fields) that must not reach the payload-free diagnostics these summaries
 // flow to.
-func (s *ScoresClient) post(ctx context.Context, payload []byte) (retryable bool, retryAfter time.Duration, failure string) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(payload))
+func (s *ScoresClient) post(ctx context.Context, event scoreEvent) (retryable bool, retryAfter time.Duration, failure string) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(event.payload))
 	if err != nil {
 		return false, 0, "the score request could not be built"
 	}
@@ -361,8 +370,8 @@ func (s *ScoresClient) post(ctx context.Context, payload []byte) (retryable bool
 	if response.StatusCode < 300 {
 		// A 207 is the ingestion endpoint's documented response and its body
 		// is part of the delivery contract: an unreadable, truncated, or
-		// malformed result — or one that does not account for the single
-		// submitted event in successes or errors — leaves the outcome
+		// malformed result — or one that does not account for the submitted
+		// envelope event ID in successes or errors — leaves the outcome
 		// unknown, so it is retried. Other 2xx statuses come from
 		// intermediaries or foreign deployments whose bodies carry no
 		// contract; they keep the previous status-only success rule unless a
@@ -374,10 +383,25 @@ func (s *ScoresClient) post(ctx context.Context, payload []byte) (retryable bool
 				return true, parseRetryAfter(response.Header.Get("Retry-After")),
 					"the score ingestion response could not be read"
 			}
-			if len(result.Successes)+len(result.Errors) == 0 {
-				return true, parseRetryAfter(response.Header.Get("Retry-After")),
-					"the score ingestion response did not account for the score"
+			for _, item := range result.Errors {
+				if item.ID != event.eventID {
+					continue
+				}
+				failure = "the score ingestion endpoint reported item status " + strconv.Itoa(item.Status)
+				// An absent or zero item status leaves the outcome unknown;
+				// retry it like a transient failure rather than dropping.
+				if item.Status == 0 || retryableStatus(item.Status) {
+					return true, parseRetryAfter(response.Header.Get("Retry-After")), failure
+				}
+				return false, 0, failure
 			}
+			for _, item := range result.Successes {
+				if item.ID == event.eventID {
+					return false, 0, ""
+				}
+			}
+			return true, parseRetryAfter(response.Header.Get("Retry-After")),
+				"the score ingestion response did not account for the score"
 		}
 		if !parsed || len(result.Errors) == 0 {
 			return false, 0, ""
@@ -407,16 +431,17 @@ func retryableStatus(status int) bool {
 }
 
 // ingestionResult is the documented shape of an ingestion 207 response. For a
-// single-event request a non-empty errors array means the score was not
-// stored even though the HTTP exchange succeeded, and a response accounting
-// for no event at all leaves the outcome unknown.
+// single-event request the submitted envelope event ID must appear in errors
+// (the score was rejected) or successes (it was stored); a response that does
+// not account for that ID leaves the outcome unknown.
 type ingestionResult struct {
-	Successes []struct {
-		Status int `json:"status"`
-	} `json:"successes"`
-	Errors []struct {
-		Status int `json:"status"`
-	} `json:"errors"`
+	Successes []ingestionItem `json:"successes"`
+	Errors    []ingestionItem `json:"errors"`
+}
+
+type ingestionItem struct {
+	ID     string `json:"id"`
+	Status int    `json:"status"`
 }
 
 // parseIngestionResult reports whether body is the documented ingestion

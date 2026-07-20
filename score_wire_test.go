@@ -3,6 +3,7 @@ package langfuse_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -42,9 +43,16 @@ func (r *scoreWireReceiver) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 	status := r.status
 	r.mu.Unlock()
 	if status == 0 {
-		// Answer like the real ingestion endpoint: 207 with per-item results.
+		// Answer like the real ingestion endpoint: 207 with per-item results
+		// accounting for the submitted envelope event ID.
+		eventID := ""
+		if batch, ok := record.body["batch"].([]any); ok && len(batch) == 1 {
+			if event, ok := batch[0].(map[string]any); ok {
+				eventID, _ = event["id"].(string)
+			}
+		}
 		w.WriteHeader(http.StatusMultiStatus)
-		_, _ = w.Write([]byte(`{"successes":[{"id":"e","status":201}],"errors":[]}`))
+		_, _ = fmt.Fprintf(w, `{"successes":[{"id":%q,"status":201}],"errors":[]}`, eventID)
 		return
 	}
 	w.WriteHeader(status)
