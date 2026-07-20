@@ -361,14 +361,23 @@ func (s *ScoresClient) post(ctx context.Context, payload []byte) (retryable bool
 	if response.StatusCode < 300 {
 		// A 207 is the ingestion endpoint's documented response and its body
 		// is part of the delivery contract: an unreadable, truncated, or
-		// malformed result leaves the outcome unknown, so it is retried. Other
-		// 2xx statuses come from intermediaries or foreign deployments whose
-		// bodies carry no contract; they keep the previous status-only success
-		// rule unless a parsable body still reports an item error.
+		// malformed result — or one that does not account for the single
+		// submitted event in successes or errors — leaves the outcome
+		// unknown, so it is retried. Other 2xx statuses come from
+		// intermediaries or foreign deployments whose bodies carry no
+		// contract; they keep the previous status-only success rule unless a
+		// parsable body still reports an item error.
 		strict := response.StatusCode == http.StatusMultiStatus
 		result, parsed := parseIngestionResult(body)
-		if strict && (readErr != nil || truncated || !parsed) {
-			return true, 0, "the score ingestion response could not be read"
+		if strict {
+			if readErr != nil || truncated || !parsed {
+				return true, parseRetryAfter(response.Header.Get("Retry-After")),
+					"the score ingestion response could not be read"
+			}
+			if len(result.Successes)+len(result.Errors) == 0 {
+				return true, parseRetryAfter(response.Header.Get("Retry-After")),
+					"the score ingestion response did not account for the score"
+			}
 		}
 		if !parsed || len(result.Errors) == 0 {
 			return false, 0, ""
@@ -399,8 +408,12 @@ func retryableStatus(status int) bool {
 
 // ingestionResult is the documented shape of an ingestion 207 response. For a
 // single-event request a non-empty errors array means the score was not
-// stored even though the HTTP exchange succeeded.
+// stored even though the HTTP exchange succeeded, and a response accounting
+// for no event at all leaves the outcome unknown.
 type ingestionResult struct {
+	Successes []struct {
+		Status int `json:"status"`
+	} `json:"successes"`
 	Errors []struct {
 		Status int `json:"status"`
 	} `json:"errors"`

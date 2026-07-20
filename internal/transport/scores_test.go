@@ -181,6 +181,33 @@ func TestScoresRetryUnreadableMultiStatusResponses(t *testing.T) {
 	}
 }
 
+func TestScoresRetryMultiStatusResponsesAccountingForNoEvent(t *testing.T) {
+	t.Parallel()
+	bodies := []string{`null`, `{}`, `{"successes":[],"errors":[]}`}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		call := calls.Add(1)
+		if int(call) <= len(bodies) {
+			// A 207 that does not account for the submitted event leaves the
+			// outcome unknown and must be retried, never counted as success.
+			_, _ = w.Write([]byte(bodies[call-1]))
+			return
+		}
+		_, _ = w.Write([]byte(`{"successes":[{"id":"e","status":201}],"errors":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	client := newScoresTestClient(t, server.URL, nil)
+
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	flushScores(t, client)
+	if got, want := calls.Load(), int32(len(bodies)+1); got != want {
+		t.Fatalf("request count = %d, want %d (each unaccounting 207 retried, then success)", got, want)
+	}
+}
+
 func TestScoresRetryItemErrorsWithoutStatus(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32

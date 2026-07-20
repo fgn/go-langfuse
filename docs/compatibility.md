@@ -21,9 +21,9 @@ Basic authentication; the event envelope carries the score timestamp, matching
 the official SDKs. This endpoint is independent of the OTLP ingestion version.
 Its 207 multi-status responses are inspected for per-item errors: item
 statuses 408, 429, and 5xx are retried, other item errors drop the score with
-a payload-free diagnostic. A 207 body is part of the delivery contract, so an
-unreadable or malformed one is retried; item errors without a status retry as
-transient.
+a payload-free diagnostic. A 207 body is part of the delivery contract, so one that is unreadable,
+malformed, or does not account for the submitted event is retried; item
+errors without a status retry as transient.
 
 go-langfuse uses the instrumentation scope `langfuse-sdk.go`. Langfuse treats
 the `langfuse-sdk` prefix as an ingestion marker that prevents semantic

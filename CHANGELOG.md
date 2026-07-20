@@ -20,8 +20,9 @@ Versioning once the first release is tagged.
   `/api/public/scores`, matching the official SDKs; the event envelope
   carries the score timestamp. Per-item ingestion errors with status 408,
   429, or 5xx — and item errors without a status, or 207 responses whose
-  body cannot be read — are retried like their HTTP counterparts; other item
-  errors drop the score with a payload-free diagnostic.
+  body cannot be read or does not account for the submitted event — are
+  retried like their HTTP counterparts; other item errors drop the score
+  with a payload-free diagnostic.
 
 ## [0.2.0] - 2026-07-20
 
