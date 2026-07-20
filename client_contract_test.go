@@ -320,6 +320,9 @@ func TestDisabledClientIsTrueNoop(t *testing.T) {
 	if got := client.WithTraceAttributes(ctx, TraceAttributes{Name: "ignored"}); got != ctx {
 		t.Fatal("disabled WithTraceAttributes returned a different context")
 	}
+	if got := client.WithDetachedTrace(ctx); got != ctx {
+		t.Fatal("disabled WithDetachedTrace returned a different context")
+	}
 	gotCtx, observation := client.StartObservation(ctx, "ignored", TypeGeneration, ObservationAttributes{Input: "ignored"})
 	if gotCtx != ctx {
 		t.Fatal("disabled StartObservation returned a different context")
@@ -341,6 +344,9 @@ func TestZeroAndNilClientsAreSafeNoops(t *testing.T) {
 	for index, client := range clients {
 		if got := client.WithTraceAttributes(ctx, TraceAttributes{Name: "ignored"}); got != ctx {
 			t.Errorf("client %d WithTraceAttributes returned a different context", index)
+		}
+		if got := client.WithDetachedTrace(ctx); got != ctx {
+			t.Errorf("client %d WithDetachedTrace returned a different context", index)
 		}
 		gotCtx, observation := client.StartObservation(ctx, "ignored", TypeSpan, ObservationAttributes{})
 		if gotCtx != ctx {
@@ -365,6 +371,8 @@ func TestZeroAndNilObservationsAreSafeNoops(t *testing.T) {
 		observation.RecordError(nil)
 		observation.End()
 		observation.End()
+		observation.EndAt(time.Now())
+		observation.EndAt(time.Time{})
 		if got := observation.TraceID(); got != "" {
 			t.Errorf("observation %d TraceID() = %q, want empty", index, got)
 		}

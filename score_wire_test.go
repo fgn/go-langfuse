@@ -42,7 +42,10 @@ func (r *scoreWireReceiver) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 	status := r.status
 	r.mu.Unlock()
 	if status == 0 {
-		status = http.StatusOK
+		// Answer like the real ingestion endpoint: 207 with per-item results.
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(`{"successes":[{"id":"e","status":201}],"errors":[]}`))
+		return
 	}
 	w.WriteHeader(status)
 }
@@ -90,6 +93,35 @@ func flushClient(t *testing.T, client *langfuse.Client) {
 	}
 }
 
+// scoreWireEvent unwraps the single score-create event from an ingestion
+// request and returns the event envelope and the score body.
+func scoreWireEvent(t *testing.T, request scoreWireRequest) (envelope, body map[string]any) {
+	t.Helper()
+	batch, ok := request.body["batch"].([]any)
+	if !ok || len(batch) != 1 {
+		t.Fatalf("ingestion request batch = %v, want exactly one event", request.body["batch"])
+	}
+	envelope, ok = batch[0].(map[string]any)
+	if !ok {
+		t.Fatalf("ingestion event = %v, want an object", batch[0])
+	}
+	if got, _ := envelope["type"].(string); got != "score-create" {
+		t.Fatalf("ingestion event type = %v, want score-create", envelope["type"])
+	}
+	if id, _ := envelope["id"].(string); len(id) != 36 {
+		t.Fatalf("ingestion event id = %v, want a generated 36-character UUID", envelope["id"])
+	}
+	timestamp, _ := envelope["timestamp"].(string)
+	if _, err := time.Parse(time.RFC3339Nano, timestamp); err != nil {
+		t.Fatalf("ingestion event timestamp = %v, want RFC 3339: %v", envelope["timestamp"], err)
+	}
+	body, ok = envelope["body"].(map[string]any)
+	if !ok {
+		t.Fatalf("ingestion event body = %v, want an object", envelope["body"])
+	}
+	return envelope, body
+}
+
 func TestScoreWireSubmitsAuthenticatedJSON(t *testing.T) {
 	t.Parallel()
 	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) {
@@ -117,14 +149,18 @@ func TestScoreWireSubmitsAuthenticatedJSON(t *testing.T) {
 		t.Fatalf("score request count = %d, want 1", len(requests))
 	}
 	request := requests[0]
-	if request.path != "/api/public/scores" {
-		t.Fatalf("score path = %q, want /api/public/scores", request.path)
+	if request.path != "/api/public/ingestion" {
+		t.Fatalf("score path = %q, want /api/public/ingestion", request.path)
 	}
 	if request.contentType != "application/json" {
 		t.Fatalf("score content type = %q, want application/json", request.contentType)
 	}
 	if !request.authOK || request.username != "pk-lf-score-wire" || request.password != "sk-lf-score-wire" {
 		t.Fatalf("score basic auth = (%q, ok %v), want the client credentials", request.username, request.authOK)
+	}
+	envelope, body := scoreWireEvent(t, request)
+	if len(envelope) != 4 {
+		t.Fatalf("ingestion event has %d fields, want id, type, timestamp, body: %v", len(envelope), envelope)
 	}
 	want := map[string]any{
 		"id":          "feedback-42",
@@ -137,9 +173,9 @@ func TestScoreWireSubmitsAuthenticatedJSON(t *testing.T) {
 		"environment": "score_wire",
 	}
 	for key, wantValue := range want {
-		got, exists := request.body[key]
+		got, exists := body[key]
 		if !exists {
-			t.Fatalf("score payload is missing %q; payload: %v", key, request.body)
+			t.Fatalf("score payload is missing %q; payload: %v", key, body)
 		}
 		gotJSON, err := json.Marshal(got)
 		if err != nil {
@@ -153,8 +189,62 @@ func TestScoreWireSubmitsAuthenticatedJSON(t *testing.T) {
 			t.Fatalf("score payload %q = %s, want %s", key, gotJSON, wantJSON)
 		}
 	}
-	if len(request.body) != len(want) {
-		t.Fatalf("score payload has %d fields, want %d: %v", len(request.body), len(want), request.body)
+	if len(body) != len(want) {
+		t.Fatalf("score payload has %d fields, want %d: %v", len(body), len(want), body)
+	}
+}
+
+func TestScoreWireTimestampAndConfigID(t *testing.T) {
+	t.Parallel()
+	client, receiver := newScoreWireClient(t, nil)
+
+	// A batch job scoring yesterday's trace must be able to backdate the
+	// score; the ingestion event envelope carries that timestamp.
+	backdated := time.Date(2026, 7, 19, 8, 30, 0, 250000000, time.UTC)
+	rating := 3.0
+	before := time.Now()
+	err := client.RecordScore(context.Background(), langfuse.Score{
+		Name:         "report-quality",
+		SessionID:    "consultation:610",
+		NumericValue: &rating,
+		ConfigID:     "config-123",
+		Timestamp:    backdated,
+	})
+	if err != nil {
+		t.Fatalf("RecordScore() error = %v", err)
+	}
+	err = client.RecordScore(context.Background(), langfuse.Score{
+		Name:         "report-quality",
+		SessionID:    "consultation:611",
+		NumericValue: &rating,
+	})
+	if err != nil {
+		t.Fatalf("RecordScore() error = %v", err)
+	}
+	flushClient(t, client)
+
+	requests := receiver.all()
+	if len(requests) != 2 {
+		t.Fatalf("score request count = %d, want 2", len(requests))
+	}
+	envelope, body := scoreWireEvent(t, requests[0])
+	if got := envelope["timestamp"]; got != "2026-07-19T08:30:00.25Z" {
+		t.Fatalf("backdated event timestamp = %v, want 2026-07-19T08:30:00.25Z", got)
+	}
+	if got := body["configId"]; got != "config-123" {
+		t.Fatalf("score payload configId = %v, want config-123", got)
+	}
+
+	defaulted, defaultedBody := scoreWireEvent(t, requests[1])
+	if _, exists := defaultedBody["configId"]; exists {
+		t.Fatalf("score payload configId = %v, want it omitted", defaultedBody["configId"])
+	}
+	stamp, err := time.Parse(time.RFC3339Nano, defaulted["timestamp"].(string))
+	if err != nil {
+		t.Fatalf("parse defaulted event timestamp: %v", err)
+	}
+	if stamp.Before(before.Add(-time.Second)) || stamp.After(time.Now().Add(time.Second)) {
+		t.Fatalf("defaulted event timestamp = %v, want approximately the RecordScore call time", stamp)
 	}
 }
 
@@ -177,7 +267,7 @@ func TestScoreWireStringValueAndObservationTarget(t *testing.T) {
 	if len(requests) != 1 {
 		t.Fatalf("score request count = %d, want 1", len(requests))
 	}
-	body := requests[0].body
+	_, body := scoreWireEvent(t, requests[0])
 	if body["value"] != "too_short" || body["traceId"] != strings.Repeat("ab", 16) ||
 		body["observationId"] != strings.Repeat("cd", 8) {
 		t.Fatalf("score payload = %v, want string value with trace and observation target", body)
@@ -208,10 +298,15 @@ func TestScoreWireGeneratesDistinctIdempotencyIDs(t *testing.T) {
 	if len(requests) != 2 {
 		t.Fatalf("score request count = %d, want 2", len(requests))
 	}
-	first, _ := requests[0].body["id"].(string)
-	second, _ := requests[1].body["id"].(string)
+	firstEnvelope, firstBody := scoreWireEvent(t, requests[0])
+	secondEnvelope, secondBody := scoreWireEvent(t, requests[1])
+	first, _ := firstBody["id"].(string)
+	second, _ := secondBody["id"].(string)
 	if len(first) != 36 || len(second) != 36 || first == second {
 		t.Fatalf("generated score IDs = (%q, %q), want two distinct UUIDs", first, second)
+	}
+	if firstEnvelope["id"] == secondEnvelope["id"] {
+		t.Fatalf("generated event IDs are both %v, want two distinct UUIDs", firstEnvelope["id"])
 	}
 }
 
@@ -250,6 +345,7 @@ func TestScoreWireValidationAndLifecycle(t *testing.T) {
 		"two values":             {Name: "n", SessionID: "s", NumericValue: &rating, StringValue: new(string)},
 		"bad data type":          {Name: "n", SessionID: "s", NumericValue: &rating, DataType: "MOOD"},
 		"oversized name":         {Name: strings.Repeat("n", 201), SessionID: "s", NumericValue: &rating},
+		"oversized config ID":    {Name: "n", SessionID: "s", NumericValue: &rating, ConfigID: strings.Repeat("c", 201)},
 	}
 	for label, score := range invalid {
 		if err := client.RecordScore(context.Background(), score); err == nil {

@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/fgn/go-langfuse"
 )
@@ -16,6 +17,7 @@ var (
 	_ func(context.Context, langfuse.Config) (*langfuse.Client, error) = langfuse.New
 
 	_ func(*langfuse.Client, context.Context, langfuse.TraceAttributes) context.Context                                                                                   = (*langfuse.Client).WithTraceAttributes
+	_ func(*langfuse.Client, context.Context) context.Context                                                                                                             = (*langfuse.Client).WithDetachedTrace
 	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes) (context.Context, *langfuse.Observation)                  = (*langfuse.Client).StartObservation
 	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes, func(context.Context, *langfuse.Observation) error) error = (*langfuse.Client).Observe
 	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationAttributes)                                                                                     = (*langfuse.Client).Event
@@ -26,6 +28,7 @@ var (
 	_ func(*langfuse.Observation, langfuse.ObservationAttributes) = (*langfuse.Observation).Update
 	_ func(*langfuse.Observation, error)                          = (*langfuse.Observation).RecordError
 	_ func(*langfuse.Observation)                                 = (*langfuse.Observation).End
+	_ func(*langfuse.Observation, time.Time)                      = (*langfuse.Observation).EndAt
 	_ func(*langfuse.Observation) string                          = (*langfuse.Observation).TraceID
 	_ func(*langfuse.Observation) string                          = (*langfuse.Observation).ID
 )
@@ -40,10 +43,12 @@ func TestPublicMethodSurface(t *testing.T) {
 		"RecordScore",
 		"Shutdown",
 		"StartObservation",
+		"WithDetachedTrace",
 		"WithTraceAttributes",
 	})
 	assertMethodNames(t, (*langfuse.Observation)(nil), []string{
 		"End",
+		"EndAt",
 		"ID",
 		"RecordError",
 		"TraceID",
@@ -94,8 +99,10 @@ func TestPublicStructSurface(t *testing.T) {
 		"NumericValue",
 		"StringValue",
 		"DataType",
+		"ConfigID",
 		"Comment",
 		"Metadata",
+		"Timestamp",
 	})
 	assertFieldNames(t, langfuse.ObservationAttributes{}, []string{
 		"Input",

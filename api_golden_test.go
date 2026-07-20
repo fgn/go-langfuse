@@ -238,9 +238,13 @@ func (c *Client) StartObservation(
 	values ObservationAttributes,
 ) (context.Context, *Observation)
 
+func (c *Client) WithDetachedTrace(ctx context.Context) context.Context
+
 func (c *Client) WithTraceAttributes(ctx context.Context, values TraceAttributes) context.Context
 
 func (o *Observation) End()
+
+func (o *Observation) EndAt(at time.Time)
 
 func (o *Observation) ID() string
 
@@ -309,8 +313,10 @@ type Score struct {
 	NumericValue *float64
 	StringValue *string
 	DataType ScoreDataType
+	ConfigID string
 	Comment string
 	Metadata map[string]any
+	Timestamp time.Time
 }
 
 type ScoreDataType string

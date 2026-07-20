@@ -93,6 +93,69 @@ func TestScoresDoNotRetryPermanentFailures(t *testing.T) {
 	}
 }
 
+func TestScoresRetryTransientIngestionItemErrors(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		if calls.Add(1) < 3 {
+			_, _ = w.Write([]byte(`{"successes":[],"errors":[{"id":"e","status":500}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"successes":[{"id":"e","status":201}],"errors":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	client := newScoresTestClient(t, server.URL, nil)
+
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	flushScores(t, client)
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("request count = %d, want 3 (two 500 item errors then success)", got)
+	}
+}
+
+func TestScoresDoNotRetryPermanentIngestionItemErrors(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(`{"successes":[],"errors":[{"id":"e","status":400,"message":"bad"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	client := newScoresTestClient(t, server.URL, nil)
+
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	flushScores(t, client)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("request count = %d, want 1 (a 400 item error must not be retried)", got)
+	}
+}
+
+func TestScoresTreatUnparsableSuccessBodiesAsAccepted(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not json`))
+	}))
+	t.Cleanup(server.Close)
+	client := newScoresTestClient(t, server.URL, nil)
+
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	flushScores(t, client)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("request count = %d, want 1 (a lenient 2xx body must not be retried)", got)
+	}
+}
+
 func TestScoresDisabledRetrySendsOnce(t *testing.T) {
 	t.Parallel()
 	var calls atomic.Int32

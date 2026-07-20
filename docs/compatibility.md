@@ -15,9 +15,13 @@ The SDK sends `x-langfuse-ingestion-version: 4` unconditionally. A server that
 does not recognize this version is incompatible; upgrade that deployment
 rather than weakening the header.
 
-Scores are submitted as JSON to the REST endpoint `/api/public/scores` on the
-same host, with the same Basic authentication. This endpoint is independent of
-the OTLP ingestion version.
+Scores are submitted as single-event `score-create` batches to the JSON
+ingestion endpoint `/api/public/ingestion` on the same host, with the same
+Basic authentication; the event envelope carries the score timestamp, matching
+the official SDKs. This endpoint is independent of the OTLP ingestion version.
+Its 207 multi-status responses are inspected for per-item errors: item
+statuses 408, 429, and 5xx are retried, other item errors drop the score with
+a payload-free diagnostic.
 
 go-langfuse uses the instrumentation scope `langfuse-sdk.go`. Langfuse treats
 the `langfuse-sdk` prefix as an ingestion marker that prevents semantic

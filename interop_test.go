@@ -329,6 +329,57 @@ func TestContextsAndTraceClaimsAreClientScoped(t *testing.T) {
 	assertInteropBoolAttribute(t, spanB, lfattr.AppRootKey, true)
 }
 
+func TestWithDetachedTraceStartsNewApplicationRoot(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	client := newInteropClient(t, receiver, Config{})
+	t.Cleanup(func() { shutdownClient(t, client) })
+
+	ctx := client.WithTraceAttributes(context.Background(), TraceAttributes{
+		UserID:    "user-7",
+		SessionID: "session-3",
+	})
+	requestCtx, request := client.StartObservation(ctx, "request", TypeSpan, ObservationAttributes{})
+	// The request observation ends before the background work does, like an
+	// HTTP handler that spawns a goroutine and returns.
+	request.End()
+
+	detached := client.WithDetachedTrace(requestCtx)
+	jobCtx, job := client.StartObservation(detached, "background-job", TypeChain, ObservationAttributes{})
+	_, child := client.StartObservation(jobCtx, "job-child", TypeGeneration, ObservationAttributes{})
+	child.End()
+	job.End()
+
+	flushClient(t, client)
+	spans := interopSpanMap(t, receiver)
+	requestSpan, jobSpan, childSpan := spans["request"], spans["background-job"], spans["job-child"]
+	if requestSpan == nil || jobSpan == nil || childSpan == nil {
+		t.Fatalf("missing spans: request %v, job %v, child %v", requestSpan != nil, jobSpan != nil, childSpan != nil)
+	}
+
+	if bytes.Equal(jobSpan.GetTraceId(), requestSpan.GetTraceId()) {
+		t.Fatalf("detached job trace ID = %x, want a new trace distinct from the request trace", jobSpan.GetTraceId())
+	}
+	if len(jobSpan.GetParentSpanId()) != 0 {
+		t.Fatalf("detached job parent span ID = %x, want none", jobSpan.GetParentSpanId())
+	}
+	assertInteropBoolAttribute(t, jobSpan, lfattr.AppRootKey, true)
+	if !bytes.Equal(childSpan.GetTraceId(), jobSpan.GetTraceId()) {
+		t.Fatalf("job child trace ID = %x, want the detached job trace ID %x", childSpan.GetTraceId(), jobSpan.GetTraceId())
+	}
+	if !bytes.Equal(childSpan.GetParentSpanId(), jobSpan.GetSpanId()) {
+		t.Fatalf("job child parent ID = %x, want the detached job span ID %x", childSpan.GetParentSpanId(), jobSpan.GetSpanId())
+	}
+	assertInteropMissingAttribute(t, childSpan, lfattr.AppRootKey)
+
+	// Trace attributes set before the detach continue to propagate onto the
+	// new trace, so session and user grouping survive the handoff.
+	assertInteropStringAttribute(t, jobSpan, lfattr.TraceUserIDKey, "user-7")
+	assertInteropStringAttribute(t, jobSpan, lfattr.TraceSessionIDKey, "session-3")
+	assertInteropStringAttribute(t, childSpan, lfattr.TraceUserIDKey, "user-7")
+	assertInteropBoolAttribute(t, requestSpan, lfattr.AppRootKey, true)
+}
+
 func TestApplicationRootUsesClaimsAndDirectParentExpectations(t *testing.T) {
 	receiver := otlpreceiver.New()
 	t.Cleanup(receiver.Close)

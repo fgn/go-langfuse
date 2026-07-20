@@ -3,6 +3,24 @@
 All notable changes will be documented here. This project follows Semantic
 Versioning once the first release is tagged.
 
+## [Unreleased]
+
+- Add `Observation.EndAt` to end an observation at an explicit time, so
+  instrumentation that records already-finished work can reproduce the
+  observed timeline together with `StartTime` and `CompletionStartTime`.
+- Add `Client.WithDetachedTrace` to start background work as a new trace
+  root — for example a goroutine that outlives its HTTP request — while
+  propagated trace attributes (user, session, tags, metadata, version)
+  survive the handoff.
+- Add `Score.Timestamp` to backdate scores and `Score.ConfigID` to bind a
+  score to a Langfuse score config.
+- **Behavior**: scores are now delivered as single-event `score-create`
+  batches to the JSON ingestion endpoint `/api/public/ingestion` instead of
+  `/api/public/scores`, matching the official SDKs; the event envelope
+  carries the score timestamp. Per-item ingestion errors with status 408,
+  429, or 5xx are retried like their HTTP counterparts; other item errors
+  drop the score with a payload-free diagnostic.
+
 ## [0.2.0] - 2026-07-20
 
 - **Breaking**: `RecordScore` now validates synchronously and delivers

@@ -10,7 +10,7 @@ const (
 	defaultBaseURL = "https://cloud.langfuse.com"
 	otelBasePath   = "/api/public/otel"
 	tracesPath     = otelBasePath + "/v1/traces"
-	scoresPath     = "/api/public/scores"
+	ingestionPath  = "/api/public/ingestion"
 )
 
 // NormalizeEndpoint converts a Langfuse host, OTLP base endpoint, or complete
@@ -62,11 +62,12 @@ func NormalizeEndpoint(raw string) (string, error) {
 }
 
 // NormalizeScoresEndpoint converts the same accepted base URL forms into the
-// Langfuse REST scores endpoint on the host root.
+// Langfuse JSON ingestion endpoint on the host root, which carries score
+// events.
 func NormalizeScoresEndpoint(raw string) (string, error) {
 	traces, err := NormalizeEndpoint(raw)
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSuffix(traces, tracesPath) + scoresPath, nil
+	return strings.TrimSuffix(traces, tracesPath) + ingestionPath, nil
 }

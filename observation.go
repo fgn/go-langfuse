@@ -20,10 +20,14 @@ import (
 // Observation is a concurrency-safe handle around one OpenTelemetry span.
 // Its zero value is a safe no-op.
 type Observation struct {
-	mu                 sync.Mutex
-	client             *Client
-	span               oteltrace.Span
-	typeName           ObservationType
+	mu       sync.Mutex
+	client   *Client
+	span     oteltrace.Span
+	typeName ObservationType
+	// startTime holds the explicit StartTime supplied to StartObservation, or
+	// zero when the span started at the current time. It is written once
+	// before the handle is shared and is read without the lock.
+	startTime          time.Time
 	ended              bool
 	explicit           map[string]struct{}
 	metadataKeys       map[string]struct{}
@@ -84,6 +88,7 @@ func (c *Client) StartObservation(
 		client:         c,
 		span:           span,
 		typeName:       typeName,
+		startTime:      values.StartTime,
 		explicit:       explicit,
 		metadataKeys:   observationMetadataKeys(spanAttributes),
 		attributeSizes: attributeSizes,
@@ -459,15 +464,48 @@ func observationString(field, value string) (string, bool) {
 	return value, true
 }
 
-// End ends the observation exactly once.
+// End ends the observation exactly once at the current time.
 func (o *Observation) End() {
+	o.endOnce(time.Time{})
+}
+
+// EndAt ends the observation exactly once at the provided time. It exists for
+// instrumentation that records work after the fact: pair it with
+// ObservationAttributes.StartTime and CompletionStartTime to reproduce the
+// observed timeline. A zero time falls back to the current time with a
+// diagnostic, and an end time before an explicitly supplied StartTime is
+// replaced by that start time with a diagnostic. Only the first End or EndAt
+// call takes effect; later calls are ignored.
+func (o *Observation) EndAt(at time.Time) {
 	if o == nil || o.span == nil {
 		return
+	}
+	zero := at.IsZero()
+	clamped := false
+	if !zero && !o.startTime.IsZero() && at.Before(o.startTime) {
+		at = o.startTime
+		clamped = true
+	}
+	if !o.endOnce(at) {
+		return
+	}
+	if zero {
+		diagnostic.Report("observation end time is zero; the current time is used")
+	} else if clamped {
+		diagnostic.Report("observation end time precedes its start time; the start time is used")
+	}
+}
+
+// endOnce performs the first End or EndAt call and reports whether this call
+// won that transition. A zero time ends the span at the current time.
+func (o *Observation) endOnce(at time.Time) bool {
+	if o == nil || o.span == nil {
+		return false
 	}
 	o.mu.Lock()
 	if o.ended {
 		o.mu.Unlock()
-		return
+		return false
 	}
 	o.ended = true
 	span := o.span
@@ -476,7 +514,12 @@ func (o *Observation) End() {
 	// Span.End synchronously invokes application-owned processors. Never hold
 	// the observation lock across those callbacks: diagnostics and processors
 	// are allowed to re-enter this handle or its Client.
-	span.End()
+	if at.IsZero() {
+		span.End()
+		return true
+	}
+	span.End(oteltrace.WithTimestamp(at))
+	return true
 }
 
 // TraceID returns the lowercase 32-character OpenTelemetry trace ID, or an

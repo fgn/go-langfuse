@@ -3,6 +3,7 @@ package transport
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,20 +19,23 @@ import (
 )
 
 const (
-	// maxScoreDrainBytes bounds how much of a response body is read so the
-	// underlying connection can be reused.
-	maxScoreDrainBytes = 4 << 10
+	// maxScoreResponseBytes bounds how much of a response body is read. The
+	// body of a single-event ingestion response is inspected for per-item
+	// errors, so the bound is generous enough that an error entry echoing a
+	// full 128 KiB score payload still parses instead of being truncated into
+	// unparsable JSON.
+	maxScoreResponseBytes = 256 << 10
 	// defaultScoreQueueSize bounds how many serialized scores wait for the
 	// dispatcher. Scores are low-volume evaluation and feedback events, so the
 	// queue is intentionally much smaller than the span queue.
 	defaultScoreQueueSize = 256
 )
 
-// ScoresClient delivers scores to the Langfuse REST scores endpoint from a
-// bounded queue serviced by one background dispatcher, retrying transient
-// failures with the same policy defaults as the OTLP exporter. Delivery
-// failures are reported as payload-free diagnostics, never returned to the
-// producer.
+// ScoresClient delivers score events to the Langfuse JSON ingestion endpoint
+// from a bounded queue serviced by one background dispatcher, retrying
+// transient failures with the same policy defaults as the OTLP exporter.
+// Delivery failures are reported as payload-free diagnostics, never returned
+// to the producer.
 type ScoresClient struct {
 	endpoint    string
 	publicKey   string
@@ -331,7 +335,7 @@ func (s *ScoresClient) deliver(ctx context.Context, payload []byte) {
 
 // post sends one attempt. An empty failure means the score was accepted.
 // Credentials travel exclusively in the Authorization header, and the failure
-// summary is built only from static text and the numeric status code: reason
+// summary is built only from static text and numeric status codes: reason
 // phrases, response bodies, and transport error strings can carry
 // server-controlled content (an echoed score, redirect targets, certificate
 // fields) that must not reach the payload-free diagnostics these summaries
@@ -352,17 +356,50 @@ func (s *ScoresClient) post(ctx context.Context, payload []byte) (retryable bool
 		return true, 0, "the score request failed before a response"
 	}
 	defer func() { _ = response.Body.Close() }()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxScoreDrainBytes))
+	body, _ := io.ReadAll(io.LimitReader(response.Body, maxScoreResponseBytes))
 	if response.StatusCode < 300 {
-		return false, 0, ""
+		status, failed := ingestionItemError(body)
+		if !failed {
+			return false, 0, ""
+		}
+		failure = "the score ingestion endpoint reported item status " + strconv.Itoa(status)
+		if retryableStatus(status) {
+			return true, parseRetryAfter(response.Header.Get("Retry-After")), failure
+		}
+		return false, 0, failure
 	}
-	failure = "the scores endpoint returned status " + strconv.Itoa(response.StatusCode)
-	if response.StatusCode == http.StatusRequestTimeout ||
-		response.StatusCode == http.StatusTooManyRequests ||
-		(response.StatusCode >= 500 && response.StatusCode <= 599) {
+	failure = "the score ingestion endpoint returned status " + strconv.Itoa(response.StatusCode)
+	if retryableStatus(response.StatusCode) {
 		return true, parseRetryAfter(response.Header.Get("Retry-After")), failure
 	}
 	return false, 0, failure
+}
+
+// retryableStatus reports whether an HTTP or ingestion-item status marks a
+// transient failure worth retrying.
+func retryableStatus(status int) bool {
+	return status == http.StatusRequestTimeout ||
+		status == http.StatusTooManyRequests ||
+		(status >= 500 && status <= 599)
+}
+
+// ingestionItemError extracts the per-item error status from a 2xx ingestion
+// response. The endpoint returns 207 with successes and errors arrays, so for
+// a single-event request a non-empty errors array means the score was not
+// stored even though the HTTP exchange succeeded. Parsing is deliberately
+// lenient: a 2xx body that is not the documented JSON object is treated as
+// accepted, preserving the previous status-only success rule instead of
+// retrying against intermediaries that return empty or foreign 2xx bodies.
+func ingestionItemError(body []byte) (status int, failed bool) {
+	var parsed struct {
+		Errors []struct {
+			Status int `json:"status"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil || len(parsed.Errors) == 0 {
+		return 0, false
+	}
+	return parsed.Errors[0].Status, true
 }
 
 // maxRetryAfter caps a server-requested delay. It exists to keep hostile or
