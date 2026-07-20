@@ -55,6 +55,11 @@ type Config struct {
 
 	Timeout time.Duration
 	Retry   *RetryConfig
+
+	// BlockOnQueueFull makes ScoresClient.Enqueue wait for queue space
+	// instead of dropping. The OTLP exporter ignores it; the span pipeline
+	// applies the same choice through its batch processor options.
+	BlockOnQueueFull bool
 }
 
 // NewExporter constructs an OTLP/HTTP protobuf exporter without performing

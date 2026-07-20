@@ -160,9 +160,15 @@ the [reference](docs/reference.md).
 ## Scores
 
 `RecordScore` submits evaluations and user feedback through the Langfuse REST
-scores endpoint. Unlike observations, scores are synchronous with no buffering
-or retry: transport errors return to the caller and a disabled client is a
-no-op.
+scores endpoint. A score is validated synchronously — every returned error
+means the score was not accepted — and then delivered asynchronously with
+bounded retry using the same backoff defaults as observation export, so a
+Langfuse blip neither blocks the request path nor loses feedback to one
+failed attempt. `Flush` and `Shutdown`
+drain accepted scores; a delivery that outlives the retry budget is dropped
+with a payload-free diagnostic through the OpenTelemetry error handler. When
+`ID` is empty the SDK generates one, keeping retried deliveries idempotent. A
+disabled client is a no-op.
 
 ```go
 rating := float64(feedback.Rating)

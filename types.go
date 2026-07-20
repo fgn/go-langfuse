@@ -35,11 +35,12 @@ type Config struct {
 	// default of 2048; negative values are a validation error in [New].
 	MaxQueueSize int
 
-	// BlockOnQueueFull makes ending an exported observation wait for buffer
-	// space instead of dropping the observation when the queue is full. A
-	// sustained export outage can then stall goroutines that end
-	// observations, so it defaults to false: on a full queue newly ended
-	// observations are dropped, matching OpenTelemetry defaults.
+	// BlockOnQueueFull makes ending an exported observation, and recording a
+	// score, wait for buffer space instead of dropping when the
+	// corresponding queue is full. A sustained export outage can then stall
+	// goroutines that end observations or record scores, so it defaults to
+	// false: on a full queue new work is dropped with a diagnostic, matching
+	// OpenTelemetry defaults.
 	BlockOnQueueFull bool
 
 	// Disabled makes the complete client a safe no-op.

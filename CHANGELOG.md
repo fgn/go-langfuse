@@ -3,6 +3,20 @@
 All notable changes will be documented here. This project follows Semantic
 Versioning once the first release is tagged.
 
+## [0.2.0] - 2026-07-20
+
+- **Breaking**: `RecordScore` now validates synchronously and delivers
+  asynchronously with bounded backoff retry instead of performing one
+  blocking request. Returned errors are validation and
+  lifecycle errors only; transport failures are retried (network errors and
+  HTTP 408/429/5xx, honoring `Retry-After`) and, once the retry budget is
+  exhausted, dropped with a payload-free diagnostic instead of returning to
+  the caller.
+- `Flush` and `Shutdown` drain the new bounded score queue (256 scores), and
+  `Config.BlockOnQueueFull` now also applies to it.
+- The SDK generates the idempotent upsert ID when `Score.ID` is empty, so
+  retried deliveries cannot create duplicate scores.
+
 ## [0.1.1] - 2026-07-17
 
 - Add a unified `task ci` development and continuous-integration gate covering

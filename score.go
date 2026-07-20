@@ -2,8 +2,10 @@ package langfuse
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"unicode/utf8"
 )
 
@@ -24,11 +26,12 @@ const (
 )
 
 // Score is one evaluation or feedback value attached to a trace, a session,
-// or an observation. Scores are submitted synchronously through the Langfuse
-// REST API rather than the OpenTelemetry trace pipeline.
+// or an observation. Scores are submitted through the Langfuse REST API
+// rather than the OpenTelemetry trace pipeline.
 type Score struct {
 	// ID makes submissions idempotent: Langfuse upserts scores by ID.
-	// Optional; Langfuse generates an ID when empty.
+	// Optional; the SDK generates a random ID when empty so retried
+	// deliveries cannot create duplicates.
 	ID string
 	// Name identifies the score series, for example "user-feedback".
 	// Required; at most 200 characters.
@@ -54,11 +57,17 @@ type Score struct {
 }
 
 // RecordScore submits one score through the Langfuse REST scores endpoint
-// using the client's credentials and environment. Unlike observations it is
-// synchronous and returns transport errors to the caller; there is no
-// buffering or retry. A disabled client returns nil without sending, and a
-// shut-down client returns an error. The complete serialized score is limited
-// to 128 KiB.
+// using the client's credentials and environment. The score is validated
+// synchronously — every returned error marks a score that was not accepted —
+// and then queued for asynchronous delivery with bounded retry (network
+// errors and HTTP 408, 429, and 5xx responses, using the same backoff
+// defaults as observation export), so transport failures never reach the
+// caller: after the retry budget they are reported as payload-free
+// OpenTelemetry diagnostics and the score is dropped. [Client.Flush] and [Client.Shutdown] drain accepted
+// scores. When the queue is full a score is dropped with a diagnostic unless
+// Config.BlockOnQueueFull waits for space, bounded by ctx. A disabled client
+// returns nil without sending, and a shut-down client returns an error. The
+// complete serialized score is limited to 128 KiB.
 func (c *Client) RecordScore(ctx context.Context, score Score) error {
 	if c == nil || c.isDisabled() || c.scores == nil {
 		return nil
@@ -73,7 +82,7 @@ func (c *Client) RecordScore(ctx context.Context, score Score) error {
 	if err != nil {
 		return err
 	}
-	return c.scores.Send(ctx, payload)
+	return c.scores.Enqueue(ctx, payload)
 }
 
 func (c *Client) scorePayload(score Score) ([]byte, error) {
@@ -120,9 +129,16 @@ func (c *Client) scorePayload(score Score) ([]byte, error) {
 		}
 		payload["value"] = *score.StringValue
 	}
-	if score.ID != "" {
-		payload["id"] = score.ID
+	// Always submit an ID: retried deliveries must upsert, not duplicate.
+	scoreID := score.ID
+	if scoreID == "" {
+		generated, err := newScoreID()
+		if err != nil {
+			return nil, err
+		}
+		scoreID = generated
 	}
+	payload["id"] = scoreID
 	if score.TraceID != "" {
 		payload["traceId"] = score.TraceID
 	}
@@ -150,6 +166,19 @@ func (c *Client) scorePayload(score Score) ([]byte, error) {
 		return nil, errors.New("langfuse: score exceeds the 128 KiB payload limit")
 	}
 	return encoded, nil
+}
+
+// newScoreID returns a random UUID version 4 string. Generating the upsert
+// key client-side keeps asynchronous retries idempotent even when a delivery
+// succeeded but its response was lost.
+func newScoreID() (string, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", errors.New("langfuse: generate score ID")
+	}
+	raw[6] = raw[6]&0x0f | 0x40
+	raw[8] = raw[8]&0x3f | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", raw[0:4], raw[4:6], raw[6:8], raw[8:10], raw[10:16]), nil
 }
 
 func validScoreString(field, value string, emptyAllowed bool) error {

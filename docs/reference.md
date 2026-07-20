@@ -103,12 +103,24 @@ goroutines that end observations. One OTLP/HTTP request is capped at 4 MiB
 before compression; larger batches are split across requests, and only a span
 that alone exceeds the cap is dropped with a diagnostic.
 
+Scores accepted by `RecordScore` wait in their own bounded queue of 256
+serialized scores serviced by one background sender. Transient failures —
+network errors and HTTP 408, 429, and 5xx responses — are retried with
+exponential backoff and jitter (5-second initial interval, 30-second maximum,
+one minute in total, honoring `Retry-After`); other error statuses and an
+exhausted retry budget drop the score with a payload-free diagnostic. On a
+full score queue new scores are dropped with a diagnostic, and
+`Config.BlockOnQueueFull` opts into the same blocking backpressure as for
+observations.
+
 ## Flush and shutdown
 
 Long-running services should end in-flight observations and then call
-`Shutdown` during graceful termination. `Shutdown` flushes ended observations.
-Short-lived jobs and serverless handlers can call `Flush` before returning if
-the client must remain usable.
+`Shutdown` during graceful termination. `Shutdown` flushes ended observations
+and delivers queued scores; when its context ends first, undelivered scores
+are dropped with diagnostics. Short-lived jobs and serverless handlers can
+call `Flush` before returning if the client must remain usable; `Flush` also
+waits for queued scores, including one mid-retry, bounded by its context.
 
 In borrowed mode, shut down the Langfuse client before the application's
 tracer provider; the client never shuts down unrelated processors or

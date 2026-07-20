@@ -124,6 +124,45 @@ func TestDroppedAttributeOnEndDiagnosticCanReenterClientShutdown(t *testing.T) {
 	}
 }
 
+func TestScoreDropDiagnosticCanReenterClientShutdown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(server.Close)
+	client, err := New(context.Background(), Config{
+		BaseURL:   server.URL,
+		PublicKey: "pk-score-adversary",
+		SecretKey: "sk-score-adversary",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	handler := newShutdownDiagnosticHandler(client, "score dropped")
+	restoreOTelErrorHandler(t, handler)
+
+	rating := 1.0
+	if err := client.RecordScore(context.Background(), Score{
+		Name: "adversary", SessionID: "s", NumericValue: &rating,
+	}); err != nil {
+		t.Fatalf("RecordScore() error = %v", err)
+	}
+
+	select {
+	case <-handler.invoked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dropping a score never invoked the diagnostic handler")
+	}
+	select {
+	case err := <-handler.result:
+		if err != nil {
+			t.Fatalf("reentrant Shutdown() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the score-drop diagnostic handler's reentrant Shutdown call never returned")
+	}
+}
+
 func TestShutdownDeadlineIsNotBlockedByBackgroundFlush(t *testing.T) {
 	server := newBlockingOTLPServer()
 	t.Cleanup(server.close)

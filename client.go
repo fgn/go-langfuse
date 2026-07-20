@@ -141,10 +141,11 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	}
 
 	transportConfig := transport.Config{
-		BaseURL:    cfg.BaseURL,
-		PublicKey:  cfg.PublicKey,
-		SecretKey:  cfg.SecretKey,
-		SDKVersion: sdkVersion,
+		BaseURL:          cfg.BaseURL,
+		PublicKey:        cfg.PublicKey,
+		SecretKey:        cfg.SecretKey,
+		SDKVersion:       sdkVersion,
+		BlockOnQueueFull: cfg.BlockOnQueueFull,
 	}
 	if err := transport.ValidateConfig(transportConfig); err != nil {
 		return nil, err
@@ -314,7 +315,10 @@ func (c *Client) reportStoppedOnce() {
 	}
 }
 
-// Flush exports all ended observations currently queued by this Client.
+// Flush exports all ended observations and delivers every score accepted
+// before the call; scores recorded after Flush begins do not extend the wait.
+// A score mid-retry holds Flush until it is delivered or dropped, bounded by
+// ctx.
 func (c *Client) Flush(ctx context.Context) error {
 	if c == nil || c.isDisabled() || c.stopped.Load() {
 		return nil
@@ -322,14 +326,23 @@ func (c *Client) Flush(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("langfuse: flush context is nil")
 	}
+	// Start the score barrier immediately so it snapshots the scores accepted
+	// at the moment Flush was called; waiting for span flushing first would
+	// let scores recorded in the meantime extend the wait.
+	scoresDone := make(chan error, 1)
+	go func() { scoresDone <- c.scores.Flush(ctx) }()
+	var spanErr error
 	if c.owned {
-		return c.provider.ForceFlush(ctx)
+		spanErr = c.provider.ForceFlush(ctx)
+	} else {
+		spanErr = c.processor.ForceFlush(ctx)
 	}
-	return c.processor.ForceFlush(ctx)
+	return errors.Join(spanErr, <-scoresDone)
 }
 
-// Shutdown permanently stops this Client. In borrowed mode it shuts down the
-// Langfuse processor using ctx before unregistering it; the provider and all
+// Shutdown permanently stops this Client after draining queued observations
+// and scores, bounded by ctx. In borrowed mode it shuts down the Langfuse
+// processor using ctx before unregistering it; the provider and all
 // unrelated processors remain owned by the application.
 func (c *Client) Shutdown(ctx context.Context) error {
 	if c == nil || c.isDisabled() {
@@ -349,11 +362,11 @@ func (c *Client) Shutdown(ctx context.Context) error {
 	if c.owned {
 		flushErr := c.provider.ForceFlush(ctx)
 		shutdownErr := c.provider.Shutdown(ctx)
-		return errors.Join(flushErr, shutdownErr)
+		return errors.Join(flushErr, shutdownErr, c.scores.Shutdown(ctx))
 	}
 	flushErr := c.processor.ForceFlush(ctx)
 	shutdownErr := c.processor.Shutdown(ctx)
 	c.provider.UnregisterSpanProcessor(c.processor)
 	c.releaseReservation()
-	return errors.Join(flushErr, shutdownErr)
+	return errors.Join(flushErr, shutdownErr, c.scores.Shutdown(ctx))
 }
