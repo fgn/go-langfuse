@@ -346,6 +346,8 @@ func TestScoreWireValidationAndLifecycle(t *testing.T) {
 		"bad data type":          {Name: "n", SessionID: "s", NumericValue: &rating, DataType: "MOOD"},
 		"oversized name":         {Name: strings.Repeat("n", 201), SessionID: "s", NumericValue: &rating},
 		"oversized config ID":    {Name: "n", SessionID: "s", NumericValue: &rating, ConfigID: strings.Repeat("c", 201)},
+		"five-digit year":        {Name: "n", SessionID: "s", NumericValue: &rating, Timestamp: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)},
+		"negative year":          {Name: "n", SessionID: "s", NumericValue: &rating, Timestamp: time.Date(-1, 1, 1, 0, 0, 0, 0, time.UTC)},
 	}
 	for label, score := range invalid {
 		if err := client.RecordScore(context.Background(), score); err == nil {

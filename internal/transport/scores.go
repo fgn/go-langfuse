@@ -356,14 +356,28 @@ func (s *ScoresClient) post(ctx context.Context, payload []byte) (retryable bool
 		return true, 0, "the score request failed before a response"
 	}
 	defer func() { _ = response.Body.Close() }()
-	body, _ := io.ReadAll(io.LimitReader(response.Body, maxScoreResponseBytes))
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxScoreResponseBytes+1))
+	truncated := len(body) > maxScoreResponseBytes
 	if response.StatusCode < 300 {
-		status, failed := ingestionItemError(body)
-		if !failed {
+		// A 207 is the ingestion endpoint's documented response and its body
+		// is part of the delivery contract: an unreadable, truncated, or
+		// malformed result leaves the outcome unknown, so it is retried. Other
+		// 2xx statuses come from intermediaries or foreign deployments whose
+		// bodies carry no contract; they keep the previous status-only success
+		// rule unless a parsable body still reports an item error.
+		strict := response.StatusCode == http.StatusMultiStatus
+		result, parsed := parseIngestionResult(body)
+		if strict && (readErr != nil || truncated || !parsed) {
+			return true, 0, "the score ingestion response could not be read"
+		}
+		if !parsed || len(result.Errors) == 0 {
 			return false, 0, ""
 		}
+		status := result.Errors[0].Status
 		failure = "the score ingestion endpoint reported item status " + strconv.Itoa(status)
-		if retryableStatus(status) {
+		// An absent or zero item status leaves the outcome unknown; retry it
+		// like a transient failure rather than dropping the score.
+		if status == 0 || retryableStatus(status) {
 			return true, parseRetryAfter(response.Header.Get("Retry-After")), failure
 		}
 		return false, 0, failure
@@ -383,23 +397,23 @@ func retryableStatus(status int) bool {
 		(status >= 500 && status <= 599)
 }
 
-// ingestionItemError extracts the per-item error status from a 2xx ingestion
-// response. The endpoint returns 207 with successes and errors arrays, so for
-// a single-event request a non-empty errors array means the score was not
-// stored even though the HTTP exchange succeeded. Parsing is deliberately
-// lenient: a 2xx body that is not the documented JSON object is treated as
-// accepted, preserving the previous status-only success rule instead of
-// retrying against intermediaries that return empty or foreign 2xx bodies.
-func ingestionItemError(body []byte) (status int, failed bool) {
-	var parsed struct {
-		Errors []struct {
-			Status int `json:"status"`
-		} `json:"errors"`
+// ingestionResult is the documented shape of an ingestion 207 response. For a
+// single-event request a non-empty errors array means the score was not
+// stored even though the HTTP exchange succeeded.
+type ingestionResult struct {
+	Errors []struct {
+		Status int `json:"status"`
+	} `json:"errors"`
+}
+
+// parseIngestionResult reports whether body is the documented ingestion
+// result object.
+func parseIngestionResult(body []byte) (ingestionResult, bool) {
+	var result ingestionResult
+	if err := json.Unmarshal(body, &result); err != nil {
+		return ingestionResult{}, false
 	}
-	if err := json.Unmarshal(body, &parsed); err != nil || len(parsed.Errors) == 0 {
-		return 0, false
-	}
-	return parsed.Errors[0].Status, true
+	return result, true
 }
 
 // maxRetryAfter caps a server-requested delay. It exists to keep hostile or

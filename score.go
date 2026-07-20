@@ -63,7 +63,8 @@ type Score struct {
 	Metadata map[string]any
 	// Timestamp records when the scored interaction happened, for example
 	// when feedback is computed by a batch job hours after the trace. The
-	// zero value stamps the score with the time RecordScore accepted it.
+	// zero value stamps the score with the time RecordScore accepted it. The
+	// UTC year must stay within the four-digit RFC 3339 range.
 	Timestamp time.Time
 }
 
@@ -179,9 +180,13 @@ func (c *Client) scorePayload(score Score) ([]byte, error) {
 	// is how the official SDKs backdate scores. The envelope is serialized once
 	// here, so a retried delivery resends the identical event and stays
 	// idempotent through the event ID and the score ID upsert.
-	timestamp := score.Timestamp
-	if timestamp.IsZero() {
-		timestamp = time.Now()
+	timestamp := score.Timestamp.UTC()
+	if score.Timestamp.IsZero() {
+		timestamp = time.Now().UTC()
+	} else if year := timestamp.Year(); year < 0 || year > 9999 {
+		// RFC 3339 timestamps carry a four-digit year; anything else would
+		// serialize to an invalid wire value.
+		return nil, errors.New("langfuse: score timestamp year is outside the RFC 3339 range")
 	}
 	eventID, err := newScoreID()
 	if err != nil {
@@ -191,7 +196,7 @@ func (c *Client) scorePayload(score Score) ([]byte, error) {
 		"batch": []any{map[string]any{
 			"id":        eventID,
 			"type":      "score-create",
-			"timestamp": timestamp.UTC().Format(time.RFC3339Nano),
+			"timestamp": timestamp.Format(time.RFC3339Nano),
 			"body":      payload,
 		}},
 	}

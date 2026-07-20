@@ -152,7 +152,55 @@ func TestScoresTreatUnparsableSuccessBodiesAsAccepted(t *testing.T) {
 	}
 	flushScores(t, client)
 	if got := calls.Load(); got != 1 {
-		t.Fatalf("request count = %d, want 1 (a lenient 2xx body must not be retried)", got)
+		t.Fatalf("request count = %d, want 1 (a lenient non-207 2xx body must not be retried)", got)
+	}
+}
+
+func TestScoresRetryUnreadableMultiStatusResponses(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		if calls.Add(1) < 3 {
+			// A 207 body is part of the delivery contract; garbage leaves the
+			// outcome unknown and must be retried.
+			_, _ = w.Write([]byte(`not json`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"successes":[{"id":"e","status":201}],"errors":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	client := newScoresTestClient(t, server.URL, nil)
+
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	flushScores(t, client)
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("request count = %d, want 3 (two unreadable 207 bodies then success)", got)
+	}
+}
+
+func TestScoresRetryItemErrorsWithoutStatus(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		if calls.Add(1) < 2 {
+			_, _ = w.Write([]byte(`{"successes":[],"errors":[{"id":"e"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"successes":[{"id":"e","status":201}],"errors":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	client := newScoresTestClient(t, server.URL, nil)
+
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	flushScores(t, client)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("request count = %d, want 2 (a status-free item error must be retried, not dropped)", got)
 	}
 }
 
