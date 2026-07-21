@@ -34,7 +34,8 @@ func ExampleNew() {
 func ExampleConfigFromEnv() {
 	// ConfigFromEnv reads LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY,
 	// LANGFUSE_BASE_URL, LANGFUSE_TRACING_ENVIRONMENT, LANGFUSE_RELEASE,
-	// LANGFUSE_TRACING_ENABLED, and LANGFUSE_CONTENT_CAPTURE_ENABLED.
+	// LANGFUSE_SAMPLE_RATE, LANGFUSE_TRACING_ENABLED, and
+	// LANGFUSE_CONTENT_CAPTURE_ENABLED.
 	lf, err := langfuse.New(context.Background(), langfuse.ConfigFromEnv())
 	if err != nil {
 		log.Fatal(err)
@@ -173,6 +174,58 @@ func ExampleClient_Flush() {
 	if err := lf.Flush(flushCtx); err != nil {
 		log.Printf("flush: %v", err)
 	}
+}
+
+func ExampleClient_WithSampleRate() {
+	ctx := context.Background()
+	lf, err := langfuse.New(ctx, langfuse.ConfigFromEnv())
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Set the rate once per request, before the first observation. The whole
+	// trace is then kept or dropped together, so a high-volume path can run
+	// at 2% while other request types keep the configured default.
+	ctx = lf.WithSampleRate(ctx, 0.02)
+
+	observationCtx, observation := lf.StartObservation(ctx, "classify-request",
+		langfuse.TypeGeneration, langfuse.ObservationAttributes{})
+	defer observation.End()
+
+	if observation.Sampled() {
+		// Attach expensive payloads only when the trace is kept for export.
+		observation.Update(langfuse.ObservationAttributes{Input: "large payload"})
+	}
+	_ = observationCtx
+}
+
+func ExampleTraceSampledAt() {
+	// TraceSampledAt is deterministic: every caller agrees on the same trace,
+	// and a trace selected at a smaller fraction is always selected at a
+	// larger one. Gating an expensive evaluation at 2% therefore evaluates
+	// only traces that an export fraction of at least 2% also kept.
+	traceID := "0af7651916cd43dd8448eb211c80319c"
+
+	quarter, err := langfuse.TraceSampledAt(traceID, 0.25)
+	if err != nil {
+		log.Fatal(err)
+	}
+	majority, err := langfuse.TraceSampledAt(traceID, 0.6)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(quarter, majority)
+	// Output: false true
+}
+
+func ExamplePrompt_Compile() {
+	prompt := langfuse.Prompt{
+		Type: langfuse.PromptTypeText,
+		Text: "Summarize {{topic}} in one line.",
+	}
+	compiled := prompt.Compile(map[string]any{"topic": "Go context"})
+	fmt.Println(compiled.Text)
+	// Output: Summarize Go context in one line.
 }
 
 func retrieve(ctx context.Context, query string) ([]string, error) {
