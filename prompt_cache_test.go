@@ -509,7 +509,7 @@ func TestPromptCacheFallbackSnapshotIsolatedFromCallerMutation(t *testing.T) {
 	messages[0].Content = "mutated"
 	close(release)
 	prompt := <-done
-	if !prompt.Fallback || len(prompt.Messages) != 1 || prompt.Messages[0].Content != "original" {
+	if prompt.Source != langfuse.PromptSourceFallback || len(prompt.Messages) != 1 || prompt.Messages[0].Content != "original" {
 		t.Fatalf("fallback prompt = %+v, want the snapshot taken before mutation", prompt)
 	}
 }

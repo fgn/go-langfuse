@@ -84,6 +84,22 @@ func writePromptWire(w http.ResponseWriter, name string, version int, text strin
 	_, _ = w.Write(encoded)
 }
 
+func writeChatPromptWire(w http.ResponseWriter, name string, version int) {
+	encoded, err := json.Marshal(map[string]any{
+		"name":    name,
+		"version": version,
+		"type":    "chat",
+		"prompt": []map[string]string{
+			{"role": "user", "content": "Process {{input}}."},
+		},
+		"labels": []string{"production"},
+	})
+	if err != nil {
+		panic(err)
+	}
+	_, _ = w.Write(encoded)
+}
+
 func newPromptWireClient(t *testing.T) (*langfuse.Client, *promptWireReceiver, *promptClock) {
 	t.Helper()
 	receiver := &promptWireReceiver{}
@@ -131,7 +147,7 @@ func TestPromptWireFetchesAndCaches(t *testing.T) {
 		t.Fatalf("GetPrompt() error = %v", err)
 	}
 	if first.Name != "greeting" || first.Version != 1 || first.Type != langfuse.PromptTypeText ||
-		first.Text != "Hello {{name}}!" || first.Fallback {
+		first.Text != "Hello {{name}}!" || first.Source != langfuse.PromptSourceServer {
 		t.Fatalf("GetPrompt() = %+v, want the wire prompt", first)
 	}
 	if ref := first.Ref(); ref == nil || ref.Name != "greeting" || ref.Version != 1 {
@@ -143,6 +159,9 @@ func TestPromptWireFetchesAndCaches(t *testing.T) {
 	}
 	if second.Text != first.Text {
 		t.Fatalf("cached prompt text = %q, want %q", second.Text, first.Text)
+	}
+	if second.Source != langfuse.PromptSourceCache {
+		t.Fatalf("cached prompt source = %q, want %q", second.Source, langfuse.PromptSourceCache)
 	}
 	if got := receiver.count(); got != 1 {
 		t.Fatalf("request count = %d, want 1 (the second call must be served from cache)", got)
@@ -206,8 +225,8 @@ func TestPromptWireStaleServesOldValueAndRefreshes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPrompt() stale error = %v", err)
 	}
-	if stale.Version != 1 {
-		t.Fatalf("stale hit version = %d, want the old value 1 while refreshing", stale.Version)
+	if stale.Version != 1 || stale.Source != langfuse.PromptSourceStale {
+		t.Fatalf("stale hit = %+v, want the old value with stale source while refreshing", stale)
 	}
 	awaitPromptCondition(t, "background refresh request", func() bool { return receiver.count() >= 2 })
 	awaitPromptCondition(t, "refreshed value visible", func() bool {
@@ -374,6 +393,9 @@ func TestPromptWireDisableCacheBypassesReadsAndWrites(t *testing.T) {
 		if prompt.Version != 1 {
 			t.Fatalf("prompt version = %d, want 1", prompt.Version)
 		}
+		if prompt.Source != langfuse.PromptSourceServer {
+			t.Fatalf("prompt source = %q, want %q", prompt.Source, langfuse.PromptSourceServer)
+		}
 	}
 	if got := receiver.count(); got != 2 {
 		t.Fatalf("request count = %d, want 2 (DisableCache must not read the cache)", got)
@@ -399,7 +421,7 @@ func TestPromptWireFallbackOnFetchFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetPrompt() with fallback error = %v, want the fallback instead", err)
 	}
-	if !prompt.Fallback || prompt.Name != "greeting" || prompt.Version != 7 ||
+	if prompt.Source != langfuse.PromptSourceFallback || prompt.Name != "greeting" || prompt.Version != 7 ||
 		prompt.Type != langfuse.PromptTypeText || prompt.Text != "fallback body" {
 		t.Fatalf("fallback prompt = %+v, want the projected fallback", prompt)
 	}
@@ -414,6 +436,114 @@ func TestPromptWireFallbackOnFetchFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "status 400") ||
 		!strings.Contains(err.Error(), `"greeting"`) {
 		t.Fatalf("GetPrompt() without fallback error = %v, want the named status failure", err)
+	}
+}
+
+func TestPromptExpectedTypeMismatchOnFetch(t *testing.T) {
+	t.Parallel()
+	client, receiver, _ := newPromptWireClient(t)
+	receiver.setHandler(func(w http.ResponseWriter, r *http.Request, _ int) {
+		name := strings.TrimPrefix(r.URL.Path, "/api/public/v2/prompts/")
+		writeChatPromptWire(w, name, 1)
+	})
+
+	fallback, err := client.GetPrompt(context.Background(), "with-fallback", langfuse.PromptQuery{
+		Type:     langfuse.PromptTypeText,
+		Fallback: &langfuse.PromptFallback{Text: "local {{input}}"},
+	})
+	if err != nil {
+		t.Fatalf("GetPrompt(type mismatch with fallback) error = %v", err)
+	}
+	if fallback.Source != langfuse.PromptSourceFallback || fallback.Type != langfuse.PromptTypeText {
+		t.Fatalf("GetPrompt(type mismatch with fallback) = %+v, want the text fallback", fallback)
+	}
+
+	prompt, err := client.GetPrompt(context.Background(), "without-fallback", langfuse.PromptQuery{
+		Type: langfuse.PromptTypeText,
+	})
+	if !errors.Is(err, langfuse.ErrPromptTypeMismatch) {
+		t.Fatalf("GetPrompt(type mismatch) error = %v, want ErrPromptTypeMismatch", err)
+	}
+	if prompt.Name != "" || prompt.Version != 0 || prompt.Type != "" || prompt.Text != "" ||
+		prompt.Messages != nil || prompt.Config != nil || prompt.Labels != nil || prompt.Tags != nil ||
+		prompt.CommitMessage != "" || prompt.Source != "" {
+		t.Fatalf("GetPrompt(type mismatch) = %+v, want a zero Prompt", prompt)
+	}
+	if !strings.Contains(err.Error(), "without-fallback") ||
+		!strings.Contains(err.Error(), "chat") || !strings.Contains(err.Error(), "text") {
+		t.Fatalf("GetPrompt(type mismatch) error = %v, want the prompt name and type names", err)
+	}
+}
+
+func TestPromptExpectedTypeRechecksFreshCacheHit(t *testing.T) {
+	t.Parallel()
+	client, receiver, _ := newPromptWireClient(t)
+	receiver.setHandler(func(w http.ResponseWriter, _ *http.Request, _ int) {
+		writeChatPromptWire(w, "cached", 1)
+	})
+
+	seed, err := client.GetPrompt(context.Background(), "cached", langfuse.PromptQuery{})
+	if err != nil || seed.Type != langfuse.PromptTypeChat {
+		t.Fatalf("typeless GetPrompt() = (%+v, %v), want the chat prompt cached", seed, err)
+	}
+	_, err = client.GetPrompt(context.Background(), "cached", langfuse.PromptQuery{
+		Type: langfuse.PromptTypeText,
+	})
+	if !errors.Is(err, langfuse.ErrPromptTypeMismatch) {
+		t.Fatalf("typed cache hit error = %v, want ErrPromptTypeMismatch", err)
+	}
+	if got := receiver.count(); got != 1 {
+		t.Fatalf("request count = %d, want 1 (the typed call must re-check the shared cache entry)", got)
+	}
+}
+
+func TestPromptExpectedTypeRechecksStaleCacheHit(t *testing.T) {
+	t.Parallel()
+	client, receiver, clock := newPromptWireClient(t)
+	receiver.setHandler(func(w http.ResponseWriter, _ *http.Request, call int) {
+		writeChatPromptWire(w, "stale", call)
+	})
+	if _, err := client.GetPrompt(context.Background(), "stale", langfuse.PromptQuery{}); err != nil {
+		t.Fatalf("seed GetPrompt() error = %v", err)
+	}
+	clock.Advance(2 * time.Minute)
+	prompt, err := client.GetPrompt(context.Background(), "stale", langfuse.PromptQuery{
+		Type:     langfuse.PromptTypeText,
+		Fallback: &langfuse.PromptFallback{Text: "local"},
+	})
+	if err != nil || prompt.Source != langfuse.PromptSourceFallback {
+		t.Fatalf("typed stale hit = (%+v, %v), want the fallback", prompt, err)
+	}
+	awaitPromptCondition(t, "typed stale hit starts a refresh", func() bool { return receiver.count() == 2 })
+}
+
+func TestPromptExpectedTypeRejectsContradictoryFallback(t *testing.T) {
+	t.Parallel()
+	client, receiver, _ := newPromptWireClient(t)
+	cases := map[string]langfuse.PromptQuery{
+		"declared": {
+			Type: langfuse.PromptTypeText,
+			Fallback: &langfuse.PromptFallback{
+				Type:     langfuse.PromptTypeChat,
+				Messages: []langfuse.PromptMessage{},
+			},
+		},
+		"inferred chat": {
+			Type:     langfuse.PromptTypeText,
+			Fallback: &langfuse.PromptFallback{Messages: []langfuse.PromptMessage{}},
+		},
+		"inferred text": {
+			Type:     langfuse.PromptTypeChat,
+			Fallback: &langfuse.PromptFallback{Text: "local"},
+		},
+	}
+	for label, query := range cases {
+		if _, err := client.GetPrompt(context.Background(), "contradiction", query); !errors.Is(err, langfuse.ErrPromptTypeMismatch) {
+			t.Errorf("GetPrompt(%s contradiction) error = %v, want ErrPromptTypeMismatch", label, err)
+		}
+	}
+	if got := receiver.count(); got != 0 {
+		t.Fatalf("request count = %d, want 0 (fallback contradictions must be rejected before I/O)", got)
 	}
 }
 
@@ -477,18 +607,19 @@ func TestPromptWireValidationErrors(t *testing.T) {
 		name  string
 		query langfuse.PromptQuery
 	}{
-		"empty name":           {"", langfuse.PromptQuery{}},
-		"oversized name":       {strings.Repeat("n", 501), langfuse.PromptQuery{}},
-		"invalid name":         {"\xff", langfuse.PromptQuery{}},
-		"negative version":     {"n", langfuse.PromptQuery{Version: -1}},
-		"version and label":    {"n", langfuse.PromptQuery{Version: 1, Label: "production"}},
-		"oversized label":      {"n", langfuse.PromptQuery{Label: strings.Repeat("l", 201)}},
-		"negative ttl":         {"n", langfuse.PromptQuery{CacheTTL: -time.Second}},
-		"negative ttl nocache": {"n", langfuse.PromptQuery{CacheTTL: -time.Second, DisableCache: true}},
-		"fallback both":        {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Text: "t", Messages: []langfuse.PromptMessage{{Role: "user"}}}}},
-		"fallback type clash":  {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Type: langfuse.PromptTypeChat, Text: "t"}}},
-		"fallback bad type":    {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Type: "image"}}},
-		"fallback bad config":  {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Text: "t", Config: json.RawMessage("{")}}},
+		"empty name":            {"", langfuse.PromptQuery{}},
+		"oversized name":        {strings.Repeat("n", 501), langfuse.PromptQuery{}},
+		"invalid name":          {"\xff", langfuse.PromptQuery{}},
+		"negative version":      {"n", langfuse.PromptQuery{Version: -1}},
+		"version and label":     {"n", langfuse.PromptQuery{Version: 1, Label: "production"}},
+		"oversized label":       {"n", langfuse.PromptQuery{Label: strings.Repeat("l", 201)}},
+		"negative ttl":          {"n", langfuse.PromptQuery{CacheTTL: -time.Second}},
+		"negative ttl nocache":  {"n", langfuse.PromptQuery{CacheTTL: -time.Second, DisableCache: true}},
+		"invalid expected type": {"n", langfuse.PromptQuery{Type: "image"}},
+		"fallback both":         {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Text: "t", Messages: []langfuse.PromptMessage{{Role: "user"}}}}},
+		"fallback type clash":   {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Type: langfuse.PromptTypeChat, Text: "t"}}},
+		"fallback bad type":     {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Type: "image"}}},
+		"fallback bad config":   {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Text: "t", Config: json.RawMessage("{")}}},
 		"fallback bad message": {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{
 			Messages: []langfuse.PromptMessage{{Content: "no role"}},
 		}}},
@@ -519,7 +650,7 @@ func TestPromptWireDisabledAndNilClients(t *testing.T) {
 	for label, client := range map[string]*langfuse.Client{"disabled": disabled, "nil": nil} {
 		prompt, err := client.GetPrompt(context.Background(), "greeting",
 			langfuse.PromptQuery{Fallback: fallback})
-		if err != nil || !prompt.Fallback || prompt.Text != "fb" {
+		if err != nil || prompt.Source != langfuse.PromptSourceFallback || prompt.Text != "fb" {
 			t.Fatalf("%s client with fallback = (%+v, %v), want the fallback", label, prompt, err)
 		}
 		if _, err := client.GetPrompt(context.Background(), "greeting", langfuse.PromptQuery{}); err == nil {
@@ -593,7 +724,7 @@ func TestPromptWireShutdownCancelsFlightsAndRejects(t *testing.T) {
 	}
 	prompt, err := client.GetPrompt(context.Background(), "greeting",
 		langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Text: "fb"}})
-	if err != nil || !prompt.Fallback {
+	if err != nil || prompt.Source != langfuse.PromptSourceFallback {
 		t.Fatalf("GetPrompt() after Shutdown with fallback = (%+v, %v), want the fallback", prompt, err)
 	}
 	close(release)

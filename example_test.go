@@ -46,6 +46,24 @@ func ExampleConfigFromEnv() {
 	}()
 }
 
+func ExampleClient_GetPrompt() {
+	// Client setup may be optional in an application. GetPrompt remains safe
+	// when the client is nil, so the call site needs no separate nil branch.
+	var lf *langfuse.Client
+	prompt, err := lf.GetPrompt(context.Background(), "response-template", langfuse.PromptQuery{
+		Type:     langfuse.PromptTypeText,
+		Fallback: &langfuse.PromptFallback{Text: "Process {{input}}."},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(prompt.Text)
+	fmt.Println(prompt.Source)
+	// Output:
+	// Process {{input}}.
+	// fallback
+}
+
 func ExampleClient_Observe() {
 	ctx := context.Background()
 	lf, err := langfuse.New(ctx, langfuse.ConfigFromEnv())

@@ -32,10 +32,13 @@ var (
 	_ func(*langfuse.Observation) string                          = (*langfuse.Observation).TraceID
 	_ func(*langfuse.Observation) string                          = (*langfuse.Observation).ID
 
-	_ func(langfuse.Prompt) *langfuse.PromptRef             = langfuse.Prompt.Ref
-	_ func(langfuse.Prompt, map[string]any) langfuse.Prompt = langfuse.Prompt.Compile
+	_ func(langfuse.Prompt) *langfuse.PromptRef                      = langfuse.Prompt.Ref
+	_ func(langfuse.Prompt, map[string]any) langfuse.Prompt          = langfuse.Prompt.Compile
+	_ func(langfuse.Prompt, map[string]any) (langfuse.Prompt, error) = langfuse.Prompt.CompileStrict
+	_ func(langfuse.Prompt, any) error                               = langfuse.Prompt.DecodeConfig
 
 	_ error = langfuse.ErrPromptNotFound
+	_ error = langfuse.ErrPromptTypeMismatch
 )
 
 func TestPublicMethodSurface(t *testing.T) {
@@ -61,6 +64,8 @@ func TestPublicMethodSurface(t *testing.T) {
 	})
 	assertMethodNames(t, langfuse.Prompt{}, []string{
 		"Compile",
+		"CompileStrict",
+		"DecodeConfig",
 		"Ref",
 	})
 }
@@ -132,6 +137,7 @@ func TestPublicStructSurface(t *testing.T) {
 	assertFieldNames(t, langfuse.PromptQuery{}, []string{
 		"Version",
 		"Label",
+		"Type",
 		"CacheTTL",
 		"DisableCache",
 		"Fallback",
@@ -158,7 +164,7 @@ func TestPublicStructSurface(t *testing.T) {
 		"Labels",
 		"Tags",
 		"CommitMessage",
-		"Fallback",
+		"Source",
 	})
 
 	assertNoExportedFields(t, langfuse.Client{})
@@ -218,6 +224,18 @@ func TestPublicConstantValues(t *testing.T) {
 	for got, want := range promptTypes {
 		if string(got) != want {
 			t.Errorf("prompt type %q = %q, want %q", want, got, want)
+		}
+	}
+
+	promptSources := map[langfuse.PromptSource]string{
+		langfuse.PromptSourceServer:   "server",
+		langfuse.PromptSourceCache:    "cache",
+		langfuse.PromptSourceStale:    "stale",
+		langfuse.PromptSourceFallback: "fallback",
+	}
+	for got, want := range promptSources {
+		if string(got) != want {
+			t.Errorf("prompt source %q = %q, want %q", want, got, want)
 		}
 	}
 }
