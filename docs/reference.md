@@ -193,9 +193,12 @@ reports an error.
 
 `DecodeConfig` unmarshals `Prompt.Config` into a caller-provided target. An
 empty config is a no-op, so callers can initialize defaults before applying
-the prompt-owned fields; malformed JSON and invalid targets return a wrapped
-decode error. Warm the cache during startup with one `GetPrompt` call per
-prompt when guaranteed availability matters.
+the prompt-owned fields. Because the config is server-controlled, a decode
+failure discloses only the caller-owned target type and a fixed category
+(`invalid target` or `incompatible config`); the underlying `encoding/json`
+error is intentionally not wrapped, so its text cannot echo config values
+into a caller-logged error. Warm the cache during startup with one
+`GetPrompt` call per prompt when guaranteed availability matters.
 
 ## Buffering and backpressure
 
