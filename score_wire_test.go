@@ -147,7 +147,7 @@ func TestScoreWireSubmitsAuthenticatedJSON(t *testing.T) {
 	err := client.RecordScore(context.Background(), langfuse.Score{
 		ID:           "feedback-42",
 		Name:         "user-feedback",
-		SessionID:    "consultation:609",
+		SessionID:    "conversation:609",
 		NumericValue: &rating,
 		DataType:     langfuse.ScoreTypeNumeric,
 		Comment:      "clear report",
@@ -179,7 +179,7 @@ func TestScoreWireSubmitsAuthenticatedJSON(t *testing.T) {
 	want := map[string]any{
 		"id":          "feedback-42",
 		"name":        "user-feedback",
-		"sessionId":   "consultation:609",
+		"sessionId":   "conversation:609",
 		"value":       4.0,
 		"dataType":    "NUMERIC",
 		"comment":     "clear report",
@@ -219,7 +219,7 @@ func TestScoreWireTimestampAndConfigID(t *testing.T) {
 	before := time.Now()
 	err := client.RecordScore(context.Background(), langfuse.Score{
 		Name:         "report-quality",
-		SessionID:    "consultation:610",
+		SessionID:    "conversation:610",
 		NumericValue: &rating,
 		ConfigID:     "config-123",
 		Timestamp:    backdated,
@@ -229,7 +229,7 @@ func TestScoreWireTimestampAndConfigID(t *testing.T) {
 	}
 	err = client.RecordScore(context.Background(), langfuse.Score{
 		Name:         "report-quality",
-		SessionID:    "consultation:611",
+		SessionID:    "conversation:611",
 		NumericValue: &rating,
 	})
 	if err != nil {
