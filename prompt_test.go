@@ -271,6 +271,19 @@ func TestPromptDecodeConfig(t *testing.T) {
 	if err := prompt.DecodeConfig(promptConfig{}); err == nil || !strings.Contains(err.Error(), "decode prompt config") {
 		t.Fatalf("DecodeConfig(non-pointer) error = %v, want a clear target error", err)
 	}
+
+	// The config is server-controlled, so a decode failure must not echo its
+	// content into the error a caller may log. A value that overflows the
+	// target would otherwise appear verbatim in encoding/json's message.
+	canary := "987654321012345678901"
+	overflow := langfuse.Prompt{Config: json.RawMessage(`{"limit":` + canary + `}`)}
+	err := overflow.DecodeConfig(&promptConfig{})
+	if err == nil {
+		t.Fatal("DecodeConfig(overflowing config) error = nil, want an incompatible-config error")
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Fatalf("DecodeConfig error = %q, must not contain the server config value %q", err, canary)
+	}
 }
 
 func TestPromptRef(t *testing.T) {

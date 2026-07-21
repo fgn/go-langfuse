@@ -73,7 +73,10 @@ type PromptQuery struct {
 	Label string
 	// Type requires the resolved prompt to have this shape. Empty accepts
 	// either text or chat. A mismatch is resolved through Fallback when set
-	// and otherwise returns ErrPromptTypeMismatch.
+	// and otherwise returns ErrPromptTypeMismatch. Type filters per call: it
+	// is not part of the cache key and does not suppress the shared entry's
+	// background refresh, so a differently typed caller still keeps the entry
+	// fresh.
 	Type PromptType
 	// CacheTTL overrides the 60-second default freshness window for this
 	// call. Zero means the default; negative values are rejected. Freshness
@@ -357,12 +360,22 @@ func validPromptMessage(message PromptMessage) error {
 
 // DecodeConfig decodes Config into v. An absent config is a no-op, allowing
 // callers to set defaults on v before decoding prompt-owned overrides.
+//
+// The prompt config is server-controlled, so a decode failure is reported
+// through payload-free categories that name only the caller-owned target
+// type: the underlying encoding/json error is never wrapped or surfaced,
+// because its text can echo config values or offending bytes into an error
+// callers routinely log.
 func (p Prompt) DecodeConfig(v any) error {
 	if len(p.Config) == 0 {
 		return nil
 	}
 	if err := json.Unmarshal(p.Config, v); err != nil {
-		return fmt.Errorf("langfuse: decode prompt config: %w", err)
+		var invalid *json.InvalidUnmarshalError
+		if errors.As(err, &invalid) {
+			return fmt.Errorf("langfuse: decode prompt config: invalid target %T", v)
+		}
+		return fmt.Errorf("langfuse: decode prompt config into %T: incompatible config", v)
 	}
 	return nil
 }
