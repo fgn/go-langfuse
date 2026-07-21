@@ -118,6 +118,53 @@ provider):
   trusted callbacks: their output is still rejected above 1 MiB, but work
   inside the callback cannot be bounded by the SDK.
 - A serialized score event is limited to 128 KiB.
+- A prompt response body and a prompt fallback: 1 MiB each. Prompt names: 500
+  bytes; labels: 200 characters (local wire-safety bounds, not Langfuse
+  validation — the server is stricter for labels).
+
+## Prompt management
+
+`GetPrompt` fetches one prompt version from `GET /api/public/v2/prompts` and
+caches it in memory. Selection is by exact `Version` or by `Label` (defaulting
+to `production`); the two are mutually exclusive. The returned `Prompt` is an
+independent deep copy, safe to retain or modify; `Ref()` yields the
+`PromptRef` that links a generation to the exact prompt version, and returns
+nil for fallback-built values so they are never linked.
+
+Caching semantics, per cache key (name plus version or label):
+
+- A fresh entry (age within `CacheTTL`, default 60 seconds) is returned from
+  memory with no I/O. Freshness is judged against the age of the entry at
+  call time, so callers using different TTLs share one entry — a deliberate
+  divergence from the official SDKs, which stamp an expiry at insert.
+- An expired entry is returned immediately while one background refresh per
+  key runs (stale-while-revalidate). A failed refresh keeps serving the stale
+  value, emits one payload-free diagnostic, and suppresses further refreshes
+  of that key for 10 seconds; a refresh answered with 404 evicts the entry.
+- A cache miss fetches synchronously, bounded by the caller's context and a
+  10-second fetch budget covering up to two retries of 408/429/5xx and
+  network failures (500 ms then 1 s backoff with jitter, honoring
+  `Retry-After` within the budget). Concurrent misses for the same key share
+  one fetch; a caller whose context ends leaves immediately with its context
+  error while the shared fetch completes for the rest.
+- `DisableCache` forces an independent fetch with no cache read or write.
+- The cache holds at most 256 entries (least-recently-used eviction), runs at
+  most 8 background refreshes and 64 foreground fetches concurrently, and
+  drains all of them during `Shutdown`.
+
+`Fallback` supplies a local prompt body returned when the fetch fails and
+nothing is cached, so a hardcoded prompt guarantees availability; fallback
+results are never cached and never linked. A caller's context cancellation is
+always returned as an error, never masked by a fallback. 404 failures wrap
+`ErrPromptNotFound` for `errors.Is`.
+
+`Compile` substitutes `{{variable}}` occurrences (string values verbatim,
+other values JSON-encoded) and fills chat placeholder messages from
+`[]PromptMessage` variables — an empty slice removes the placeholder, an
+invalid message list leaves it unchanged. Unresolved variables and unfilled
+placeholders stay verbatim, matching the Python SDK, and `Compile` never
+fails or panics. Warm the cache during startup with one `GetPrompt` call per
+prompt when guaranteed availability matters.
 
 ## Buffering and backpressure
 

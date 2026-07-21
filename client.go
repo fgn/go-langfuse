@@ -50,6 +50,7 @@ type Client struct {
 	provider    *sdktrace.TracerProvider
 	processor   *lfprocessor.Processor
 	scores      *transport.ScoresClient
+	prompts     *promptCache
 	environment string
 	owned       bool
 	reserved    bool
@@ -161,6 +162,11 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, err
 	}
 	client.scores = scores
+	promptFetcher, err := transport.NewPromptsClient(transportConfig)
+	if err != nil {
+		return nil, err
+	}
+	client.prompts = newPromptCache(promptFetcher)
 	if cfg.TracerProvider != nil {
 		if !reserveBorrowedProvider(cfg.TracerProvider, client) {
 			diagnostic.Report("a Langfuse client is already attached to this tracer provider; duplicate client is disabled")
@@ -359,14 +365,19 @@ func (c *Client) Shutdown(ctx context.Context) error {
 		return nil
 	}
 	c.stopped.Store(true)
+	// Stop prompt admission and cancel prompt I/O before the potentially
+	// blocking OpenTelemetry teardown below, so no prompt fetch or refresh
+	// can start or keep running once shutdown has begun; the drain itself
+	// waits at the end alongside the score queue.
+	c.prompts.beginShutdown()
 	if c.owned {
 		flushErr := c.provider.ForceFlush(ctx)
 		shutdownErr := c.provider.Shutdown(ctx)
-		return errors.Join(flushErr, shutdownErr, c.scores.Shutdown(ctx))
+		return errors.Join(flushErr, shutdownErr, c.scores.Shutdown(ctx), c.prompts.shutdown(ctx))
 	}
 	flushErr := c.processor.ForceFlush(ctx)
 	shutdownErr := c.processor.Shutdown(ctx)
 	c.provider.UnregisterSpanProcessor(c.processor)
 	c.releaseReservation()
-	return errors.Join(flushErr, shutdownErr, c.scores.Shutdown(ctx))
+	return errors.Join(flushErr, shutdownErr, c.scores.Shutdown(ctx), c.prompts.shutdown(ctx))
 }

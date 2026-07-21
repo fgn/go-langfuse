@@ -61,6 +61,7 @@ tasks:
       - go test -mod=readonly ./internal/attributes -run='^$' -fuzz=FuzzEncode -fuzztime=2s
       - go test -mod=readonly ./internal/attributes -run='^$' -fuzz=FuzzNormalizeUsage -fuzztime=2s
       - go test -mod=readonly ./internal/transport -run='^$' -fuzz=FuzzNormalizeEndpoint -fuzztime=2s
+      - go test -mod=readonly . -run='^$' -fuzz=FuzzPromptCompile -fuzztime=2s
 
   vuln:check:
     desc: Scan dependencies for known vulnerabilities
