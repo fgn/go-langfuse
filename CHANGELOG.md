@@ -5,6 +5,8 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-21
+
 - Add deterministic trace sampling for isolated mode: `Config.SampleRate`
   (`LANGFUSE_SAMPLE_RATE`, `[0, 1]`) sets the default fraction and
   `Client.WithSampleRate` overrides it per context path, so one process can
