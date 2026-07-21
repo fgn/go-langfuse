@@ -241,6 +241,11 @@ func TestPromptWireRefreshFailureCoolsDownAndKeepsStale(t *testing.T) {
 		t.Fatalf("stale hit = (%+v, %v), want the cached version despite the failing refresh", stale, err)
 	}
 	awaitPromptCondition(t, "failed refresh request", func() bool { return receiver.count() == 2 })
+	// Wait until the failed refresh has recorded its cooldown, rather than
+	// sleeping and hoping the worker got there.
+	awaitPromptCondition(t, "cooldown recorded", func() bool {
+		return langfuse.ProductionPromptCoolingDown(client, "greeting")
+	})
 
 	// Within the cooldown no further refresh is admitted.
 	for range 5 {
@@ -248,7 +253,6 @@ func TestPromptWireRefreshFailureCoolsDownAndKeepsStale(t *testing.T) {
 			t.Fatalf("GetPrompt() during cooldown error = %v", err)
 		}
 	}
-	time.Sleep(50 * time.Millisecond)
 	if got := receiver.count(); got != 2 {
 		t.Fatalf("request count = %d, want 2 (cooldown must suppress refresh attempts)", got)
 	}
@@ -327,7 +331,9 @@ func TestPromptWireCanceledWaiterLeavesFlight(t *testing.T) {
 		_, err := client.GetPrompt(context.Background(), "greeting", langfuse.PromptQuery{})
 		steady <- err
 	}()
-	awaitPromptCondition(t, "flight request started", func() bool { return receiver.count() == 1 })
+	awaitPromptCondition(t, "flight started with one waiter", func() bool {
+		return langfuse.ProductionFlightWaiters(client, "greeting") == 1
+	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	canceled := make(chan error, 1)
@@ -335,7 +341,11 @@ func TestPromptWireCanceledWaiterLeavesFlight(t *testing.T) {
 		_, err := client.GetPrompt(ctx, "greeting", langfuse.PromptQuery{})
 		canceled <- err
 	}()
-	time.Sleep(10 * time.Millisecond)
+	// Wait until the second caller has actually joined the shared flight
+	// before canceling, rather than relying on a sleep.
+	awaitPromptCondition(t, "second caller joined the flight", func() bool {
+		return langfuse.ProductionFlightWaiters(client, "greeting") == 2
+	})
 	cancel()
 	select {
 	case err := <-canceled:
@@ -431,18 +441,33 @@ func TestPromptWireCancellationBeatsFallback(t *testing.T) {
 	}
 }
 
-func TestPromptWireStaleHitIgnoresCanceledContext(t *testing.T) {
+func TestPromptWireCacheHitIgnoresCanceledContext(t *testing.T) {
 	t.Parallel()
-	client, _, _ := newPromptWireClient(t)
+	client, receiver, clock := newPromptWireClient(t)
+	receiver.setHandler(func(w http.ResponseWriter, _ *http.Request, call int) {
+		writePromptWire(w, "greeting", call, "v")
+	})
 	if _, err := client.GetPrompt(context.Background(), "greeting", langfuse.PromptQuery{}); err != nil {
 		t.Fatalf("GetPrompt() error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	prompt, err := client.GetPrompt(ctx, "greeting", langfuse.PromptQuery{})
-	if err != nil || prompt.Version != 1 {
-		t.Fatalf("cache hit with canceled ctx = (%+v, %v), want the local value", prompt, err)
+
+	// A fresh hit ignores the canceled context.
+	fresh, err := client.GetPrompt(ctx, "greeting", langfuse.PromptQuery{})
+	if err != nil || fresh.Version != 1 {
+		t.Fatalf("fresh hit with canceled ctx = (%+v, %v), want the local value", fresh, err)
 	}
+
+	// A stale hit also ignores cancellation: it returns the cached value and
+	// still admits the background refresh, rather than failing on ctx.
+	clock.Advance(2 * time.Minute)
+	stale, err := client.GetPrompt(ctx, "greeting", langfuse.PromptQuery{})
+	if err != nil || stale.Version != 1 {
+		t.Fatalf("stale hit with canceled ctx = (%+v, %v), want the cached value", stale, err)
+	}
+	awaitPromptCondition(t, "stale hit still refreshed despite cancellation",
+		func() bool { return receiver.count() == 2 })
 }
 
 func TestPromptWireValidationErrors(t *testing.T) {
@@ -452,17 +477,18 @@ func TestPromptWireValidationErrors(t *testing.T) {
 		name  string
 		query langfuse.PromptQuery
 	}{
-		"empty name":          {"", langfuse.PromptQuery{}},
-		"oversized name":      {strings.Repeat("n", 501), langfuse.PromptQuery{}},
-		"invalid name":        {"\xff", langfuse.PromptQuery{}},
-		"negative version":    {"n", langfuse.PromptQuery{Version: -1}},
-		"version and label":   {"n", langfuse.PromptQuery{Version: 1, Label: "production"}},
-		"oversized label":     {"n", langfuse.PromptQuery{Label: strings.Repeat("l", 201)}},
-		"negative ttl":        {"n", langfuse.PromptQuery{CacheTTL: -time.Second}},
-		"fallback both":       {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Text: "t", Messages: []langfuse.PromptMessage{{Role: "user"}}}}},
-		"fallback type clash": {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Type: langfuse.PromptTypeChat, Text: "t"}}},
-		"fallback bad type":   {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Type: "image"}}},
-		"fallback bad config": {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Text: "t", Config: json.RawMessage("{")}}},
+		"empty name":           {"", langfuse.PromptQuery{}},
+		"oversized name":       {strings.Repeat("n", 501), langfuse.PromptQuery{}},
+		"invalid name":         {"\xff", langfuse.PromptQuery{}},
+		"negative version":     {"n", langfuse.PromptQuery{Version: -1}},
+		"version and label":    {"n", langfuse.PromptQuery{Version: 1, Label: "production"}},
+		"oversized label":      {"n", langfuse.PromptQuery{Label: strings.Repeat("l", 201)}},
+		"negative ttl":         {"n", langfuse.PromptQuery{CacheTTL: -time.Second}},
+		"negative ttl nocache": {"n", langfuse.PromptQuery{CacheTTL: -time.Second, DisableCache: true}},
+		"fallback both":        {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Text: "t", Messages: []langfuse.PromptMessage{{Role: "user"}}}}},
+		"fallback type clash":  {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Type: langfuse.PromptTypeChat, Text: "t"}}},
+		"fallback bad type":    {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Type: "image"}}},
+		"fallback bad config":  {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{Text: "t", Config: json.RawMessage("{")}}},
 		"fallback bad message": {"n", langfuse.PromptQuery{Fallback: &langfuse.PromptFallback{
 			Messages: []langfuse.PromptMessage{{Content: "no role"}},
 		}}},

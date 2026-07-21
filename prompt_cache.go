@@ -76,8 +76,13 @@ type promptFlight struct {
 type promptCache struct {
 	fetcher *transport.PromptsClient
 	// now is a test seam; production uses time.Now.
-	now       func() time.Time
-	diagSlots chan struct{}
+	now func() time.Time
+	// refreshCommitHook is a test seam fired inside refresh after the fetch
+	// returns and before the commit lock, so a test can drive the exact
+	// evict-then-miss schedule the generation guard defends against. Nil in
+	// production.
+	refreshCommitHook func(promptKey)
+	diagSlots         chan struct{}
 
 	// newFetchContext derives one fetch's context: bounded by the fetch
 	// budget, canceled by client shutdown, and — when parent is non-nil — by
@@ -164,16 +169,39 @@ func (pc *promptCache) get(ctx context.Context, name string, query PromptQuery, 
 			pc.mu.Unlock()
 			return deepCopyPrompt(master), nil
 		}
+		pc.mu.Unlock()
+		// A miss is a blocking path, so caller cancellation wins over any
+		// admission outcome: check it before admitting, and before resolving
+		// an admission error, so a pre-canceled caller never receives a
+		// fallback or the overload error in place of its context error.
+		if err := ctx.Err(); err != nil {
+			return Prompt{}, fmt.Errorf("langfuse: prompt fetch canceled: %w", err)
+		}
+		pc.mu.Lock()
+		// Re-check the entry: a concurrent flight may have committed it while
+		// the lock was released.
+		if _, ok := pc.entries[key]; ok {
+			pc.mu.Unlock()
+			continue
+		}
 		flight, joined, err := pc.joinOrStartFlightLocked(key)
 		pc.mu.Unlock()
 		if err != nil {
+			if cerr := ctx.Err(); cerr != nil {
+				return Prompt{}, fmt.Errorf("langfuse: prompt fetch canceled: %w", cerr)
+			}
 			return promptFromFallback(name, query.Version, fallback, err)
 		}
 		if !joined {
 			// The existing flight was abandoned (its context is canceled).
-			// Wait for its worker to release the key, then retry admission.
+			// Wait for its worker to release the key, then retry admission —
+			// rechecking cancellation before looping so a caller whose
+			// context ended does not consume the newly cached value.
 			select {
 			case <-flight.done:
+				if cerr := ctx.Err(); cerr != nil {
+					return Prompt{}, fmt.Errorf("langfuse: prompt fetch canceled: %w", cerr)
+				}
 				continue
 			case <-ctx.Done():
 				return Prompt{}, fmt.Errorf("langfuse: prompt fetch canceled: %w", ctx.Err())
@@ -273,6 +301,11 @@ func (pc *promptCache) leaveFlight(flight *promptFlight) {
 // write, or flight sharing, canceled by whichever of the caller's context,
 // the fetch budget, or the client lifecycle ends first.
 func (pc *promptCache) fetchDirect(ctx context.Context, key promptKey, version int, fallback *promptFallbackValue) (Prompt, error) {
+	// Caller cancellation wins over admission: a pre-canceled caller returns
+	// its context error rather than a fallback or the overload error.
+	if err := ctx.Err(); err != nil {
+		return Prompt{}, fmt.Errorf("langfuse: prompt fetch canceled: %w", err)
+	}
 	pc.mu.Lock()
 	if pc.closing {
 		pc.mu.Unlock()
@@ -280,6 +313,9 @@ func (pc *promptCache) fetchDirect(ctx context.Context, key promptKey, version i
 	}
 	if pc.foreground >= maxPromptForeground {
 		pc.mu.Unlock()
+		if cerr := ctx.Err(); cerr != nil {
+			return Prompt{}, fmt.Errorf("langfuse: prompt fetch canceled: %w", cerr)
+		}
 		return promptFromFallback(key.name, version, fallback,
 			errors.New("langfuse: too many concurrent prompt fetches"))
 	}
@@ -296,10 +332,13 @@ func (pc *promptCache) fetchDirect(ctx context.Context, key promptKey, version i
 	fetchCtx, cancel := pc.newFetchContext(ctx)
 	defer cancel()
 	wire, err := pc.fetcher.Fetch(fetchCtx, key.name, key.version, key.label)
+	// Check the caller context unconditionally before returning: a response
+	// that completes concurrently with cancellation must not be handed back
+	// after the caller has already given up.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return Prompt{}, fmt.Errorf("langfuse: prompt fetch canceled: %w", ctxErr)
+	}
 	if err != nil {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return Prompt{}, fmt.Errorf("langfuse: prompt fetch canceled: %w", ctxErr)
-		}
 		return promptFromFallback(key.name, version, fallback, wrapPromptError(key.name, err))
 	}
 	// The result is unshared, so no defensive copy is needed.
@@ -360,6 +399,9 @@ func (pc *promptCache) refresh(key promptKey, entry *promptEntry, generation uin
 	fetchCtx, cancel := pc.newFetchContext(nil)
 	defer cancel()
 	wire, err := pc.fetcher.Fetch(fetchCtx, key.name, key.version, key.label)
+	if pc.refreshCommitHook != nil {
+		pc.refreshCommitHook(key)
+	}
 
 	pc.mu.Lock()
 	pc.refreshing--

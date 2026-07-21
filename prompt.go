@@ -36,7 +36,15 @@ const (
 	maxPromptNameBytes  = 500
 	maxPromptLabelChars = 200
 	maxPromptBodyBytes  = 1 << 20
-	defaultPromptLabel  = "production"
+	// maxPromptFallbackMessages caps a chat fallback's message count so a
+	// pathological slice of tiny messages cannot pass the byte budget and
+	// then force a large deep copy. A real chat prompt has far fewer.
+	maxPromptFallbackMessages = 4096
+	// promptMessageOverhead approximates one chat message's JSON structural
+	// cost (braces, quoted keys, separators) so the byte budget reflects the
+	// encoded size rather than only field payloads.
+	promptMessageOverhead = 64
+	defaultPromptLabel    = "production"
 )
 
 // PromptQuery selects a prompt version and controls caching. The zero value
@@ -137,10 +145,15 @@ func (p Prompt) Ref() *PromptRef {
 // shut-down client returns the fallback when set and an error otherwise; a
 // nil ctx or invalid query is always an error.
 func (c *Client) GetPrompt(ctx context.Context, name string, query PromptQuery) (Prompt, error) {
-	// Validation runs before the disabled-client short circuit so a broken
-	// query fails deterministically in every environment.
+	// Validation and the nil-context check run before every unavailable-
+	// client or fallback short circuit: an invalid query or a nil context is
+	// always a synchronous error, never masked by a fallback, in every
+	// environment.
 	if err := validatePromptQuery(name, query); err != nil {
 		return Prompt{}, err
+	}
+	if ctx == nil {
+		return Prompt{}, errors.New("langfuse: prompt context is nil")
 	}
 	var fallback *promptFallbackValue
 	if query.Fallback != nil {
@@ -153,9 +166,6 @@ func (c *Client) GetPrompt(ctx context.Context, name string, query PromptQuery) 
 	if c == nil || c.isDisabled() || c.prompts == nil {
 		return promptFromFallback(name, query.Version, fallback,
 			errors.New("langfuse: prompt requested on a disabled client"))
-	}
-	if ctx == nil {
-		return Prompt{}, errors.New("langfuse: prompt context is nil")
 	}
 	if c.stopped.Load() {
 		return promptFromFallback(name, query.Version, fallback,
@@ -234,18 +244,30 @@ func normalizePromptFallback(fallback PromptFallback) (promptFallbackValue, erro
 	if promptType == PromptTypeChat && fallback.Text != "" {
 		return promptFallbackValue{}, errors.New("langfuse: a chat prompt fallback must not carry text")
 	}
-	size := len(fallback.Text) + len(fallback.Config)
 	if !utf8.ValidString(fallback.Text) {
 		return promptFallbackValue{}, errors.New("langfuse: prompt fallback text is not valid UTF-8")
 	}
+	if len(fallback.Config) > 0 {
+		if !json.Valid(fallback.Config) || !utf8.Valid(fallback.Config) {
+			return promptFallbackValue{}, errors.New("langfuse: prompt fallback config must be valid UTF-8 JSON")
+		}
+	}
+	if len(fallback.Messages) > maxPromptFallbackMessages {
+		return promptFallbackValue{}, errors.New("langfuse: prompt fallback carries too many messages")
+	}
+	// Accumulate a faithful encoded size — including per-message structural
+	// overhead — and reject before the deep copy, so a large fallback cannot
+	// turn a request-path call into an allocation spike.
+	size := len(fallback.Text) + len(fallback.Config)
 	for _, message := range fallback.Messages {
 		if err := validPromptMessage(message); err != nil {
 			return promptFallbackValue{}, err
 		}
-		size += len(message.Role) + len(message.Content) + len(message.PlaceholderName) + len(message.Extra)
-	}
-	if len(fallback.Config) > 0 && !json.Valid(fallback.Config) {
-		return promptFallbackValue{}, errors.New("langfuse: prompt fallback config is not valid JSON")
+		size += promptMessageOverhead + len(message.Role) + len(message.Content) +
+			len(message.PlaceholderName) + len(message.Extra)
+		if size > maxPromptBodyBytes {
+			return promptFallbackValue{}, errors.New("langfuse: prompt fallback exceeds the 1 MiB limit")
+		}
 	}
 	if size > maxPromptBodyBytes {
 		return promptFallbackValue{}, errors.New("langfuse: prompt fallback exceeds the 1 MiB limit")
@@ -279,8 +301,8 @@ func validPromptMessage(message PromptMessage) error {
 	}
 	if len(message.Extra) > 0 {
 		trimmed := strings.TrimSpace(string(message.Extra))
-		if !strings.HasPrefix(trimmed, "{") || !json.Valid(message.Extra) {
-			return errors.New("langfuse: prompt message extra must be one JSON object")
+		if !strings.HasPrefix(trimmed, "{") || !json.Valid(message.Extra) || !utf8.Valid(message.Extra) {
+			return errors.New("langfuse: prompt message extra must be one valid UTF-8 JSON object")
 		}
 	}
 	return nil

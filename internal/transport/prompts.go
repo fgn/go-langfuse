@@ -59,10 +59,11 @@ type PromptMessage struct {
 // PromptsClient fetches prompt versions from the Langfuse prompts API. It is
 // stateless and safe for concurrent use; caching lives in the root package.
 type PromptsClient struct {
-	endpoint  string
-	publicKey string
-	secretKey string
-	client    *http.Client
+	endpoint   string
+	publicKey  string
+	secretKey  string
+	sdkVersion string
+	client     *http.Client
 
 	// retryLimit and retryInterval are test seams; production values come
 	// from the constants above.
@@ -82,9 +83,10 @@ func NewPromptsClient(cfg Config) (*PromptsClient, error) {
 		timeout = defaultTimeout
 	}
 	return &PromptsClient{
-		endpoint:  endpoint,
-		publicKey: cfg.PublicKey,
-		secretKey: cfg.SecretKey,
+		endpoint:   endpoint,
+		publicKey:  cfg.PublicKey,
+		secretKey:  cfg.SecretKey,
+		sdkVersion: cfg.SDKVersion,
 		client: &http.Client{
 			Timeout: timeout,
 			// Never follow redirects: a Location target is server-controlled
@@ -147,6 +149,13 @@ func (p *PromptsClient) attempt(ctx context.Context, requestURL, name string, ve
 		return Prompt{}, false, 0, errors.New("langfuse transport: the prompt request could not be built")
 	}
 	request.SetBasicAuth(p.publicKey, p.secretKey)
+	// Identify the SDK the same way the OTLP exporter does, so a gateway or
+	// Langfuse deployment attributes the REST request to this client. HTTP
+	// header names are case-insensitive on the wire; the canonical form here
+	// matches the x-langfuse-* identity the exporter sends.
+	request.Header.Set("X-Langfuse-Sdk-Name", sdkName)
+	request.Header.Set("X-Langfuse-Sdk-Version", p.sdkVersion)
+	request.Header.Set("X-Langfuse-Public-Key", p.publicKey)
 	response, err := p.client.Do(request)
 	if err != nil {
 		var netErr net.Error
@@ -171,7 +180,10 @@ func (p *PromptsClient) attempt(ctx context.Context, requestURL, name string, ve
 	}
 	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxPromptResponseBytes+1))
 	if readErr != nil {
-		return Prompt{}, true, retryAfter, errors.New("langfuse transport: the prompt response could not be read")
+		// A broken response stream is terminal, not retryable: retries were
+		// limited to pre-response transport failures, and hammering a server
+		// that is already resetting mid-body only adds latency and load.
+		return Prompt{}, false, 0, errors.New("langfuse transport: the prompt response could not be read")
 	}
 	if len(body) > maxPromptResponseBytes {
 		return Prompt{}, false, 0, errors.New("langfuse transport: the prompt response exceeds the 1 MiB limit")
@@ -257,6 +269,13 @@ func decodePrompt(body []byte, name string, version int, label string) (Prompt, 
 	if len(wire.Config) > 0 && string(wire.Config) != "null" {
 		prompt.Config = wire.Config
 	}
+	// A null or absent prompt body must not decode to an empty prompt:
+	// json.Unmarshal(null, ...) succeeds without touching the target, so a
+	// text body would become "" and a chat body a nil slice, both minting a
+	// usable PromptRef from a malformed response.
+	if len(wire.Prompt) == 0 || string(wire.Prompt) == "null" {
+		return Prompt{}, errPromptDecode
+	}
 	switch wire.Type {
 	case "text":
 		if err := json.Unmarshal(wire.Prompt, &prompt.Text); err != nil {
@@ -290,9 +309,11 @@ func decodePromptMessages(raw json.RawMessage) ([]PromptMessage, error) {
 		if err := json.Unmarshal(item, &fields); err != nil {
 			return nil, errPromptDecode
 		}
+		// Distinguish an absent discriminator (a plain {role, content}
+		// message) from a present but null one, which is malformed.
 		kind := ""
 		if rawKind, ok := fields["type"]; ok {
-			if err := json.Unmarshal(rawKind, &kind); err != nil {
+			if string(rawKind) == "null" || json.Unmarshal(rawKind, &kind) != nil {
 				return nil, errPromptDecode
 			}
 		}
@@ -301,6 +322,11 @@ func decodePromptMessages(raw json.RawMessage) ([]PromptMessage, error) {
 			var placeholder string
 			rawName, ok := fields["name"]
 			if !ok || json.Unmarshal(rawName, &placeholder) != nil || placeholder == "" {
+				return nil, errPromptDecode
+			}
+			// A placeholder is exactly {type, name}: reject role, content, or
+			// any provider field rather than silently discarding it.
+			if len(fields) != 2 {
 				return nil, errPromptDecode
 			}
 			messages = append(messages, PromptMessage{PlaceholderName: placeholder})

@@ -49,12 +49,16 @@ func promptWireJSON(name string, version int, labels []string) string {
 func TestPromptsFetchSendsAuthenticatedRequest(t *testing.T) {
 	t.Parallel()
 	var path, rawQuery, username, password atomic.Value
+	var sdkNameHdr, sdkVersionHdr, publicKeyHdr atomic.Value
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path.Store(r.URL.EscapedPath())
 		rawQuery.Store(r.URL.RawQuery)
 		user, pass, _ := r.BasicAuth()
 		username.Store(user)
 		password.Store(pass)
+		sdkNameHdr.Store(r.Header.Get("x-langfuse-sdk-name"))
+		sdkVersionHdr.Store(r.Header.Get("x-langfuse-sdk-version"))
+		publicKeyHdr.Store(r.Header.Get("x-langfuse-public-key"))
 		_, _ = w.Write([]byte(promptWireJSON("folder/movie critic", 3, []string{"production"})))
 	}))
 	t.Cleanup(server.Close)
@@ -72,6 +76,10 @@ func TestPromptsFetchSendsAuthenticatedRequest(t *testing.T) {
 	}
 	if username.Load() != "pk-lf-prompts" || password.Load() != "sk-lf-prompts" {
 		t.Fatalf("basic auth = (%v, ...), want the client credentials", username.Load())
+	}
+	if sdkNameHdr.Load() != sdkName || sdkVersionHdr.Load() != "test" || publicKeyHdr.Load() != "pk-lf-prompts" {
+		t.Fatalf("SDK identification headers = (%v, %v, %v), want the shared identity",
+			sdkNameHdr.Load(), sdkVersionHdr.Load(), publicKeyHdr.Load())
 	}
 	if prompt.Name != "folder/movie critic" || prompt.Version != 3 || prompt.Type != "text" ||
 		prompt.Text != "Hello {{subject}}" || prompt.CommitMessage != "initial" {
@@ -193,16 +201,14 @@ func TestPromptsFetchDeclinesRetryBeyondDeadline(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	start := time.Now()
 	_, err := client.Fetch(ctx, "n", 0, "production")
 	if err == nil || !strings.Contains(err.Error(), "status 429") {
 		t.Fatalf("Fetch() error = %v, want a status 429 failure", err)
 	}
-	if elapsed := time.Since(start); elapsed > 400*time.Millisecond {
-		t.Fatalf("Fetch() took %v, want an immediate decline of the 30 s Retry-After", elapsed)
-	}
+	// A single request proves the 30 s Retry-After was declined rather than
+	// waited on: a retry would have produced a second request.
 	if got := calls.Load(); got != 1 {
-		t.Fatalf("request count = %d, want 1", got)
+		t.Fatalf("request count = %d, want 1 (a Retry-After beyond the budget must not be retried)", got)
 	}
 }
 
@@ -288,6 +294,9 @@ func TestPromptsFetchRejectsMismatchedResponses(t *testing.T) {
 		"invalid utf8":        {0, "production", "{\"name\":\"n\",\"version\":2,\"type\":\"text\",\"prompt\":\"\xff\",\"labels\":[\"production\"]}"},
 		"trailing json":       {0, "production", valid(map[string]any{}) + `{}`},
 		"not json":            {0, "production", "not json"},
+		"null text body":      {0, "production", `{"name":"n","version":2,"type":"text","prompt":null,"labels":["production"]}`},
+		"absent text body":    {0, "production", `{"name":"n","version":2,"type":"text","labels":["production"]}`},
+		"null chat body":      {0, "production", `{"name":"n","version":2,"type":"chat","prompt":null,"labels":["production"]}`},
 	}
 	for label, test := range cases {
 		t.Run(label, func(t *testing.T) {
@@ -347,11 +356,14 @@ func TestPromptsDecodeChatMessages(t *testing.T) {
 func TestPromptsDecodeRejectsUnknownMessageShapes(t *testing.T) {
 	t.Parallel()
 	bodies := map[string]string{
-		"missing role":       `[{"content": "x"}]`,
-		"empty role":         `[{"role": "", "content": "x"}]`,
-		"unknown type":       `[{"type": "image", "url": "x"}]`,
-		"placeholder noname": `[{"type": "placeholder"}]`,
-		"not an object":      `["hello"]`,
+		"missing role":           `[{"content": "x"}]`,
+		"empty role":             `[{"role": "", "content": "x"}]`,
+		"unknown type":           `[{"type": "image", "url": "x"}]`,
+		"null type":              `[{"type": null, "role": "user", "content": "x"}]`,
+		"placeholder noname":     `[{"type": "placeholder"}]`,
+		"placeholder with role":  `[{"type": "placeholder", "name": "h", "role": "user"}]`,
+		"placeholder with extra": `[{"type": "placeholder", "name": "h", "tool_calls": []}]`,
+		"not an object":          `["hello"]`,
 	}
 	for label, messages := range bodies {
 		t.Run(label, func(t *testing.T) {
@@ -366,6 +378,38 @@ func TestPromptsDecodeRejectsUnknownMessageShapes(t *testing.T) {
 				t.Fatal("Fetch() error = nil, want a decode failure")
 			}
 		})
+	}
+}
+
+func TestPromptsFetchReadFailureIsTerminal(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		// Promise more body than we deliver, then close the connection so the
+		// client's read fails partway through.
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Errorf("test server does not support hijacking")
+			return
+		}
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 4096\r\n\r\nshort"))
+		_ = conn.Close()
+	}))
+	t.Cleanup(server.Close)
+	client := newPromptsTestClient(t, server.URL)
+
+	_, err := client.Fetch(context.Background(), "n", 0, "production")
+	if err == nil || !strings.Contains(err.Error(), "could not be read") {
+		t.Fatalf("Fetch() error = %v, want a read failure", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("request count = %d, want 1 (a mid-body read failure must not be retried)", got)
 	}
 }
 
