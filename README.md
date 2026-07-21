@@ -4,8 +4,9 @@ go-langfuse is an independent, observation-first community Langfuse client for
 Go, built on the official OpenTelemetry Go SDK: tracing over OTLP/HTTP
 protobuf (Langfuse ingestion version 4), all ten observation types,
 request-scoped trace identity, scores for evaluations and user feedback, and
-strict content-privacy controls. Prompt management, datasets, and
-administrative APIs are out of scope; use the Langfuse REST API for those.
+strict content-privacy controls. Prompt retrieval, caching, compilation, and
+trace linking are included; datasets and administrative APIs remain out of
+scope. Use the Langfuse REST API for those.
 go-langfuse is not affiliated with or endorsed by Langfuse.
 
 Observation types are first-class: alongside `span`, `generation`, and
@@ -197,21 +198,34 @@ err := lf.RecordScore(ctx, langfuse.Score{
 `GetPrompt` loads a prompt version from Langfuse prompt management with
 client-side caching: a fresh cache hit is a local read, an expired entry is
 served immediately while one background refresh runs (stale-while-revalidate),
-and concurrent cache misses share a single fetch. `Fallback` pins a hardcoded
-prompt for when Langfuse is unreachable and nothing is cached, so prompt
-loading never becomes a hard runtime dependency. `Compile` substitutes
-`{{variables}}` (and fills chat placeholders from `[]PromptMessage` values),
-and `Ref()` links the exact prompt version to a generation:
+and concurrent cache misses share a single fetch. `PromptQuery.Type` rejects a
+server or cached prompt with the wrong shape, resolving to `Fallback` when one
+is supplied or `ErrPromptTypeMismatch` otherwise. `Prompt.Source` distinguishes
+server fetches, fresh cache hits, stale cache hits, and local fallbacks through
+`PromptSourceServer`, `PromptSourceCache`, `PromptSourceStale`, and
+`PromptSourceFallback`.
+
+`Fallback` pins a local prompt for fetch and type failures, so prompt loading
+never becomes a hard runtime dependency. `GetPrompt` is nil-safe: an optional,
+disabled, or shut-down client returns the fallback without requiring a nil
+guard. `Compile` remains lenient, while `CompileStrict` reports unresolved
+variables, values that cannot be stringified, and unfilled chat placeholders.
+`DecodeConfig` applies prompt config to a caller-defaulted target, and `Ref()`
+links only server-backed prompt versions to generations:
 
 ```go
-prompt, err := lf.GetPrompt(ctx, "movie-critic", langfuse.PromptQuery{
-	Fallback: &langfuse.PromptFallback{Text: "Review {{movie}} briefly."},
+prompt, err := lf.GetPrompt(ctx, "response-template", langfuse.PromptQuery{
+	Type:     langfuse.PromptTypeText,
+	Fallback: &langfuse.PromptFallback{Text: "Process {{input}} concisely."},
 })
 if err != nil {
 	return err
 }
-compiled := prompt.Compile(map[string]any{"movie": movie})
-_ = lf.Observe(ctx, "review", langfuse.TypeGeneration,
+compiled, err := prompt.CompileStrict(map[string]any{"input": input})
+if err != nil {
+	return err
+}
+_ = lf.Observe(ctx, "generate-response", langfuse.TypeGeneration,
 	langfuse.ObservationAttributes{Input: compiled.Text, Prompt: prompt.Ref()},
 	generate)
 ```

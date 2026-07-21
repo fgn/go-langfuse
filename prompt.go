@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -20,9 +21,23 @@ const (
 	PromptTypeChat PromptType = "chat"
 )
 
+// PromptSource reports how GetPrompt resolved a prompt.
+type PromptSource string
+
+const (
+	PromptSourceServer   PromptSource = "server"
+	PromptSourceCache    PromptSource = "cache"
+	PromptSourceStale    PromptSource = "stale"
+	PromptSourceFallback PromptSource = "fallback"
+)
+
 // ErrPromptNotFound reports that the requested prompt name, version, or
 // label does not exist in the Langfuse project. Test with errors.Is.
 var ErrPromptNotFound = errors.New("langfuse: prompt not found")
+
+// ErrPromptTypeMismatch reports that a resolved prompt did not have the type
+// requested by PromptQuery.Type. Test with errors.Is.
+var ErrPromptTypeMismatch = errors.New("langfuse: prompt type mismatch")
 
 const (
 	defaultPromptCacheTTL = time.Minute
@@ -56,6 +71,10 @@ type PromptQuery struct {
 	// Label selects the deployment label; empty means "production".
 	// Version and Label are mutually exclusive.
 	Label string
+	// Type requires the resolved prompt to have this shape. Empty accepts
+	// either text or chat. A mismatch is resolved through Fallback when set
+	// and otherwise returns ErrPromptTypeMismatch.
+	Type PromptType
 	// CacheTTL overrides the 60-second default freshness window for this
 	// call. Zero means the default; negative values are rejected. Freshness
 	// is judged against the age of the cached entry at call time, so callers
@@ -65,16 +84,16 @@ type PromptQuery struct {
 	// DisableCache bypasses the cache entirely for this call (no read, no
 	// write, no shared in-flight fetch), forcing a fresh fetch.
 	DisableCache bool
-	// Fallback is returned when the fetch fails and no cached value exists,
-	// so a hardcoded prompt can guarantee availability. A fallback result is
-	// never cached and Ref on it returns nil, so it is not linked to
-	// observations. Fallback never overrides the caller's own context
-	// cancellation.
+	// Fallback is returned when a fetch fails without a cached value or the
+	// resolved prompt does not match Type, so a local prompt can guarantee
+	// availability. A fallback result is never cached and Ref on it returns
+	// nil, so it is not linked to observations. Fallback never overrides the
+	// caller's own context cancellation on a blocking fetch path.
 	Fallback *PromptFallback
 }
 
-// PromptFallback is a locally supplied prompt body used when Langfuse is
-// unreachable and nothing is cached.
+// PromptFallback is a locally supplied prompt body used when a fetch cannot
+// resolve a compatible prompt.
 type PromptFallback struct {
 	// Type declares the prompt shape. Empty infers chat when Messages is
 	// non-nil (an empty non-nil slice is a deliberate empty chat prompt) and
@@ -119,9 +138,9 @@ type Prompt struct {
 	Labels        []string
 	Tags          []string
 	CommitMessage string
-	// Fallback reports that this value came from PromptQuery.Fallback rather
-	// than Langfuse.
-	Fallback bool
+	// Source reports whether this value was fetched, served from fresh or
+	// stale cache, or produced from PromptQuery.Fallback.
+	Source PromptSource
 }
 
 // Ref returns the reference that links observations to this prompt version,
@@ -129,21 +148,24 @@ type Prompt struct {
 // linking — for a fallback prompt and for any value that cannot form a valid
 // reference (empty Name or Version <= 0, such as a zero Prompt).
 func (p Prompt) Ref() *PromptRef {
-	if p.Fallback || p.Name == "" || p.Version <= 0 {
+	if p.Source == PromptSourceFallback || p.Name == "" || p.Version <= 0 {
 		return nil
 	}
 	return &PromptRef{Name: p.Name, Version: p.Version}
 }
 
+// GetPrompt is safe to call on a nil, disabled, or shut-down client; with a
+// Fallback set it returns that fallback, so callers need no nil guard.
+//
 // GetPrompt fetches one prompt version from the Langfuse prompts API,
 // serving it from the client-side cache when fresh. An expired entry is
 // returned immediately while one background refresh per prompt runs; a cache
 // miss fetches synchronously, bounded by ctx and a 10-second fetch budget.
 // If the fetch fails for any reason other than ctx ending, query.Fallback is
 // returned when set; otherwise the error carries at most the prompt name and
-// HTTP status, and wraps ErrPromptNotFound for 404. A nil, disabled, or
-// shut-down client returns the fallback when set and an error otherwise; a
-// nil ctx or invalid query is always an error.
+// HTTP status, and wraps ErrPromptNotFound for 404. A result whose type does
+// not match query.Type likewise resolves to the fallback or wraps
+// ErrPromptTypeMismatch. A nil ctx or invalid query is always an error.
 func (c *Client) GetPrompt(ctx context.Context, name string, query PromptQuery) (Prompt, error) {
 	// Validation and the nil-context check run before every unavailable-
 	// client or fallback short circuit: an invalid query or a nil context is
@@ -161,6 +183,11 @@ func (c *Client) GetPrompt(ctx context.Context, name string, query PromptQuery) 
 		if err != nil {
 			return Prompt{}, err
 		}
+		if query.Type != "" && normalized.promptType != query.Type {
+			return Prompt{}, fmt.Errorf(
+				"langfuse: prompt %q fallback type %q does not match expected type %q: %w",
+				name, normalized.promptType, query.Type, ErrPromptTypeMismatch)
+		}
 		fallback = &normalized
 	}
 	if c == nil || c.isDisabled() || c.prompts == nil {
@@ -171,7 +198,15 @@ func (c *Client) GetPrompt(ctx context.Context, name string, query PromptQuery) 
 		return promptFromFallback(name, query.Version, fallback,
 			errors.New("langfuse: prompt requested after client shutdown"))
 	}
-	return c.prompts.get(ctx, name, query, fallback)
+	prompt, err := c.prompts.get(ctx, name, query, fallback)
+	if err != nil {
+		return Prompt{}, err
+	}
+	if query.Type == "" || prompt.Type == query.Type {
+		return prompt, nil
+	}
+	return promptFromFallback(name, query.Version, fallback,
+		promptTypeMismatchError(name, prompt.Type, query.Type))
 }
 
 // promptFallbackValue is a validated, deeply copied PromptFallback with its
@@ -187,7 +222,7 @@ type promptFallbackValue struct {
 // fallback when one was supplied, the cause otherwise. The projection fixes
 // every Prompt field: name and exact version from the request (zero for a
 // label query), body and config from the fallback, server-owned metadata
-// empty, and Fallback true.
+// empty, and Source set to PromptSourceFallback.
 func promptFromFallback(name string, version int, fallback *promptFallbackValue, cause error) (Prompt, error) {
 	if fallback == nil {
 		return Prompt{}, cause
@@ -199,8 +234,13 @@ func promptFromFallback(name string, version int, fallback *promptFallbackValue,
 		Text:     fallback.text,
 		Messages: fallback.messages,
 		Config:   fallback.config,
-		Fallback: true,
+		Source:   PromptSourceFallback,
 	}, nil
+}
+
+func promptTypeMismatchError(name string, actual, expected PromptType) error {
+	return fmt.Errorf("langfuse: prompt %q has type %q, expected %q: %w",
+		name, actual, expected, ErrPromptTypeMismatch)
 }
 
 func validatePromptQuery(name string, query PromptQuery) error {
@@ -215,6 +255,11 @@ func validatePromptQuery(name string, query PromptQuery) error {
 	}
 	if !utf8.ValidString(query.Label) || utf8.RuneCountInString(query.Label) > maxPromptLabelChars {
 		return errors.New("langfuse: prompt label must be valid UTF-8 of at most 200 characters")
+	}
+	switch query.Type {
+	case "", PromptTypeText, PromptTypeChat:
+	default:
+		return errors.New("langfuse: unsupported expected prompt type")
 	}
 	if query.CacheTTL < 0 {
 		return errors.New("langfuse: prompt cache TTL must not be negative")
@@ -310,6 +355,18 @@ func validPromptMessage(message PromptMessage) error {
 	return nil
 }
 
+// DecodeConfig decodes Config into v. An absent config is a no-op, allowing
+// callers to set defaults on v before decoding prompt-owned overrides.
+func (p Prompt) DecodeConfig(v any) error {
+	if len(p.Config) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(p.Config, v); err != nil {
+		return fmt.Errorf("langfuse: decode prompt config: %w", err)
+	}
+	return nil
+}
+
 // Compile substitutes {{variable}} occurrences in the prompt content and
 // returns the compiled copy; the receiver is unchanged. String values
 // substitute verbatim; any other value is JSON-encoded, and a conversion
@@ -321,13 +378,27 @@ func validPromptMessage(message PromptMessage) error {
 // unfilled placeholders stay verbatim, matching the Python SDK; non-string
 // values use JSON rather than Python's str().
 func (p Prompt) Compile(vars map[string]any) Prompt {
+	result, _ := p.compile(vars, nil)
+	return result
+}
+
+// CompileStrict compiles the same copy as Compile and also reports missing
+// content variables, values that cannot be stringified, and unfilled chat
+// placeholders. The returned prompt contains every successful substitution
+// even when the error is non-nil.
+func (p Prompt) CompileStrict(vars map[string]any) (Prompt, error) {
+	problems := &promptCompileProblems{}
+	return p.compile(vars, problems)
+}
+
+func (p Prompt) compile(vars map[string]any, problems *promptCompileProblems) (Prompt, error) {
 	result := deepCopyPrompt(p)
-	if len(vars) == 0 {
-		return result
+	if len(vars) == 0 && problems == nil {
+		return result, nil
 	}
-	result.Text = substitutePromptVariables(result.Text, vars)
+	result.Text = substitutePromptVariables(result.Text, vars, problems)
 	if result.Messages == nil {
-		return result
+		return result, problems.err()
 	}
 	compiled := make([]PromptMessage, 0, len(result.Messages))
 	for _, message := range result.Messages {
@@ -336,14 +407,80 @@ func (p Prompt) Compile(vars map[string]any) Prompt {
 				compiled = append(compiled, deepCopyPromptMessages(fill)...)
 			} else {
 				compiled = append(compiled, message)
+				problems.addUnfilledPlaceholder(message.PlaceholderName)
 			}
 			continue
 		}
-		message.Content = substitutePromptVariables(message.Content, vars)
+		message.Content = substitutePromptVariables(message.Content, vars, problems)
 		compiled = append(compiled, message)
 	}
 	result.Messages = compiled
-	return result
+	return result, problems.err()
+}
+
+type promptCompileProblems struct {
+	missingVariables      map[string]struct{}
+	unstringifiableValues map[string]struct{}
+	unfilledPlaceholders  map[string]struct{}
+}
+
+func (p *promptCompileProblems) addMissingVariable(name string) {
+	if p == nil {
+		return
+	}
+	if p.missingVariables == nil {
+		p.missingVariables = make(map[string]struct{})
+	}
+	p.missingVariables[name] = struct{}{}
+}
+
+func (p *promptCompileProblems) addUnstringifiableValue(name string) {
+	if p == nil {
+		return
+	}
+	if p.unstringifiableValues == nil {
+		p.unstringifiableValues = make(map[string]struct{})
+	}
+	p.unstringifiableValues[name] = struct{}{}
+}
+
+func (p *promptCompileProblems) addUnfilledPlaceholder(name string) {
+	if p == nil {
+		return
+	}
+	if p.unfilledPlaceholders == nil {
+		p.unfilledPlaceholders = make(map[string]struct{})
+	}
+	p.unfilledPlaceholders[name] = struct{}{}
+}
+
+func (p *promptCompileProblems) err() error {
+	if p == nil {
+		return nil
+	}
+	parts := make([]string, 0, 3)
+	if len(p.missingVariables) > 0 {
+		parts = append(parts, fmt.Sprintf("missing variables %q", sortedPromptIdentifiers(p.missingVariables)))
+	}
+	if len(p.unstringifiableValues) > 0 {
+		parts = append(parts, fmt.Sprintf("unstringifiable variables %q", sortedPromptIdentifiers(p.unstringifiableValues)))
+	}
+	if len(p.unfilledPlaceholders) > 0 {
+		parts = append(parts, fmt.Sprintf("unfilled placeholders %q", sortedPromptIdentifiers(p.unfilledPlaceholders)))
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return errors.New("langfuse: strict prompt compile failed: " + strings.Join(parts, "; "))
+}
+
+func sortedPromptIdentifiers(set map[string]struct{}) []string {
+	identifiers := make([]string, 0, len(set))
+	for identifier := range set {
+		identifiers = append(identifiers, identifier)
+	}
+	slices.Sort(identifiers)
+	return identifiers
 }
 
 // promptPlaceholderFill accepts a []PromptMessage variable whose every
@@ -365,7 +502,7 @@ func promptPlaceholderFill(value any) ([]PromptMessage, bool) {
 // substitutePromptVariables replaces {{name}} (inner whitespace allowed) in
 // a single pass. Unresolved or empty names, unterminated braces, and values
 // that cannot be stringified are left verbatim.
-func substitutePromptVariables(text string, vars map[string]any) string {
+func substitutePromptVariables(text string, vars map[string]any, problems *promptCompileProblems) string {
 	open := strings.Index(text, "{{")
 	if open < 0 {
 		return text
@@ -391,12 +528,16 @@ func substitutePromptVariables(text string, vars map[string]any) string {
 		value, exists := vars[name]
 		if name == "" || !exists {
 			builder.WriteString(token)
+			if name != "" {
+				problems.addMissingVariable(name)
+			}
 			continue
 		}
 		if replacement, ok := promptVariableString(value); ok {
 			builder.WriteString(replacement)
 		} else {
 			builder.WriteString(token)
+			problems.addUnstringifiableValue(name)
 		}
 	}
 }

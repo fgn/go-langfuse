@@ -126,44 +126,75 @@ provider):
 
 `GetPrompt` fetches one prompt version from `GET /api/public/v2/prompts` and
 caches it in memory. Selection is by exact `Version` or by `Label` (defaulting
-to `production`); the two are mutually exclusive. The returned `Prompt` is an
-independent deep copy, safe to retain or modify; `Ref()` yields the
-`PromptRef` that links a generation to the exact prompt version, and returns
-nil for fallback-built values so they are never linked.
+to `production`); the two are mutually exclusive. `PromptQuery.Type` may require
+`PromptTypeText` or `PromptTypeChat`. The requirement is checked after every
+resolution path, including a cache entry populated by an earlier typeless
+call. A mismatch resolves to the compatible local fallback when supplied and
+otherwise returns a zero `Prompt` with an error wrapping
+`ErrPromptTypeMismatch`.
+
+The returned `Prompt` is an independent deep copy, safe to retain or modify.
+Its `Source` is `PromptSourceServer` for a completed foreground fetch,
+`PromptSourceCache` for a fresh cache hit, `PromptSourceStale` for a stale hit
+returned while revalidation runs, or `PromptSourceFallback` for a local
+fallback. `Ref()` yields the `PromptRef` that links a generation to the exact
+server-backed prompt version, and returns nil when `Source` is
+`PromptSourceFallback`, the name is empty, or the version is non-positive.
 
 Caching semantics, per cache key (name plus version or label):
 
 - A fresh entry (age within `CacheTTL`, default 60 seconds) is returned from
-  memory with no I/O. Freshness is judged against the age of the entry at
-  call time, so callers using different TTLs share one entry — a deliberate
-  divergence from the official SDKs, which stamp an expiry at insert.
+  memory with `PromptSourceCache` and no I/O. Freshness is judged against the
+  age of the entry at call time, so callers using different TTLs share one
+  entry — a deliberate divergence from the official SDKs, which stamp an
+  expiry at insert.
 - An expired entry is returned immediately while one background refresh per
-  key runs (stale-while-revalidate). A failed refresh keeps serving the stale
-  value, emits one payload-free diagnostic, and suppresses further refreshes
-  of that key for 10 seconds; a refresh answered with 404 evicts the entry.
+  key runs (stale-while-revalidate), stamped `PromptSourceStale`. A failed
+  refresh keeps serving the stale value, emits one payload-free diagnostic,
+  and suppresses further refreshes of that key for 10 seconds; a refresh
+  answered with 404 evicts the entry.
 - A cache miss fetches synchronously, bounded by the caller's context and a
   10-second fetch budget covering up to two retries of 408/429/5xx and
   network failures (500 ms then 1 s backoff with jitter, honoring
   `Retry-After` within the budget). Concurrent misses for the same key share
-  one fetch; a caller whose context ends leaves immediately with its context
-  error while the shared fetch completes for the rest.
-- `DisableCache` forces an independent fetch with no cache read or write.
+  one fetch; every waiter receives `PromptSourceServer`. A caller whose
+  context ends leaves immediately with its context error while the shared
+  fetch completes for the rest.
+- `DisableCache` forces an independent fetch with no cache read or write and
+  returns `PromptSourceServer` on success.
 - The cache holds at most 256 entries (least-recently-used eviction), runs at
   most 8 background refreshes and 64 foreground fetches concurrently, and
   drains all of them during `Shutdown`.
 
-`Fallback` supplies a local prompt body returned when the fetch fails and
-nothing is cached, so a hardcoded prompt guarantees availability; fallback
-results are never cached and never linked. A caller's context cancellation is
-always returned as an error, never masked by a fallback. 404 failures wrap
-`ErrPromptNotFound` for `errors.Is`.
+`Fallback` supplies a local prompt body returned when a fetch fails without a
+cached value or a resolved value has the wrong type, so a local prompt can
+guarantee availability. Fallback results have `PromptSourceFallback`, are
+never cached, and are never linked.
+When `PromptQuery.Type` is set, an incompatible declared or inferred fallback
+type is rejected before I/O. A caller's context cancellation is always
+returned as an error on blocking fetch paths, never masked by a fallback. 404
+failures wrap `ErrPromptNotFound` for `errors.Is`.
+
+`GetPrompt` is safe to call on a nil, disabled, or shut-down client. With a
+valid `Fallback` it returns that fallback, so optional client setup requires no
+nil guard; without a fallback it returns an error. Invalid queries and nil
+contexts remain errors in every client state.
 
 `Compile` substitutes `{{variable}}` occurrences (string values verbatim,
 other values JSON-encoded) and fills chat placeholder messages from
 `[]PromptMessage` variables — an empty slice removes the placeholder, an
 invalid message list leaves it unchanged. Unresolved variables and unfilled
 placeholders stay verbatim, matching the Python SDK, and `Compile` never
-fails or panics. Warm the cache during startup with one `GetPrompt` call per
+fails or panics. `CompileStrict` produces the same compiled copy but also
+returns an error naming every missing content variable, content value that
+could not be stringified, and unfilled chat placeholder. Successful
+substitutions remain present in the returned copy when strict compilation
+reports an error.
+
+`DecodeConfig` unmarshals `Prompt.Config` into a caller-provided target. An
+empty config is a no-op, so callers can initialize defaults before applying
+the prompt-owned fields; malformed JSON and invalid targets return a wrapped
+decode error. Warm the cache during startup with one `GetPrompt` call per
 prompt when guaranteed availability matters.
 
 ## Buffering and backpressure

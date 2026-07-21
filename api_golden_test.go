@@ -185,6 +185,14 @@ const LevelError Level = "ERROR"
 
 const LevelWarning Level = "WARNING"
 
+const PromptSourceCache PromptSource = "cache"
+
+const PromptSourceFallback PromptSource = "fallback"
+
+const PromptSourceServer PromptSource = "server"
+
+const PromptSourceStale PromptSource = "stale"
+
 const PromptTypeChat PromptType = "chat"
 
 const PromptTypeText PromptType = "text"
@@ -260,6 +268,10 @@ func (o *Observation) Update(values ObservationAttributes)
 
 func (p Prompt) Compile(vars map[string]any) Prompt
 
+func (p Prompt) CompileStrict(vars map[string]any) (Prompt, error)
+
+func (p Prompt) DecodeConfig(v any) error
+
 func (p Prompt) Ref() *PromptRef
 
 func ConfigFromEnv() Config
@@ -317,7 +329,7 @@ type Prompt struct {
 	Labels []string
 	Tags []string
 	CommitMessage string
-	Fallback bool
+	Source PromptSource
 }
 
 type PromptFallback struct {
@@ -337,6 +349,7 @@ type PromptMessage struct {
 type PromptQuery struct {
 	Version int
 	Label string
+	Type PromptType
 	CacheTTL time.Duration
 	DisableCache bool
 	Fallback *PromptFallback
@@ -346,6 +359,8 @@ type PromptRef struct {
 	Name string
 	Version int
 }
+
+type PromptSource string
 
 type PromptType string
 
@@ -385,4 +400,6 @@ type Usage struct {
 }
 
 var ErrPromptNotFound = errors.New("langfuse: prompt not found")
+
+var ErrPromptTypeMismatch = errors.New("langfuse: prompt type mismatch")
 `

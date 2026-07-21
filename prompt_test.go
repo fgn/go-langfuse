@@ -154,6 +154,125 @@ func TestPromptCompileCopyIsolation(t *testing.T) {
 	}
 }
 
+func TestPromptCompileStrictReportsUnresolvedVariables(t *testing.T) {
+	t.Parallel()
+	prompt := langfuse.Prompt{
+		Type: langfuse.PromptTypeText,
+		Text: "Use {{ second }} and {{first}}; repeat {{second}}.",
+	}
+	compiled, err := prompt.CompileStrict(nil)
+	if err == nil || !strings.Contains(err.Error(), "first") || !strings.Contains(err.Error(), "second") {
+		t.Fatalf("CompileStrict() error = %v, want both unresolved variable names", err)
+	}
+	if compiled.Text != prompt.Text {
+		t.Fatalf("CompileStrict() text = %q, want unresolved variables left verbatim", compiled.Text)
+	}
+	if strings.Index(err.Error(), "first") > strings.Index(err.Error(), "second") {
+		t.Fatalf("CompileStrict() error = %v, want sorted identifiers", err)
+	}
+}
+
+func TestPromptCompileStrictReportsUnstringifiableValue(t *testing.T) {
+	t.Parallel()
+	prompt := langfuse.Prompt{Type: langfuse.PromptTypeText, Text: "{{unsupported}} and {{ok}}"}
+	compiled, err := prompt.CompileStrict(map[string]any{
+		"unsupported": panickyMarshaler{},
+		"ok":          42,
+	})
+	if err == nil || !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("CompileStrict() error = %v, want the unstringifiable variable name", err)
+	}
+	if compiled.Text != "{{unsupported}} and 42" {
+		t.Fatalf("CompileStrict() text = %q, want the same partial result as Compile", compiled.Text)
+	}
+}
+
+func TestPromptCompileStrictReportsUnfilledPlaceholder(t *testing.T) {
+	t.Parallel()
+	prompt := langfuse.Prompt{
+		Type: langfuse.PromptTypeChat,
+		Messages: []langfuse.PromptMessage{
+			{PlaceholderName: "context"},
+			{Role: "user", Content: "{{input}}"},
+		},
+	}
+	compiled, err := prompt.CompileStrict(map[string]any{"input": "value"})
+	if err == nil || !strings.Contains(err.Error(), "context") {
+		t.Fatalf("CompileStrict() error = %v, want the unfilled placeholder name", err)
+	}
+	if compiled.Messages[0].PlaceholderName != "context" || compiled.Messages[1].Content != "value" {
+		t.Fatalf("CompileStrict() messages = %+v, want the lenient compiled result", compiled.Messages)
+	}
+}
+
+func TestPromptCompileStrictAllResolved(t *testing.T) {
+	t.Parallel()
+	prompt := langfuse.Prompt{
+		Type: langfuse.PromptTypeChat,
+		Messages: []langfuse.PromptMessage{
+			{Role: "system", Content: "Process {{kind}}."},
+			{PlaceholderName: "context"},
+			{Role: "user", Content: "{{input}}"},
+		},
+	}
+	compiled, err := prompt.CompileStrict(map[string]any{
+		"kind":  "carefully",
+		"input": "value",
+		"context": []langfuse.PromptMessage{
+			{Role: "assistant", Content: "ready"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompileStrict() error = %v", err)
+	}
+	want := []langfuse.PromptMessage{
+		{Role: "system", Content: "Process carefully."},
+		{Role: "assistant", Content: "ready"},
+		{Role: "user", Content: "value"},
+	}
+	if len(compiled.Messages) != len(want) {
+		t.Fatalf("CompileStrict() produced %d messages, want %d", len(compiled.Messages), len(want))
+	}
+	for i := range want {
+		if compiled.Messages[i].Role != want[i].Role || compiled.Messages[i].Content != want[i].Content {
+			t.Fatalf("CompileStrict() message %d = %+v, want %+v", i, compiled.Messages[i], want[i])
+		}
+	}
+}
+
+func TestPromptDecodeConfig(t *testing.T) {
+	t.Parallel()
+	type promptConfig struct {
+		Model string `json:"model"`
+		Limit int    `json:"limit"`
+	}
+
+	config := promptConfig{Model: "default-model", Limit: 25}
+	prompt := langfuse.Prompt{Config: json.RawMessage(`{"model":"configured-model"}`)}
+	if err := prompt.DecodeConfig(&config); err != nil {
+		t.Fatalf("DecodeConfig() error = %v", err)
+	}
+	if config.Model != "configured-model" || config.Limit != 25 {
+		t.Fatalf("DecodeConfig() = %+v, want decoded values with caller defaults preserved", config)
+	}
+
+	defaults := promptConfig{Model: "default-model", Limit: 25}
+	if err := (langfuse.Prompt{}).DecodeConfig(&defaults); err != nil {
+		t.Fatalf("DecodeConfig(empty) error = %v", err)
+	}
+	if defaults.Model != "default-model" || defaults.Limit != 25 {
+		t.Fatalf("DecodeConfig(empty) = %+v, want caller defaults unchanged", defaults)
+	}
+
+	if err := (langfuse.Prompt{Config: json.RawMessage(`{`)}).DecodeConfig(&promptConfig{}); err == nil ||
+		!strings.Contains(err.Error(), "decode prompt config") {
+		t.Fatalf("DecodeConfig(malformed) error = %v, want a clear decode error", err)
+	}
+	if err := prompt.DecodeConfig(promptConfig{}); err == nil || !strings.Contains(err.Error(), "decode prompt config") {
+		t.Fatalf("DecodeConfig(non-pointer) error = %v, want a clear target error", err)
+	}
+}
+
 func TestPromptRef(t *testing.T) {
 	t.Parallel()
 	cases := map[string]struct {
@@ -161,7 +280,7 @@ func TestPromptRef(t *testing.T) {
 		want   *langfuse.PromptRef
 	}{
 		"fetched":  {langfuse.Prompt{Name: "n", Version: 3}, &langfuse.PromptRef{Name: "n", Version: 3}},
-		"fallback": {langfuse.Prompt{Name: "n", Version: 3, Fallback: true}, nil},
+		"fallback": {langfuse.Prompt{Name: "n", Version: 3, Source: langfuse.PromptSourceFallback}, nil},
 		"zero":     {langfuse.Prompt{}, nil},
 		"no name":  {langfuse.Prompt{Version: 3}, nil},
 		"version0": {langfuse.Prompt{Name: "n"}, nil},

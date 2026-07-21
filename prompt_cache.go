@@ -163,11 +163,15 @@ func (pc *promptCache) get(ctx context.Context, name string, query PromptQuery, 
 			// background refresh.
 			pc.lru.MoveToFront(entry.element)
 			master := entry.master
+			source := PromptSourceCache
 			if pc.now().Sub(entry.fetchedAt) > ttl {
+				source = PromptSourceStale
 				pc.maybeRefreshLocked(key, entry)
 			}
 			pc.mu.Unlock()
-			return deepCopyPrompt(master), nil
+			prompt := deepCopyPrompt(master)
+			prompt.Source = source
+			return prompt, nil
 		}
 		pc.mu.Unlock()
 		// A miss is a blocking path, so caller cancellation wins over any
@@ -278,7 +282,9 @@ func (pc *promptCache) awaitFlight(ctx context.Context, name string, version int
 		if flight.err != nil {
 			return promptFromFallback(name, version, fallback, wrapPromptError(name, flight.err))
 		}
-		return deepCopyPrompt(flight.prompt), nil
+		prompt := deepCopyPrompt(flight.prompt)
+		prompt.Source = PromptSourceServer
+		return prompt, nil
 	case <-ctx.Done():
 		pc.leaveFlight(flight)
 		return Prompt{}, fmt.Errorf("langfuse: prompt fetch canceled: %w", ctx.Err())
@@ -347,7 +353,9 @@ func (pc *promptCache) fetchDirect(ctx context.Context, key promptKey, version i
 		return promptFromFallback(key.name, version, fallback, wrapPromptError(key.name, err))
 	}
 	// The result is unshared, so no defensive copy is needed.
-	return promptFromWire(wire), nil
+	prompt := promptFromWire(wire)
+	prompt.Source = PromptSourceServer
+	return prompt, nil
 }
 
 // storeLocked installs a fresh entry and evicts least-recently-used entries
