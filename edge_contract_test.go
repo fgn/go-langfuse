@@ -257,6 +257,61 @@ func TestEdgeContractEventIgnoresExplicitStartTime(t *testing.T) {
 	assertEdgeDiagnosticCount(t, diagnostics, "event start time ignored", 1)
 }
 
+func TestEdgeContractEndAtRecordsExplicitTimelineExactlyOnce(t *testing.T) {
+	client, receiver := newObservationWireClient(t, nil)
+	start := time.Date(2026, 7, 18, 9, 0, 0, 500000000, time.UTC)
+	firstToken := start.Add(400 * time.Millisecond)
+	end := start.Add(2 * time.Second)
+
+	// Retroactive instrumentation records a finished model call: explicit
+	// start, first-token, and end times reproduce the observed timeline.
+	_, generation := client.StartObservation(context.Background(), "retro-generation",
+		langfuse.TypeGeneration, langfuse.ObservationAttributes{
+			Model:               "test-model",
+			StartTime:           start,
+			CompletionStartTime: firstToken,
+		})
+	generation.EndAt(end)
+	generation.End()                     // ignored after EndAt
+	generation.EndAt(end.Add(time.Hour)) // ignored after EndAt
+
+	span := observationWireSpanNamed(t, exportObservationWireSpans(t, client, receiver, 1), "retro-generation")
+	if got, want := span.span.StartTimeUnixNano, uint64(start.UnixNano()); got != want {
+		t.Fatalf("wire start time = %d, want explicit StartTime %d", got, want)
+	}
+	if got, want := span.span.EndTimeUnixNano, uint64(end.UnixNano()); got != want {
+		t.Fatalf("wire end time = %d, want the first EndAt time %d", got, want)
+	}
+}
+
+func TestEdgeContractEndAtZeroAndPreStartTimesFallBack(t *testing.T) {
+	diagnostics := captureEdgeDiagnostics(t)
+	client, receiver := newObservationWireClient(t, nil)
+	start := time.Date(2026, 7, 18, 9, 0, 0, 0, time.UTC)
+
+	_, clamped := client.StartObservation(context.Background(), "end-before-start",
+		langfuse.TypeSpan, langfuse.ObservationAttributes{StartTime: start})
+	clamped.EndAt(start.Add(-time.Hour))
+
+	before := time.Now()
+	_, zero := client.StartObservation(context.Background(), "end-zero",
+		langfuse.TypeSpan, langfuse.ObservationAttributes{})
+	zero.EndAt(time.Time{})
+
+	spans := exportObservationWireSpans(t, client, receiver, 2)
+	clampedWire := observationWireSpanNamed(t, spans, "end-before-start")
+	if got, want := clampedWire.span.EndTimeUnixNano, uint64(start.UnixNano()); got != want {
+		t.Fatalf("clamped wire end time = %d, want the start time %d", got, want)
+	}
+	zeroWire := observationWireSpanNamed(t, spans, "end-zero")
+	zeroEnd := time.Unix(0, int64(zeroWire.span.EndTimeUnixNano))
+	if zeroEnd.Before(before.Add(-time.Second)) || zeroEnd.After(time.Now().Add(time.Second)) {
+		t.Fatalf("zero-time wire end = %v, want approximately the EndAt call time %v", zeroEnd, before)
+	}
+	assertEdgeDiagnosticCount(t, diagnostics, "observation end time precedes its start time; the start time is used", 1)
+	assertEdgeDiagnosticCount(t, diagnostics, "observation end time is zero; the current time is used", 1)
+}
+
 func TestEdgeContractObservationMetadataBudgetAppliesAcrossUpdates(t *testing.T) {
 	diagnostics := captureEdgeDiagnostics(t)
 	client, receiver := newObservationWireClient(t, nil)

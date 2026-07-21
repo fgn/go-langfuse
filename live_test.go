@@ -63,11 +63,18 @@ func TestLiveCompatibility(t *testing.T) {
 	if root.TraceID() == "" || root.ID() == "" {
 		t.Fatal("live root is not recording; refusing to pass without exporting")
 	}
+	// The generation reproduces the retroactive-instrumentation timeline:
+	// explicit start, first-token, and EndAt times.
+	generationStart := time.Now().UTC().Add(-3 * time.Second).Truncate(time.Millisecond)
+	completionStart := generationStart.Add(500 * time.Millisecond)
+	generationEnd := generationStart.Add(1500 * time.Millisecond)
 	_, generation := client.StartObservation(ctx, "live-generation", langfuse.TypeGeneration,
 		langfuse.ObservationAttributes{
-			Input:  "synthetic prompt",
-			Model:  "synthetic-model",
-			Prompt: &langfuse.PromptRef{Name: "go-langfuse-live-prompt", Version: 1},
+			Input:               "synthetic prompt",
+			Model:               "synthetic-model",
+			Prompt:              &langfuse.PromptRef{Name: "go-langfuse-live-prompt", Version: 1},
+			StartTime:           generationStart,
+			CompletionStartTime: completionStart,
 		})
 	if generation.TraceID() == "" || generation.ID() == "" {
 		t.Fatal("live generation is not recording; refusing to pass without exporting")
@@ -83,9 +90,21 @@ func TestLiveCompatibility(t *testing.T) {
 		},
 		CostDetails: map[string]float64{"input": 0.0001, "output": 0.0002},
 	})
-	generation.End()
+	generation.EndAt(generationEnd)
 	root.Update(langfuse.ObservationAttributes{Output: "synthetic answer"})
 	root.End()
+
+	scoreValue := 1.0
+	backdated := time.Now().UTC().Add(-time.Hour).Truncate(time.Millisecond)
+	if err := client.RecordScore(ctx, langfuse.Score{
+		Name:         "go-langfuse-live-score",
+		TraceID:      root.TraceID(),
+		NumericValue: &scoreValue,
+		Comment:      "synthetic feedback",
+		Timestamp:    backdated,
+	}); err != nil {
+		t.Fatalf("RecordScore(): %v", err)
+	}
 
 	flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer flushCancel()
@@ -114,6 +133,9 @@ func TestLiveCompatibility(t *testing.T) {
 		}
 	}
 
+	assertLiveTime(t, "generation completion start", readBack.CompletionStartTime, completionStart)
+	assertLiveTime(t, "generation end", readBack.EndTime, generationEnd)
+
 	trace := api.awaitTrace(t, deadline, root.TraceID())
 	if got, want := trace.Input, any("synthetic question"); got != want {
 		t.Errorf("read-back trace input = %#v, want root observation input %#v", got, want)
@@ -122,16 +144,48 @@ func TestLiveCompatibility(t *testing.T) {
 		t.Errorf("read-back trace output = %#v, want root observation output %#v", got, want)
 	}
 	assertSDKMetadata(t, "trace", trace.Metadata)
+
+	score := api.awaitScore(t, deadline, root.TraceID(), "go-langfuse-live-score")
+	if score.Value != scoreValue {
+		t.Errorf("read-back score value = %v, want %v", score.Value, scoreValue)
+	}
+	// The ingestion event envelope carries the score timestamp, so the
+	// backdated time must survive the round trip exactly.
+	assertLiveTime(t, "score timestamp", score.Timestamp, backdated)
 }
 
 type liveObservation struct {
-	ID           string             `json:"id"`
-	TraceID      string             `json:"traceId"`
-	Name         string             `json:"name"`
-	Type         string             `json:"type"`
-	Model        string             `json:"model"`
-	UsageDetails map[string]float64 `json:"usageDetails"`
-	Metadata     map[string]any     `json:"metadata"`
+	ID                  string             `json:"id"`
+	TraceID             string             `json:"traceId"`
+	Name                string             `json:"name"`
+	Type                string             `json:"type"`
+	Model               string             `json:"model"`
+	CompletionStartTime string             `json:"completionStartTime"`
+	EndTime             string             `json:"endTime"`
+	UsageDetails        map[string]float64 `json:"usageDetails"`
+	Metadata            map[string]any     `json:"metadata"`
+}
+
+type liveScore struct {
+	ID        string  `json:"id"`
+	TraceID   string  `json:"traceId"`
+	Name      string  `json:"name"`
+	Value     float64 `json:"value"`
+	Timestamp string  `json:"timestamp"`
+}
+
+// assertLiveTime compares a read-back ISO timestamp against the exact time
+// the SDK exported; both sides are millisecond-precision.
+func assertLiveTime(t *testing.T, subject, got string, want time.Time) {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339Nano, got)
+	if err != nil {
+		t.Errorf("read-back %s time = %q, want a parsable timestamp: %v", subject, got, err)
+		return
+	}
+	if !parsed.Equal(want) {
+		t.Errorf("read-back %s time = %v, want %v", subject, parsed, want)
+	}
 }
 
 type liveTrace struct {
@@ -201,6 +255,34 @@ func (api *liveAPI) awaitGeneration(t *testing.T, deadline time.Time, traceID, n
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("observation %q for trace %s was not visible through %s within the read-back deadline (last status %d, err %v)",
+				name, traceID, route, status, err)
+		}
+		time.Sleep(3 * time.Second)
+	}
+}
+
+// awaitScore polls GET /api/public/v3/scores?traceId=... until the named
+// score is ingested or the deadline passes.
+func (api *liveAPI) awaitScore(t *testing.T, deadline time.Time, traceID, name string) liveScore {
+	t.Helper()
+	route := api.baseURL + "/api/public/v3/scores?traceId=" + url.QueryEscape(traceID)
+	for {
+		var page struct {
+			Data []liveScore `json:"data"`
+		}
+		status, err := api.getJSON(route, &page)
+		if err == nil && status == http.StatusOK {
+			for _, score := range page.Data {
+				if score.Name == name {
+					return score
+				}
+			}
+		}
+		if err == nil && status != http.StatusOK && status != http.StatusNotFound {
+			t.Fatalf("GET %s returned unexpected status %d; check credentials and deployment", route, status)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("score %q for trace %s was not visible through %s within the read-back deadline (last status %d, err %v)",
 				name, traceID, route, status, err)
 		}
 		time.Sleep(3 * time.Second)

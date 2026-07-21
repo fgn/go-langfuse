@@ -154,13 +154,21 @@ err := lf.Observe(parentCtx, "retrieve-documents", langfuse.TypeRetriever,
 Use `StartObservation` directly when an observation's lifetime cannot be
 scoped to one function, as the quickstart does. `Event` records a
 point-in-time event, `Update` merges non-zero fields, and `RecordError` marks
-an observation failed without ending it. Semantics and limits are detailed in
-the [reference](docs/reference.md).
+an observation failed without ending it. Instrumentation that records
+already-finished work can reproduce the observed timeline with
+`ObservationAttributes.StartTime`, `CompletionStartTime`, and `EndAt`. For
+work that outlives its request — a goroutine that keeps running after the
+handler returned — clear the parent span context with the standard
+OpenTelemetry helper (`oteltrace.ContextWithSpanContext(ctx,
+oteltrace.SpanContext{})`) so the work becomes a new trace root with the
+propagated user and session intact, instead of a child of an already-ended
+request span; the [reference](docs/reference.md) shows the full pattern along
+with semantics and limits.
 
 ## Scores
 
-`RecordScore` submits evaluations and user feedback through the Langfuse REST
-scores endpoint. A score is validated synchronously — every returned error
+`RecordScore` submits evaluations and user feedback through the Langfuse JSON
+ingestion endpoint. A score is validated synchronously — every returned error
 means the score was not accepted — and then delivered asynchronously with
 bounded retry using the same backoff defaults as observation export, so a
 Langfuse blip neither blocks the request path nor loses feedback to one
@@ -168,7 +176,10 @@ failed attempt. `Flush` and `Shutdown`
 drain accepted scores; a delivery that outlives the retry budget is dropped
 with a payload-free diagnostic through the OpenTelemetry error handler. When
 `ID` is empty the SDK generates one, keeping retried deliveries idempotent. A
-disabled client is a no-op.
+disabled client is a no-op. `Timestamp` backdates a score — a nightly
+evaluation job can stamp feedback with the time of the scored interaction —
+and `ConfigID` binds it to a Langfuse score config for server-side
+validation.
 
 ```go
 rating := float64(feedback.Rating)

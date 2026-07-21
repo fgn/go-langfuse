@@ -28,7 +28,7 @@
 // functions; the context it returns carries the parent-child relationship,
 // so observations started from it nest under their parent.
 // [Client.RecordScore] submits evaluations and user feedback through the
-// Langfuse REST scores endpoint, and [Client.Flush] and [Client.Shutdown]
+// Langfuse JSON ingestion endpoint, and [Client.Flush] and [Client.Shutdown]
 // control the export lifecycle. A nil or disabled [Client] and the zero
 // [Observation] are safe no-ops.
 package langfuse

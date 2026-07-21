@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 	"unicode/utf8"
 )
 
@@ -26,8 +27,8 @@ const (
 )
 
 // Score is one evaluation or feedback value attached to a trace, a session,
-// or an observation. Scores are submitted through the Langfuse REST API
-// rather than the OpenTelemetry trace pipeline.
+// or an observation. Scores are submitted through the Langfuse JSON ingestion
+// API rather than the OpenTelemetry trace pipeline.
 type Score struct {
 	// ID makes submissions idempotent: Langfuse upserts scores by ID.
 	// Optional; the SDK generates a random ID when empty so retried
@@ -49,25 +50,37 @@ type Score struct {
 	// DataType is optional; when empty, Langfuse infers NUMERIC or
 	// CATEGORICAL from the value type.
 	DataType ScoreDataType
+	// ConfigID references a Langfuse score config by its identifier.
+	// Optional; at most 200 characters. Langfuse validates the score against
+	// the config server-side, so a violating score is rejected during
+	// asynchronous delivery and dropped with a diagnostic rather than
+	// returned as a RecordScore error.
+	ConfigID string
 	// Comment is explicit content supplied by the caller. It is not
 	// processed by Config.Mask; sanitize it before calling the SDK.
 	Comment string
 	// Metadata is serialized as one JSON value.
 	Metadata map[string]any
+	// Timestamp records when the scored interaction happened, for example
+	// when feedback is computed by a batch job hours after the trace. The
+	// zero value stamps the score with the time RecordScore accepted it. The
+	// UTC year must stay within the four-digit RFC 3339 range.
+	Timestamp time.Time
 }
 
-// RecordScore submits one score through the Langfuse REST scores endpoint
+// RecordScore submits one score through the Langfuse JSON ingestion endpoint
 // using the client's credentials and environment. The score is validated
 // synchronously — every returned error marks a score that was not accepted —
 // and then queued for asynchronous delivery with bounded retry (network
-// errors and HTTP 408, 429, and 5xx responses, using the same backoff
-// defaults as observation export), so transport failures never reach the
-// caller: after the retry budget they are reported as payload-free
-// OpenTelemetry diagnostics and the score is dropped. [Client.Flush] and [Client.Shutdown] drain accepted
+// errors, HTTP 408, 429, and 5xx responses, and per-item ingestion errors
+// with those statuses, using the same backoff defaults as observation
+// export), so transport failures never reach the caller: after the retry
+// budget they are reported as payload-free OpenTelemetry diagnostics and the
+// score is dropped. [Client.Flush] and [Client.Shutdown] drain accepted
 // scores. When the queue is full a score is dropped with a diagnostic unless
 // Config.BlockOnQueueFull waits for space, bounded by ctx. A disabled client
 // returns nil without sending, and a shut-down client returns an error. The
-// complete serialized score is limited to 128 KiB.
+// complete serialized score event is limited to 128 KiB.
 func (c *Client) RecordScore(ctx context.Context, score Score) error {
 	if c == nil || c.isDisabled() || c.scores == nil {
 		return nil
@@ -78,43 +91,47 @@ func (c *Client) RecordScore(ctx context.Context, score Score) error {
 	if ctx == nil {
 		return errors.New("langfuse: score context is nil")
 	}
-	payload, err := c.scorePayload(score)
+	payload, eventID, err := c.scorePayload(score)
 	if err != nil {
 		return err
 	}
-	return c.scores.Enqueue(ctx, payload)
+	return c.scores.Enqueue(ctx, payload, eventID)
 }
 
-func (c *Client) scorePayload(score Score) ([]byte, error) {
+// scorePayload validates score and serializes it as a complete single-event
+// ingestion request, returning the envelope event ID the ingestion result
+// must account for.
+func (c *Client) scorePayload(score Score) ([]byte, string, error) {
 	if err := validScoreString("score name", score.Name, false); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	for field, value := range map[string]string{
 		"score ID":             score.ID,
 		"score trace ID":       score.TraceID,
 		"score session ID":     score.SessionID,
 		"score observation ID": score.ObservationID,
+		"score config ID":      score.ConfigID,
 	} {
 		if err := validScoreString(field, value, true); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
 	if score.TraceID == "" && score.SessionID == "" {
-		return nil, errors.New("langfuse: score requires a trace ID or session ID target")
+		return nil, "", errors.New("langfuse: score requires a trace ID or session ID target")
 	}
 	if score.ObservationID != "" && score.TraceID == "" {
-		return nil, errors.New("langfuse: score observation ID requires a trace ID")
+		return nil, "", errors.New("langfuse: score observation ID requires a trace ID")
 	}
 	if (score.NumericValue == nil) == (score.StringValue == nil) {
-		return nil, errors.New("langfuse: score requires exactly one of numeric value or string value")
+		return nil, "", errors.New("langfuse: score requires exactly one of numeric value or string value")
 	}
 	switch score.DataType {
 	case "", ScoreTypeBoolean, ScoreTypeCategorical, ScoreTypeCorrection, ScoreTypeNumeric, ScoreTypeText:
 	default:
-		return nil, errors.New("langfuse: unsupported score data type")
+		return nil, "", errors.New("langfuse: unsupported score data type")
 	}
 	if score.Comment != "" && !utf8.ValidString(score.Comment) {
-		return nil, errors.New("langfuse: score comment is not valid UTF-8")
+		return nil, "", errors.New("langfuse: score comment is not valid UTF-8")
 	}
 
 	payload := map[string]any{
@@ -125,7 +142,7 @@ func (c *Client) scorePayload(score Score) ([]byte, error) {
 		payload["value"] = *score.NumericValue
 	} else {
 		if !utf8.ValidString(*score.StringValue) {
-			return nil, errors.New("langfuse: score string value is not valid UTF-8")
+			return nil, "", errors.New("langfuse: score string value is not valid UTF-8")
 		}
 		payload["value"] = *score.StringValue
 	}
@@ -134,7 +151,7 @@ func (c *Client) scorePayload(score Score) ([]byte, error) {
 	if scoreID == "" {
 		generated, err := newScoreID()
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		scoreID = generated
 	}
@@ -151,6 +168,9 @@ func (c *Client) scorePayload(score Score) ([]byte, error) {
 	if score.DataType != "" {
 		payload["dataType"] = string(score.DataType)
 	}
+	if score.ConfigID != "" {
+		payload["configId"] = score.ConfigID
+	}
 	if score.Comment != "" {
 		payload["comment"] = score.Comment
 	}
@@ -158,19 +178,46 @@ func (c *Client) scorePayload(score Score) ([]byte, error) {
 		payload["metadata"] = score.Metadata
 	}
 
-	encoded, err := json.Marshal(payload)
+	// The ingestion event envelope carries the score's timestamp: Langfuse
+	// stores a score-create event's envelope timestamp as the score time, which
+	// is how the official SDKs backdate scores. The envelope is serialized once
+	// here, so a retried delivery resends the identical event and stays
+	// idempotent through the event ID and the score ID upsert.
+	timestamp := score.Timestamp.UTC()
+	if score.Timestamp.IsZero() {
+		timestamp = time.Now().UTC()
+	} else if year := timestamp.Year(); year < 0 || year > 9999 {
+		// RFC 3339 timestamps carry a four-digit year; anything else would
+		// serialize to an invalid wire value.
+		return nil, "", errors.New("langfuse: score timestamp year is outside the RFC 3339 range")
+	}
+	eventID, err := newScoreID()
 	if err != nil {
-		return nil, errors.New("langfuse: score could not be serialized")
+		return nil, "", err
+	}
+	event := map[string]any{
+		"batch": []any{map[string]any{
+			"id":        eventID,
+			"type":      "score-create",
+			"timestamp": timestamp.Format(time.RFC3339Nano),
+			"body":      payload,
+		}},
+	}
+
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		return nil, "", errors.New("langfuse: score could not be serialized")
 	}
 	if len(encoded) > maxScorePayloadBytes {
-		return nil, errors.New("langfuse: score exceeds the 128 KiB payload limit")
+		return nil, "", errors.New("langfuse: score exceeds the 128 KiB payload limit")
 	}
-	return encoded, nil
+	return encoded, eventID, nil
 }
 
-// newScoreID returns a random UUID version 4 string. Generating the upsert
-// key client-side keeps asynchronous retries idempotent even when a delivery
-// succeeded but its response was lost.
+// newScoreID returns a random UUID version 4 string, used both as the score
+// upsert key and as the ingestion event ID. Generating them client-side keeps
+// asynchronous retries idempotent even when a delivery succeeded but its
+// response was lost.
 func newScoreID() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {

@@ -65,7 +65,7 @@ func TestScoresRetryTransientFailuresUntilSuccess(t *testing.T) {
 	t.Cleanup(server.Close)
 	client := newScoresTestClient(t, server.URL, nil)
 
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
 	flushScores(t, client)
@@ -84,12 +84,159 @@ func TestScoresDoNotRetryPermanentFailures(t *testing.T) {
 	t.Cleanup(server.Close)
 	client := newScoresTestClient(t, server.URL, nil)
 
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
 	flushScores(t, client)
 	if got := calls.Load(); got != 1 {
 		t.Fatalf("request count = %d, want 1 (a 400 must not be retried)", got)
+	}
+}
+
+func TestScoresRetryTransientIngestionItemErrors(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		if calls.Add(1) < 3 {
+			_, _ = w.Write([]byte(`{"successes":[],"errors":[{"id":"e","status":500}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"successes":[{"id":"e","status":201}],"errors":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	client := newScoresTestClient(t, server.URL, nil)
+
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	flushScores(t, client)
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("request count = %d, want 3 (two 500 item errors then success)", got)
+	}
+}
+
+func TestScoresDoNotRetryPermanentIngestionItemErrors(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusMultiStatus)
+		_, _ = w.Write([]byte(`{"successes":[],"errors":[{"id":"e","status":400,"message":"bad"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	client := newScoresTestClient(t, server.URL, nil)
+
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	flushScores(t, client)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("request count = %d, want 1 (a 400 item error must not be retried)", got)
+	}
+}
+
+func TestScoresTreatUnparsableSuccessBodiesAsAccepted(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not json`))
+	}))
+	t.Cleanup(server.Close)
+	client := newScoresTestClient(t, server.URL, nil)
+
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	flushScores(t, client)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("request count = %d, want 1 (a lenient non-207 2xx body must not be retried)", got)
+	}
+}
+
+func TestScoresRetryUnreadableMultiStatusResponses(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		if calls.Add(1) < 3 {
+			// A 207 body is part of the delivery contract; garbage leaves the
+			// outcome unknown and must be retried.
+			_, _ = w.Write([]byte(`not json`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"successes":[{"id":"e","status":201}],"errors":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	client := newScoresTestClient(t, server.URL, nil)
+
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	flushScores(t, client)
+	if got := calls.Load(); got != 3 {
+		t.Fatalf("request count = %d, want 3 (two unreadable 207 bodies then success)", got)
+	}
+}
+
+func TestScoresRetryMultiStatusResponsesAccountingForNoEvent(t *testing.T) {
+	t.Parallel()
+	bodies := []string{
+		`null`,
+		`{}`,
+		`{"successes":[],"errors":[]}`,
+		`{"successes":[{}],"errors":[]}`,
+		`{"successes":[{"id":"other","status":201}],"errors":[]}`,
+		`{"successes":[],"errors":[{"id":"other","status":400}]}`,
+	}
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		call := calls.Add(1)
+		if int(call) <= len(bodies) {
+			// A 207 that does not account for the submitted event ID — even
+			// one naming a different event, or reporting a foreign error —
+			// leaves the outcome unknown and must be retried, never counted
+			// as success and never dropped on another event's failure.
+			_, _ = w.Write([]byte(bodies[call-1]))
+			return
+		}
+		_, _ = w.Write([]byte(`{"successes":[{"id":"e","status":201}],"errors":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	client := newScoresTestClient(t, server.URL, nil)
+
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	flushScores(t, client)
+	if got, want := calls.Load(), int32(len(bodies)+1); got != want {
+		t.Fatalf("request count = %d, want %d (each unaccounting 207 retried, then success)", got, want)
+	}
+}
+
+func TestScoresRetryItemErrorsWithoutStatus(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusMultiStatus)
+		if calls.Add(1) < 2 {
+			_, _ = w.Write([]byte(`{"successes":[],"errors":[{"id":"e"}]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"successes":[{"id":"e","status":201}],"errors":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	client := newScoresTestClient(t, server.URL, nil)
+
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
+		t.Fatalf("Enqueue() error = %v", err)
+	}
+	flushScores(t, client)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("request count = %d, want 2 (a status-free item error must be retried, not dropped)", got)
 	}
 }
 
@@ -105,7 +252,7 @@ func TestScoresDisabledRetrySendsOnce(t *testing.T) {
 		cfg.Retry = &RetryConfig{Enabled: false}
 	})
 
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
 	flushScores(t, client)
@@ -131,7 +278,7 @@ func TestScoresRetryStopsAtElapsedBudget(t *testing.T) {
 		}
 	})
 
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
 	// Flush returning proves the score was dropped once the budget elapsed
@@ -160,7 +307,7 @@ func TestScoresHonorRetryAfterAgainstBudget(t *testing.T) {
 		}
 	})
 
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
 	flushScores(t, client)
@@ -192,7 +339,7 @@ func TestScoresDropWhenQueueIsFull(t *testing.T) {
 
 	// The first score occupies the dispatcher, the second fills the queue,
 	// and the third must be dropped without blocking or erroring.
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"a"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"a"}`), "e"); err != nil {
 		t.Fatalf("Enqueue(a) error = %v", err)
 	}
 	select {
@@ -200,10 +347,10 @@ func TestScoresDropWhenQueueIsFull(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("first score never reached the server")
 	}
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"b"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"b"}`), "e"); err != nil {
 		t.Fatalf("Enqueue(b) error = %v", err)
 	}
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"c"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"c"}`), "e"); err != nil {
 		t.Fatalf("Enqueue(c) on a full queue error = %v, want nil drop", err)
 	}
 	releaseServer()
@@ -233,7 +380,7 @@ func TestScoresBlockOnQueueFullWaitsForSpace(t *testing.T) {
 	})
 	client.capacity = 1
 
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"a"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"a"}`), "e"); err != nil {
 		t.Fatalf("Enqueue(a) error = %v", err)
 	}
 	select {
@@ -241,12 +388,12 @@ func TestScoresBlockOnQueueFullWaitsForSpace(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("first score never reached the server")
 	}
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"b"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"b"}`), "e"); err != nil {
 		t.Fatalf("Enqueue(b) error = %v", err)
 	}
 	blocked := make(chan error, 1)
 	go func() {
-		blocked <- client.Enqueue(context.Background(), []byte(`{"name":"c"}`))
+		blocked <- client.Enqueue(context.Background(), []byte(`{"name":"c"}`), "e")
 	}()
 	select {
 	case err := <-blocked:
@@ -286,7 +433,7 @@ func TestScoresBlockedEnqueueHonorsCallerContext(t *testing.T) {
 	})
 	client.capacity = 1
 
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"a"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"a"}`), "e"); err != nil {
 		t.Fatalf("Enqueue(a) error = %v", err)
 	}
 	select {
@@ -294,13 +441,13 @@ func TestScoresBlockedEnqueueHonorsCallerContext(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("first score never reached the server")
 	}
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"b"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"b"}`), "e"); err != nil {
 		t.Fatalf("Enqueue(b) error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	blocked := make(chan error, 1)
 	go func() {
-		blocked <- client.Enqueue(ctx, []byte(`{"name":"c"}`))
+		blocked <- client.Enqueue(ctx, []byte(`{"name":"c"}`), "e")
 	}()
 	cancel()
 	select {
@@ -325,7 +472,7 @@ func TestScoresShutdownDrainsAcceptedScores(t *testing.T) {
 	client := newScoresTestClient(t, server.URL, nil)
 
 	for range 3 {
-		if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+		if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
 			t.Fatalf("Enqueue() error = %v", err)
 		}
 	}
@@ -337,7 +484,7 @@ func TestScoresShutdownDrainsAcceptedScores(t *testing.T) {
 	if got := calls.Load(); got != 3 {
 		t.Fatalf("request count = %d, want all 3 delivered before shutdown returned", got)
 	}
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"late"}`)); err == nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"late"}`), "e"); err == nil {
 		t.Fatal("Enqueue() after Shutdown error = nil, want an error")
 	}
 }
@@ -362,7 +509,7 @@ func TestScoresShutdownHonorsContext(t *testing.T) {
 		}
 	})
 
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
 	select {
@@ -399,7 +546,7 @@ func TestScoresFlushHonorsContext(t *testing.T) {
 		}
 	})
 
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err != nil {
 		t.Fatalf("Enqueue() error = %v", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
@@ -444,7 +591,7 @@ func TestScoresFlushIsACallTimeBarrier(t *testing.T) {
 	t.Cleanup(releaseAll)
 	client := newScoresTestClient(t, server.URL, nil)
 
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"a"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"a"}`), "e"); err != nil {
 		t.Fatalf("Enqueue(a) error = %v", err)
 	}
 	select {
@@ -473,7 +620,7 @@ func TestScoresFlushIsACallTimeBarrier(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"b"}`)); err != nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"b"}`), "e"); err != nil {
 		t.Fatalf("Enqueue(b) error = %v", err)
 	}
 	select {
@@ -517,7 +664,7 @@ func TestScoresShutdownWithoutUseIsImmediate(t *testing.T) {
 	if err := client.Shutdown(ctx); err != nil {
 		t.Fatalf("Shutdown() of an unused client error = %v, want nil", err)
 	}
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`)); err == nil {
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"n"}`), "e"); err == nil {
 		t.Fatal("Enqueue() after Shutdown error = nil, want an error")
 	}
 }

@@ -365,6 +365,8 @@ func TestZeroAndNilObservationsAreSafeNoops(t *testing.T) {
 		observation.RecordError(nil)
 		observation.End()
 		observation.End()
+		observation.EndAt(time.Now())
+		observation.EndAt(time.Time{})
 		if got := observation.TraceID(); got != "" {
 			t.Errorf("observation %d TraceID() = %q, want empty", index, got)
 		}

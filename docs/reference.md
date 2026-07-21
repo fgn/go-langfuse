@@ -51,6 +51,27 @@ internal application-root claim propagate only through the local Go context.
 Consequently, a downstream service can correctly continue the trace ID while
 still being shown as a separate Langfuse application root.
 
+Work that outlives its request — a goroutine started from an HTTP handler
+with `context.WithoutCancel`, for example — should not attach observations to
+the handler's already-ended span. Detach it with the standard OpenTelemetry
+helper; no SDK-specific API is involved:
+
+```go
+import oteltrace "go.opentelemetry.io/otel/trace"
+
+jobCtx := oteltrace.ContextWithSpanContext(ctx, oteltrace.SpanContext{})
+jobCtx, job := lf.StartObservation(jobCtx, "background-job", langfuse.TypeChain,
+	langfuse.ObservationAttributes{})
+```
+
+Clearing the span context makes the next observation the root of a new trace,
+marked as an application root, while trace attributes already set through
+`WithTraceAttributes` — user, session, tags, metadata, version — continue to
+propagate. Session and user grouping in Langfuse therefore survive the
+handoff even though the background work is a separate trace. This contract is
+locked by the SDK's tests. The span-context reset is shared OpenTelemetry
+state: other tracers using the detached context also start new traces.
+
 ## Observation semantics
 
 For generations and embeddings, keep the model, input, output, usage, cost,
@@ -60,10 +81,18 @@ tokens. The client normalizes them to Langfuse's exclusive `usage_details`
 buckets.
 
 `Update` merges non-zero fields and never clears a value. It is safe to call
-`Update`, `RecordError`, and `End` concurrently; `End` is idempotent. Calls
-made after an observation has ended are ignored. Each observation retains at
-most eight `RecordError` exception events; further errors are omitted with one
-payload-free diagnostic.
+`Update`, `RecordError`, `End`, and `EndAt` concurrently; only the first `End`
+or `EndAt` takes effect. Calls made after an observation has ended are
+ignored. Each observation retains at most eight `RecordError` exception
+events; further errors are omitted with one payload-free diagnostic.
+
+`EndAt` ends an observation at an explicit time for instrumentation that
+records work after the fact; pair it with `StartTime` and
+`CompletionStartTime` to reproduce the observed timeline. A zero end time
+falls back to the current time with a diagnostic, and an end time before an
+explicitly supplied `StartTime` is replaced by that start time with a
+diagnostic. When no explicit `StartTime` was given the SDK cannot see the
+span's actual start and exports the supplied end time unchanged.
 
 ## Limits
 
@@ -88,7 +117,7 @@ provider):
   preflight. Caller-provided `Mask`, `MarshalJSON`, and `MarshalText` are
   trusted callbacks: their output is still rejected above 1 MiB, but work
   inside the callback cannot be bounded by the SDK.
-- A serialized score is limited to 128 KiB.
+- A serialized score event is limited to 128 KiB.
 
 ## Buffering and backpressure
 
@@ -104,14 +133,18 @@ before compression; larger batches are split across requests, and only a span
 that alone exceeds the cap is dropped with a diagnostic.
 
 Scores accepted by `RecordScore` wait in their own bounded queue of 256
-serialized scores serviced by one background sender. Transient failures —
-network errors and HTTP 408, 429, and 5xx responses — are retried with
-exponential backoff and jitter (5-second initial interval, 30-second maximum,
-one minute in total, honoring `Retry-After`); other error statuses and an
-exhausted retry budget drop the score with a payload-free diagnostic. On a
-full score queue new scores are dropped with a diagnostic, and
-`Config.BlockOnQueueFull` opts into the same blocking backpressure as for
-observations.
+serialized score events serviced by one background sender posting to the JSON
+ingestion endpoint. Transient failures — network errors, HTTP 408, 429, and
+5xx responses, per-item ingestion errors with those statuses or without a
+status, and 207 responses whose body cannot be read or does not account for
+the submitted event — are retried with exponential backoff and jitter
+(5-second initial interval, 30-second maximum, one minute in total, honoring
+`Retry-After`); other error statuses and an exhausted retry budget drop the
+score with a payload-free diagnostic. Each score is serialized once as a
+complete ingestion event, so a retried delivery resends the identical event
+and stays idempotent through the event ID and the score ID. On a full score
+queue new scores are dropped with a diagnostic, and `Config.BlockOnQueueFull`
+opts into the same blocking backpressure as for observations.
 
 ## Flush and shutdown
 

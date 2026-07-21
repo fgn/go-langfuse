@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/fgn/go-langfuse"
 )
@@ -26,6 +27,7 @@ var (
 	_ func(*langfuse.Observation, langfuse.ObservationAttributes) = (*langfuse.Observation).Update
 	_ func(*langfuse.Observation, error)                          = (*langfuse.Observation).RecordError
 	_ func(*langfuse.Observation)                                 = (*langfuse.Observation).End
+	_ func(*langfuse.Observation, time.Time)                      = (*langfuse.Observation).EndAt
 	_ func(*langfuse.Observation) string                          = (*langfuse.Observation).TraceID
 	_ func(*langfuse.Observation) string                          = (*langfuse.Observation).ID
 )
@@ -44,6 +46,7 @@ func TestPublicMethodSurface(t *testing.T) {
 	})
 	assertMethodNames(t, (*langfuse.Observation)(nil), []string{
 		"End",
+		"EndAt",
 		"ID",
 		"RecordError",
 		"TraceID",
@@ -94,8 +97,10 @@ func TestPublicStructSurface(t *testing.T) {
 		"NumericValue",
 		"StringValue",
 		"DataType",
+		"ConfigID",
 		"Comment",
 		"Metadata",
+		"Timestamp",
 	})
 	assertFieldNames(t, langfuse.ObservationAttributes{}, []string{
 		"Input",
