@@ -106,6 +106,25 @@ func TestLiveCompatibility(t *testing.T) {
 		t.Fatalf("RecordScore(): %v", err)
 	}
 
+	// The prompt referenced by the generation must round-trip through the
+	// prompt-management read API, proving endpoint shape, decoding, and the
+	// linkage between GetPrompt and PromptRef against a real deployment.
+	livePrompt, err := client.GetPrompt(ctx, "go-langfuse-live-prompt",
+		langfuse.PromptQuery{Version: 1})
+	if err != nil {
+		t.Fatalf("GetPrompt(): %v", err)
+	}
+	if livePrompt.Name != "go-langfuse-live-prompt" || livePrompt.Version != 1 {
+		t.Fatalf("GetPrompt() = %+v, want the seeded live prompt version 1", livePrompt)
+	}
+	if livePrompt.Type == langfuse.PromptTypeText && livePrompt.Text == "" {
+		t.Fatal("GetPrompt() returned an empty text prompt body")
+	}
+	if ref := livePrompt.Ref(); ref == nil ||
+		*ref != (langfuse.PromptRef{Name: "go-langfuse-live-prompt", Version: 1}) {
+		t.Fatalf("GetPrompt().Ref() = %+v, want the generation's prompt reference", livePrompt.Ref())
+	}
+
 	flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer flushCancel()
 	if err := client.Flush(flushCtx); err != nil {

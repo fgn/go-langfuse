@@ -5,6 +5,14 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+- Add prompt management reads: `Client.GetPrompt` fetches text and chat
+  prompts from `/api/public/v2/prompts` with client-side caching
+  (60-second default TTL, stale-while-revalidate background refresh with
+  failure cooldown, singleflight cache misses, LRU-bounded entries), an
+  optional local `Fallback` for guaranteed availability, `Prompt.Compile`
+  for `{{variable}}` substitution and chat placeholder filling, and
+  `Prompt.Ref` for linking generations to the exact prompt version.
+  404 responses wrap the new `ErrPromptNotFound`.
 - Add `Observation.EndAt` to end an observation at an explicit time, so
   instrumentation that records already-finished work can reproduce the
   observed timeline together with `StartTime` and `CompletionStartTime`.

@@ -23,6 +23,12 @@ Its 207 multi-status body is part of the delivery contract; how per-item
 results are classified for retry is described in the
 [reference](reference.md#buffering-and-backpressure).
 
+Prompts are read from the REST endpoint `GET /api/public/v2/prompts/{name}`
+on the same host with the same Basic authentication, selected by `version` or
+`label`. Responses are validated against the request (name, version, label,
+and type) before they are cached; caching and retry semantics are described
+in the [reference](reference.md#prompt-management).
+
 go-langfuse uses the instrumentation scope `langfuse-sdk.go`. Langfuse treats
 the `langfuse-sdk` prefix as an ingestion marker that prevents semantic
 attributes from being copied into generic `metadata.attributes`; the `.go`

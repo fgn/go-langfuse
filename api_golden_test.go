@@ -185,6 +185,10 @@ const LevelError Level = "ERROR"
 
 const LevelWarning Level = "WARNING"
 
+const PromptTypeChat PromptType = "chat"
+
+const PromptTypeText PromptType = "text"
+
 const ScoreTypeBoolean ScoreDataType = "BOOLEAN"
 
 const ScoreTypeCategorical ScoreDataType = "CATEGORICAL"
@@ -219,6 +223,8 @@ func (c *Client) Event(ctx context.Context, name string, values ObservationAttri
 
 func (c *Client) Flush(ctx context.Context) error
 
+func (c *Client) GetPrompt(ctx context.Context, name string, query PromptQuery) (Prompt, error)
+
 func (c *Client) Observe(
 	ctx context.Context,
 	name string,
@@ -251,6 +257,10 @@ func (o *Observation) RecordError(err error)
 func (o *Observation) TraceID() string
 
 func (o *Observation) Update(values ObservationAttributes)
+
+func (p Prompt) Compile(vars map[string]any) Prompt
+
+func (p Prompt) Ref() *PromptRef
 
 func ConfigFromEnv() Config
 
@@ -297,10 +307,47 @@ type ObservationAttributes struct {
 
 type ObservationType string
 
+type Prompt struct {
+	Name string
+	Version int
+	Type PromptType
+	Text string
+	Messages []PromptMessage
+	Config json.RawMessage
+	Labels []string
+	Tags []string
+	CommitMessage string
+	Fallback bool
+}
+
+type PromptFallback struct {
+	Type PromptType
+	Text string
+	Messages []PromptMessage
+	Config json.RawMessage
+}
+
+type PromptMessage struct {
+	Role string
+	Content string
+	PlaceholderName string
+	Extra json.RawMessage
+}
+
+type PromptQuery struct {
+	Version int
+	Label string
+	CacheTTL time.Duration
+	DisableCache bool
+	Fallback *PromptFallback
+}
+
 type PromptRef struct {
 	Name string
 	Version int
 }
+
+type PromptType string
 
 type Score struct {
 	ID string
@@ -336,4 +383,6 @@ type Usage struct {
 	ReasoningOutputTokens int64
 	Details map[string]int64
 }
+
+var ErrPromptNotFound = errors.New("langfuse: prompt not found")
 `

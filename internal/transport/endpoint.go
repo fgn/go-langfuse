@@ -11,6 +11,7 @@ const (
 	otelBasePath   = "/api/public/otel"
 	tracesPath     = otelBasePath + "/v1/traces"
 	ingestionPath  = "/api/public/ingestion"
+	promptsPath    = "/api/public/v2/prompts"
 )
 
 // NormalizeEndpoint converts a Langfuse host, OTLP base endpoint, or complete
@@ -70,4 +71,15 @@ func NormalizeIngestionEndpoint(raw string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSuffix(traces, tracesPath) + ingestionPath, nil
+}
+
+// NormalizePromptsEndpoint converts the same accepted base URL forms into
+// the Langfuse prompts API base on the host root; a prompt name path segment
+// is appended per request.
+func NormalizePromptsEndpoint(raw string) (string, error) {
+	traces, err := NormalizeEndpoint(raw)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(traces, tracesPath) + promptsPath, nil
 }

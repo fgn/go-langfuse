@@ -21,6 +21,7 @@ var (
 	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes, func(context.Context, *langfuse.Observation) error) error = (*langfuse.Client).Observe
 	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationAttributes)                                                                                     = (*langfuse.Client).Event
 	_ func(*langfuse.Client, context.Context, langfuse.Score) error                                                                                                       = (*langfuse.Client).RecordScore
+	_ func(*langfuse.Client, context.Context, string, langfuse.PromptQuery) (langfuse.Prompt, error)                                                                      = (*langfuse.Client).GetPrompt
 	_ func(*langfuse.Client, context.Context) error                                                                                                                       = (*langfuse.Client).Flush
 	_ func(*langfuse.Client, context.Context) error                                                                                                                       = (*langfuse.Client).Shutdown
 
@@ -30,6 +31,11 @@ var (
 	_ func(*langfuse.Observation, time.Time)                      = (*langfuse.Observation).EndAt
 	_ func(*langfuse.Observation) string                          = (*langfuse.Observation).TraceID
 	_ func(*langfuse.Observation) string                          = (*langfuse.Observation).ID
+
+	_ func(langfuse.Prompt) *langfuse.PromptRef             = langfuse.Prompt.Ref
+	_ func(langfuse.Prompt, map[string]any) langfuse.Prompt = langfuse.Prompt.Compile
+
+	_ error = langfuse.ErrPromptNotFound
 )
 
 func TestPublicMethodSurface(t *testing.T) {
@@ -38,6 +44,7 @@ func TestPublicMethodSurface(t *testing.T) {
 	assertMethodNames(t, (*langfuse.Client)(nil), []string{
 		"Event",
 		"Flush",
+		"GetPrompt",
 		"Observe",
 		"RecordScore",
 		"Shutdown",
@@ -51,6 +58,10 @@ func TestPublicMethodSurface(t *testing.T) {
 		"RecordError",
 		"TraceID",
 		"Update",
+	})
+	assertMethodNames(t, langfuse.Prompt{}, []string{
+		"Compile",
+		"Ref",
 	})
 }
 
@@ -118,6 +129,38 @@ func TestPublicStructSurface(t *testing.T) {
 		"StartTime",
 	})
 
+	assertFieldNames(t, langfuse.PromptQuery{}, []string{
+		"Version",
+		"Label",
+		"CacheTTL",
+		"DisableCache",
+		"Fallback",
+	})
+	assertFieldNames(t, langfuse.PromptFallback{}, []string{
+		"Type",
+		"Text",
+		"Messages",
+		"Config",
+	})
+	assertFieldNames(t, langfuse.PromptMessage{}, []string{
+		"Role",
+		"Content",
+		"PlaceholderName",
+		"Extra",
+	})
+	assertFieldNames(t, langfuse.Prompt{}, []string{
+		"Name",
+		"Version",
+		"Type",
+		"Text",
+		"Messages",
+		"Config",
+		"Labels",
+		"Tags",
+		"CommitMessage",
+		"Fallback",
+	})
+
 	assertNoExportedFields(t, langfuse.Client{})
 	assertNoExportedFields(t, langfuse.Observation{})
 }
@@ -165,6 +208,16 @@ func TestPublicConstantValues(t *testing.T) {
 	for got, want := range scoreTypes {
 		if string(got) != want {
 			t.Errorf("score data type %q = %q, want %q", want, got, want)
+		}
+	}
+
+	promptTypes := map[langfuse.PromptType]string{
+		langfuse.PromptTypeText: "text",
+		langfuse.PromptTypeChat: "chat",
+	}
+	for got, want := range promptTypes {
+		if string(got) != want {
+			t.Errorf("prompt type %q = %q, want %q", want, got, want)
 		}
 	}
 }
