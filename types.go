@@ -21,6 +21,17 @@ type Config struct {
 	Environment string
 	Release     string
 
+	// SampleRate selects the fraction of traces exported in isolated mode,
+	// decided once per trace by a deterministic threshold on the trace ID and
+	// inherited by every SDK observation started on the deciding context
+	// path. nil selects the default of 1.0 (export everything); a non-nil
+	// value must be finite and within [0, 1], where 0 exports no traces while
+	// scores and prompts keep working. Other values are a validation error in
+	// [New]. It is ignored with a diagnostic when TracerProvider is set,
+	// where the application's sampler remains authoritative.
+	// [Client.WithSampleRate] overrides it per context path.
+	SampleRate *float64
+
 	// ServiceName overrides service.name on an SDK-owned provider. When empty,
 	// the standard OpenTelemetry resource.Default value is retained, including
 	// OTEL_SERVICE_NAME. It is ignored when TracerProvider is set.

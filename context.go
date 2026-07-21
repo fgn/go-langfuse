@@ -24,9 +24,11 @@ const (
 // application-root claim, and the active-observation pointer is only
 // consulted while the ambient span context still matches that observation.
 type (
-	traceStateContextKey  struct{ client *Client }
-	observationContextKey struct{ client *Client }
-	traceClaimContextKey  struct{ client *Client }
+	traceStateContextKey     struct{ client *Client }
+	observationContextKey    struct{ client *Client }
+	traceClaimContextKey     struct{ client *Client }
+	sampleRateContextKey     struct{ client *Client }
+	admissionTokenContextKey struct{ client *Client }
 )
 
 type traceState struct {
@@ -67,6 +69,42 @@ func (c *Client) WithTraceAttributes(ctx context.Context, values TraceAttributes
 		}
 	}
 	return result
+}
+
+// WithSampleRate returns a context that overrides the configured sample rate
+// for the sampling decision made by the first SDK observation subsequently
+// started on this context path. The fraction must be finite and within
+// [0, 1]; 0 exports nothing, 1 exports everything. The decision is inherited
+// by every SDK observation started from that observation's returned context
+// (and inside its [Client.Observe] callback), so a rate set later on that
+// path has no effect on the already-decided trace. Sibling observations
+// started independently from a context that carries no decision yet
+// re-decide deterministically from the trace ID and their own effective
+// rate: with equal rates they always agree; setting different rates inside
+// one trace makes trace membership subtree-scoped. Set the rate once per
+// request, before the first observation, unless subtree-scoped rates are
+// intended. An invalid fraction is ignored with a diagnostic, as is any call
+// on a borrowed-provider client, where the application's sampler remains
+// authoritative.
+func (c *Client) WithSampleRate(ctx context.Context, fraction float64) context.Context {
+	if c == nil || c.isDisabled() || ctx == nil {
+		return ctx
+	}
+	if c.stopped.Load() {
+		c.reportStoppedOnce()
+		return ctx
+	}
+	if !c.owned {
+		if c.borrowedRateWarning.CompareAndSwap(false, true) {
+			diagnostic.Report("sample rate is ignored on a borrowed tracer provider; the application's sampler remains authoritative")
+		}
+		return ctx
+	}
+	if !validSampleFraction(fraction) {
+		diagnostic.Report("sample rate fraction is not finite or is outside [0, 1]; value ignored")
+		return ctx
+	}
+	return context.WithValue(ctx, sampleRateContextKey{client: c}, fraction)
 }
 
 func (s traceState) clone() traceState {

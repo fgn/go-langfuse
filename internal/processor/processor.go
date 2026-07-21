@@ -25,6 +25,11 @@ type ContextAttributesFunc func(context.Context) []otelattr.KeyValue
 // application-root claim for traceID.
 type TraceClaimFunc func(context.Context, oteltrace.TraceID) bool
 
+// AdmitFunc accepts the pending admission token in ctx, confirming to the
+// starting SDK observation that this processor observed its start before any
+// teardown. It runs synchronously inside Tracer.Start and must not block.
+type AdmitFunc func(context.Context)
+
 // Config configures a Processor.
 type Config struct {
 	Next sdktrace.SpanProcessor
@@ -35,6 +40,7 @@ type Config struct {
 
 	ContextAttributes ContextAttributesFunc
 	HasTraceClaim     TraceClaimFunc
+	Admit             AdmitFunc
 }
 
 // Processor adds Langfuse propagation and application-root attributes, then
@@ -48,6 +54,7 @@ type Processor struct {
 
 	contextAttributes ContextAttributesFunc
 	hasTraceClaim     TraceClaimFunc
+	admit             AdmitFunc
 
 	stopped atomic.Bool
 
@@ -83,6 +90,7 @@ func New(config Config) (*Processor, error) {
 		release:           config.Release,
 		contextAttributes: config.ContextAttributes,
 		hasTraceClaim:     config.HasTraceClaim,
+		admit:             config.Admit,
 		expected:          make(map[spanKey]struct{}),
 		shutdownDone:      make(chan struct{}),
 	}, nil
@@ -94,6 +102,12 @@ func New(config Config) (*Processor, error) {
 func (p *Processor) OnStart(parent context.Context, span sdktrace.ReadWriteSpan) {
 	if p.stopped.Load() || !p.acceptsProjectSpan(span) {
 		return
+	}
+
+	// Admit only spans from the SDK's own tracer: a foreign span started with
+	// a context that happens to carry an admission token must not accept it.
+	if span.InstrumentationScope().Name == lfattr.TracerName {
+		safeAdmit(p.admit, parent)
 	}
 
 	// Context callbacks are deliberately outside lifecycle. A diagnostic hook
@@ -283,6 +297,18 @@ func safeContextAttributes(callback ContextAttributesFunc, ctx context.Context) 
 		}
 	}()
 	return callback(ctx)
+}
+
+func safeAdmit(callback AdmitFunc, ctx context.Context) {
+	if callback == nil {
+		return
+	}
+	defer func() {
+		if recover() != nil {
+			diagnostic.Report("processor admission callback panicked; start not admitted")
+		}
+	}()
+	callback(ctx)
 }
 
 func safeHasTraceClaim(callback TraceClaimFunc, ctx context.Context, traceID oteltrace.TraceID) (claimed bool) {

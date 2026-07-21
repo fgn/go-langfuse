@@ -11,6 +11,7 @@
 | `LANGFUSE_BASE_URL` | Cloud or self-hosted base URL |
 | `LANGFUSE_TRACING_ENVIRONMENT` | Environment stamped on observations |
 | `LANGFUSE_RELEASE` | Application release stamped on observations |
+| `LANGFUSE_SAMPLE_RATE` | Fraction of traces exported in isolated mode, `[0, 1]`; unset keeps everything |
 | `LANGFUSE_TRACING_ENABLED` | Set to `false` for a complete no-op client |
 | `LANGFUSE_CONTENT_CAPTURE_ENABLED` | Set to `false` to drop SDK input/output |
 
@@ -243,13 +244,56 @@ since a reused deadline keeps running. Repeated and concurrent lifecycle calls
 are safe: the first `Shutdown` owns teardown and later calls return without
 starting another.
 
-## Sampling and current limitations
+## Sampling
 
-- Isolated mode always samples its own SDK observations, including children
-  of an unsampled foreign parent, while retaining the foreign trace and parent
-  IDs. In borrowed mode, spans rejected by the application's sampler cannot be
-  recovered by the SDK. Smart filtering is an export selection step, not a
-  sampler.
+Isolated mode samples whole traces. The default keeps everything;
+`Config.SampleRate` (or `LANGFUSE_SAMPLE_RATE`) selects a fraction, and
+`Client.WithSampleRate` overrides that fraction for the sampling decision
+made by the first SDK observation subsequently started on that context path —
+set it once per request, before the first observation, to give different
+kinds of work different rates in one process.
+
+- The decision is a deterministic threshold on the trace ID using the same
+  scheme as OpenTelemetry's `TraceIDRatioBased`, so equal fractions always
+  agree and smaller fractions select subsets of larger ones. `TraceSampledAt`
+  exposes the same predicate for correlated application-level sampling, such
+  as running an expensive evaluation on 2% of traces: with an evaluation
+  fraction no larger than the export fraction, every evaluated trace is also
+  kept for export. Kept is a sampling decision, not delivery — export still
+  requires ending observations, a live client, and export success.
+- The decision is made once per context path and inherited by every SDK
+  observation started from the deciding observation's returned context, even
+  across foreign middle spans and later rate changes. Sibling observations
+  started independently from a context without a decision re-decide
+  deterministically from the trace ID and their own effective rate: equal
+  rates always agree; different rates inside one trace make trace membership
+  subtree-scoped, with each subtree internally consistent.
+- Sampled-out observations keep their trace and span IDs and become cheap
+  no-ops: `Update` and `RecordError` return before serialization, `Mask`, or
+  `Error()` calls. `Observation.Sampled` reports the decision — a sampling
+  decision, not a delivery guarantee. Start attributes are necessarily built
+  before the decision, so start observations with minimal fields and attach
+  expensive payloads in `Update` after checking `Sampled`.
+- A score recorded directly on a sampled-out, SDK-originated context path
+  targeting that same trace is suppressed (returning nil) so sampled-out
+  traces do not accumulate orphaned scores; the first suppression per client
+  emits one diagnostic. This is the path's drop decision applied to scores,
+  not proof the trace is absent remotely. All other scores — session-only,
+  other traces, out-of-context, traces with remote or foreign parents, any
+  path a foreign span has joined, and all borrowed-mode scores — are
+  delivered.
+- Detached contexts start a new trace root and re-decide with the surviving
+  requested rate. `SampleRate: 0` exports no traces while scores and prompts
+  keep working; `Disabled: true` remains the complete no-op.
+
+## Current limitations
+
+- At the default rate, isolated mode samples its own SDK observations,
+  including children of an unsampled foreign parent, while retaining the
+  foreign trace and parent IDs. In borrowed mode, `SampleRate` and
+  `WithSampleRate` are ignored with a diagnostic: the application's sampler
+  remains authoritative, and spans it rejects cannot be recovered by the SDK.
+  Smart filtering is an export selection step, not a sampler.
 - The default smart filter exports SDK observations, spans with `gen_ai.*`
   attributes, known LLM instrumentation scopes, and required application roots.
   Unrelated HTTP, database, and logging spans are excluded by default.
@@ -265,5 +309,8 @@ starting another.
   and diagnosed without including their payload.
 - Batch export improves application latency but cannot survive an abrupt
   process exit. Graceful shutdown is required.
-- Custom filters, export-all mode, multiple projects on one provider, prompt
-  fetching, datasets, and administrative APIs are outside v0.1.
+- Custom filters, export-all mode, multiple projects on one provider,
+  datasets, and administrative APIs remain out of scope. Tail sampling
+  (keep-all-errors) is not provided: the outcome is unknown when the trace
+  root starts; use `WithSampleRate(ctx, 1)` for requests known to matter up
+  front.

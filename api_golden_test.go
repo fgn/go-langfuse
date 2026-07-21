@@ -44,7 +44,7 @@ func renderPublicAPI(t *testing.T) string {
 		for _, declaration := range file.Decls {
 			switch declaration := declaration.(type) {
 			case *ast.FuncDecl:
-				if !declaration.Name.IsExported() {
+				if !declaration.Name.IsExported() || !exportedReceiver(declaration) {
 					continue
 				}
 				clone := *declaration
@@ -62,6 +62,31 @@ func renderPublicAPI(t *testing.T) string {
 	}
 	sort.Strings(entries)
 	return strings.Join(entries, "\n\n") + "\n"
+}
+
+// exportedReceiver reports whether declaration is a plain function or a
+// method on an exported receiver type. Exported method names on unexported
+// receivers (an unexported sdktrace.Sampler implementation, for example) are
+// unreachable for users and must not enter the public-API golden.
+func exportedReceiver(declaration *ast.FuncDecl) bool {
+	if declaration.Recv == nil || len(declaration.Recv.List) == 0 {
+		return true
+	}
+	receiver := declaration.Recv.List[0].Type
+	for {
+		switch typed := receiver.(type) {
+		case *ast.StarExpr:
+			receiver = typed.X
+		case *ast.IndexExpr:
+			receiver = typed.X
+		case *ast.IndexListExpr:
+			receiver = typed.X
+		case *ast.Ident:
+			return typed.IsExported()
+		default:
+			return true
+		}
+	}
 }
 
 func exportedSpec(t *testing.T, set *token.FileSet, kind token.Token, spec ast.Spec) string {
@@ -252,6 +277,8 @@ func (c *Client) StartObservation(
 	values ObservationAttributes,
 ) (context.Context, *Observation)
 
+func (c *Client) WithSampleRate(ctx context.Context, fraction float64) context.Context
+
 func (c *Client) WithTraceAttributes(ctx context.Context, values TraceAttributes) context.Context
 
 func (o *Observation) End()
@@ -261,6 +288,8 @@ func (o *Observation) EndAt(at time.Time)
 func (o *Observation) ID() string
 
 func (o *Observation) RecordError(err error)
+
+func (o *Observation) Sampled() bool
 
 func (o *Observation) TraceID() string
 
@@ -278,6 +307,8 @@ func ConfigFromEnv() Config
 
 func New(ctx context.Context, cfg Config) (*Client, error)
 
+func TraceSampledAt(traceID string, fraction float64) (bool, error)
+
 type Client struct {
 }
 
@@ -287,6 +318,7 @@ type Config struct {
 	SecretKey string
 	Environment string
 	Release string
+	SampleRate *float64
 	ServiceName string
 	TracerProvider *sdktrace.TracerProvider
 	MaxQueueSize int

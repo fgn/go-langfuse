@@ -234,6 +234,46 @@ Selection defaults to the `production` label; `Version` or `Label` pin others.
 Caching, bounds, and failure semantics are detailed in the
 [reference](docs/reference.md).
 
+## Sampling
+
+In isolated mode the client samples whole traces deterministically by trace
+ID. `Config.SampleRate` (or `LANGFUSE_SAMPLE_RATE`) sets the default
+fraction, and `WithSampleRate` overrides it per context path, so one process
+can keep every trace from a critical path while exporting only a fraction of
+high-volume routine work. Set the rate once per request, before the first
+observation; the decision is then inherited by every observation in that
+trace:
+
+```go
+ctx = lf.WithSampleRate(ctx, 0.02) // keep 2% of a high-volume path
+ctx, root := lf.StartObservation(ctx, "generate-answer", langfuse.TypeGeneration,
+	langfuse.ObservationAttributes{Input: prompt})
+```
+
+`TraceSampledAt` exposes the same deterministic predicate for correlated
+application-level sampling. Because smaller fractions select subsets of
+larger ones, gating an expensive LLM-judge evaluation at 2% guarantees every
+evaluated trace was also kept for export when the trace fraction is at least
+2% (kept, not delivered: export still requires ending observations and a
+graceful shutdown):
+
+```go
+keep, err := langfuse.TraceSampledAt(root.TraceID(), 0.02)
+if err == nil && keep && root.Sampled() {
+	verdict := judge(ctx, output)
+	_ = lf.RecordScore(ctx, langfuse.Score{
+		Name: "judge", TraceID: root.TraceID(), NumericValue: &verdict,
+	})
+}
+```
+
+Sampled-out observations keep their IDs, become cheap no-ops, and suppress
+scores recorded directly on their own context path so sampled-out traces do
+not accumulate orphaned scores. In borrowed mode the application's sampler
+remains authoritative and these controls are ignored with a diagnostic. The
+[reference](docs/reference.md) details the decision scope and score
+semantics.
+
 ## Provider modes
 
 The default mode creates an isolated SDK tracer provider that exports only
@@ -258,7 +298,7 @@ lf, err := langfuse.New(ctx, cfg)
 | Provider owner | SDK client | Application |
 | SDK observations | Exported | Exported |
 | Selected third-party AI spans | Not observed | Exported by the SDK's smart filter |
-| Sampler and resource | Always-sampled; SDK-owned resource | Existing provider remains authoritative |
+| Sampler and resource | Deterministic trace sampling (default: keep everything); SDK-owned resource | Existing provider remains authoritative |
 | Span limits | Fixed SDK-safe limits; ambient `OTEL_SPAN_*` ignored | Caller limits remain authoritative |
 | `Client.Shutdown` | Stops owned provider resources | Stops and unregisters only the SDK's processor |
 | Global OTel provider | Never replaced | Never replaced |

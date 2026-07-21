@@ -17,6 +17,7 @@ var (
 	_ func(context.Context, langfuse.Config) (*langfuse.Client, error) = langfuse.New
 
 	_ func(*langfuse.Client, context.Context, langfuse.TraceAttributes) context.Context                                                                                   = (*langfuse.Client).WithTraceAttributes
+	_ func(*langfuse.Client, context.Context, float64) context.Context                                                                                                    = (*langfuse.Client).WithSampleRate
 	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes) (context.Context, *langfuse.Observation)                  = (*langfuse.Client).StartObservation
 	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes, func(context.Context, *langfuse.Observation) error) error = (*langfuse.Client).Observe
 	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationAttributes)                                                                                     = (*langfuse.Client).Event
@@ -31,6 +32,9 @@ var (
 	_ func(*langfuse.Observation, time.Time)                      = (*langfuse.Observation).EndAt
 	_ func(*langfuse.Observation) string                          = (*langfuse.Observation).TraceID
 	_ func(*langfuse.Observation) string                          = (*langfuse.Observation).ID
+	_ func(*langfuse.Observation) bool                            = (*langfuse.Observation).Sampled
+
+	_ func(string, float64) (bool, error) = langfuse.TraceSampledAt
 
 	_ func(langfuse.Prompt) *langfuse.PromptRef                      = langfuse.Prompt.Ref
 	_ func(langfuse.Prompt, map[string]any) langfuse.Prompt          = langfuse.Prompt.Compile
@@ -52,6 +56,7 @@ func TestPublicMethodSurface(t *testing.T) {
 		"RecordScore",
 		"Shutdown",
 		"StartObservation",
+		"WithSampleRate",
 		"WithTraceAttributes",
 	})
 	assertMethodNames(t, (*langfuse.Observation)(nil), []string{
@@ -59,6 +64,7 @@ func TestPublicMethodSurface(t *testing.T) {
 		"EndAt",
 		"ID",
 		"RecordError",
+		"Sampled",
 		"TraceID",
 		"Update",
 	})
@@ -79,6 +85,7 @@ func TestPublicStructSurface(t *testing.T) {
 		"SecretKey",
 		"Environment",
 		"Release",
+		"SampleRate",
 		"ServiceName",
 		"TracerProvider",
 		"MaxQueueSize",
