@@ -10,8 +10,9 @@ import (
 // and returns a function that restores the previous one, so a test can
 // observe payload-free diagnostics or exercise a reentrant handler.
 func SetTestErrorHandler(handler func(error)) func() {
+	previous := otel.GetErrorHandler()
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(handler))
-	return func() { otel.SetErrorHandler(otel.ErrorHandlerFunc(func(error) {})) }
+	return func() { otel.SetErrorHandler(previous) }
 }
 
 // SDKVersion exposes the internal version constant so external wire tests can

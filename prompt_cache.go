@@ -309,6 +309,11 @@ func (pc *promptCache) fetchDirect(ctx context.Context, key promptKey, version i
 	pc.mu.Lock()
 	if pc.closing {
 		pc.mu.Unlock()
+		// Caller cancellation that raced the shutdown transition still wins
+		// over the fallback, matching the cap branch below.
+		if cerr := ctx.Err(); cerr != nil {
+			return Prompt{}, fmt.Errorf("langfuse: prompt fetch canceled: %w", cerr)
+		}
 		return promptFromFallback(key.name, version, fallback, errPromptShutdown)
 	}
 	if pc.foreground >= maxPromptForeground {

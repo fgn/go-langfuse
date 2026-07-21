@@ -316,11 +316,23 @@ func TestPromptCacheReentrantDiagnosticHandlerDoesNotDeadlock(t *testing.T) {
 		w.WriteHeader(http.StatusBadRequest) // failed refresh → diagnostic
 	})
 	// A diagnostic handler that re-enters Shutdown must not deadlock, since
-	// diagnostics run off the prompt worker goroutines.
+	// diagnostics run off the prompt worker goroutines. The handler signals
+	// both entry and return so the test proves the reentrant Shutdown
+	// actually ran to completion rather than passing vacuously.
+	entered := make(chan struct{}, 1)
+	returned := make(chan struct{}, 1)
 	restore := langfuse.SetTestErrorHandler(func(error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = client.Shutdown(ctx)
+		select {
+		case returned <- struct{}{}:
+		default:
+		}
 	})
 	t.Cleanup(restore)
 
@@ -328,15 +340,21 @@ func TestPromptCacheReentrantDiagnosticHandlerDoesNotDeadlock(t *testing.T) {
 		t.Fatalf("GetPrompt() error = %v", err)
 	}
 	clock.Advance(2 * time.Minute)
+	// The stale hit admits the refresh, which fails and reports a diagnostic;
+	// the test must not begin shutdown first, or the refresh would take its
+	// lifecycle-ended branch and never invoke the handler.
 	if _, err := client.GetPrompt(context.Background(), "greeting", langfuse.PromptQuery{}); err != nil {
 		t.Fatalf("stale GetPrompt() error = %v", err)
 	}
-	awaitPromptCondition(t, "failed refresh triggers diagnostic", func() bool { return receiver.count() == 2 })
-	// The handler runs Shutdown; the test completing proves no deadlock.
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := client.Shutdown(ctx); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the failed refresh never invoked the diagnostic handler")
+	}
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the reentrant Shutdown from the diagnostic handler did not complete (deadlock)")
 	}
 }
 

@@ -244,6 +244,23 @@ func normalizePromptFallback(fallback PromptFallback) (promptFallbackValue, erro
 	if promptType == PromptTypeChat && fallback.Text != "" {
 		return promptFallbackValue{}, errors.New("langfuse: a chat prompt fallback must not carry text")
 	}
+	if len(fallback.Messages) > maxPromptFallbackMessages {
+		return promptFallbackValue{}, errors.New("langfuse: prompt fallback carries too many messages")
+	}
+	// Gate on an in-memory size budget — raw field bytes plus per-message
+	// structural overhead — before any O(n) UTF-8 or JSON scan, so an
+	// oversized fallback cannot burn validation CPU or force a large copy on
+	// the request path. It is a conservative in-memory bound, not the exact
+	// JSON-escaped wire size, and is paired with the message-count cap above.
+	size := len(fallback.Text) + len(fallback.Config)
+	for _, message := range fallback.Messages {
+		size += promptMessageOverhead + len(message.Role) + len(message.Content) +
+			len(message.PlaceholderName) + len(message.Extra)
+		if size > maxPromptBodyBytes {
+			return promptFallbackValue{}, errors.New("langfuse: prompt fallback exceeds the 1 MiB limit")
+		}
+	}
+	// The input is now bounded; validate shapes and UTF-8.
 	if !utf8.ValidString(fallback.Text) {
 		return promptFallbackValue{}, errors.New("langfuse: prompt fallback text is not valid UTF-8")
 	}
@@ -252,25 +269,10 @@ func normalizePromptFallback(fallback PromptFallback) (promptFallbackValue, erro
 			return promptFallbackValue{}, errors.New("langfuse: prompt fallback config must be valid UTF-8 JSON")
 		}
 	}
-	if len(fallback.Messages) > maxPromptFallbackMessages {
-		return promptFallbackValue{}, errors.New("langfuse: prompt fallback carries too many messages")
-	}
-	// Accumulate a faithful encoded size — including per-message structural
-	// overhead — and reject before the deep copy, so a large fallback cannot
-	// turn a request-path call into an allocation spike.
-	size := len(fallback.Text) + len(fallback.Config)
 	for _, message := range fallback.Messages {
 		if err := validPromptMessage(message); err != nil {
 			return promptFallbackValue{}, err
 		}
-		size += promptMessageOverhead + len(message.Role) + len(message.Content) +
-			len(message.PlaceholderName) + len(message.Extra)
-		if size > maxPromptBodyBytes {
-			return promptFallbackValue{}, errors.New("langfuse: prompt fallback exceeds the 1 MiB limit")
-		}
-	}
-	if size > maxPromptBodyBytes {
-		return promptFallbackValue{}, errors.New("langfuse: prompt fallback exceeds the 1 MiB limit")
 	}
 	return promptFallbackValue{
 		promptType: promptType,
