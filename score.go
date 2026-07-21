@@ -8,6 +8,10 @@ import (
 	"fmt"
 	"time"
 	"unicode/utf8"
+
+	oteltrace "go.opentelemetry.io/otel/trace"
+
+	"github.com/fgn/go-langfuse/internal/diagnostic"
 )
 
 // ScoreDataType identifies how Langfuse stores and aggregates a score value.
@@ -91,19 +95,56 @@ func (c *Client) RecordScore(ctx context.Context, score Score) error {
 	if ctx == nil {
 		return errors.New("langfuse: score context is nil")
 	}
-	payload, eventID, err := c.scorePayload(score)
+	if err := validateScore(score); err != nil {
+		return err
+	}
+	if c.suppressScore(ctx, score) {
+		return nil
+	}
+	payload, eventID, err := c.buildScorePayload(score)
 	if err != nil {
 		return err
 	}
 	return c.scores.Enqueue(ctx, payload, eventID)
 }
 
-// scorePayload validates score and serializes it as a complete single-event
-// ingestion request, returning the envelope event ID the ingestion result
-// must account for.
-func (c *Client) scorePayload(score Score) ([]byte, string, error) {
+// suppressScore applies the sampling decision of the caller's context path to
+// a validated score. Suppression is a policy, not a proof: a score recorded
+// directly on a sampled-out, SDK-originated context path inherits that path's
+// drop decision — deliberate, documented loss, narrower than the official
+// SDKs, which suppress on the local sampler decision alone. The conditions
+// keep suppression where it is least likely to discard an attachable score;
+// they cannot rule out a sibling branch having handed the context to a
+// foreign exporter. Everything not matched — session-only scores, other
+// traces, out-of-context scores, foreign-origin or downgraded paths, borrowed
+// mode — is delivered.
+func (c *Client) suppressScore(ctx context.Context, score Score) bool {
+	if !c.owned || score.TraceID == "" {
+		return false
+	}
+	decision, ok := ctx.Value(traceDecisionContextKey{client: c}).(traceDecision)
+	if !ok || !decision.authoritative || decision.sampled {
+		return false
+	}
+	if score.TraceID != decision.traceID.String() {
+		return false
+	}
+	ambient := oteltrace.SpanFromContext(ctx).SpanContext()
+	if !ambient.IsValid() || ambient.TraceID() != decision.traceID || ambient.SpanID() != decision.lastSDKSpanID {
+		return false
+	}
+	if c.scoreSuppressionWarning.CompareAndSwap(false, true) {
+		diagnostic.Report("score suppressed for a sampled-out trace; further suppressions are silent")
+	}
+	return true
+}
+
+// validateScore performs the complete synchronous validation of a score. It
+// is pure: no ID generation, no clock reads, no serialization, so an
+// intentionally suppressed score does none of that work.
+func validateScore(score Score) error {
 	if err := validScoreString("score name", score.Name, false); err != nil {
-		return nil, "", err
+		return err
 	}
 	for field, value := range map[string]string{
 		"score ID":             score.ID,
@@ -113,27 +154,43 @@ func (c *Client) scorePayload(score Score) ([]byte, string, error) {
 		"score config ID":      score.ConfigID,
 	} {
 		if err := validScoreString(field, value, true); err != nil {
-			return nil, "", err
+			return err
 		}
 	}
 	if score.TraceID == "" && score.SessionID == "" {
-		return nil, "", errors.New("langfuse: score requires a trace ID or session ID target")
+		return errors.New("langfuse: score requires a trace ID or session ID target")
 	}
 	if score.ObservationID != "" && score.TraceID == "" {
-		return nil, "", errors.New("langfuse: score observation ID requires a trace ID")
+		return errors.New("langfuse: score observation ID requires a trace ID")
 	}
 	if (score.NumericValue == nil) == (score.StringValue == nil) {
-		return nil, "", errors.New("langfuse: score requires exactly one of numeric value or string value")
+		return errors.New("langfuse: score requires exactly one of numeric value or string value")
+	}
+	if score.StringValue != nil && !utf8.ValidString(*score.StringValue) {
+		return errors.New("langfuse: score string value is not valid UTF-8")
 	}
 	switch score.DataType {
 	case "", ScoreTypeBoolean, ScoreTypeCategorical, ScoreTypeCorrection, ScoreTypeNumeric, ScoreTypeText:
 	default:
-		return nil, "", errors.New("langfuse: unsupported score data type")
+		return errors.New("langfuse: unsupported score data type")
 	}
 	if score.Comment != "" && !utf8.ValidString(score.Comment) {
-		return nil, "", errors.New("langfuse: score comment is not valid UTF-8")
+		return errors.New("langfuse: score comment is not valid UTF-8")
 	}
+	if !score.Timestamp.IsZero() {
+		// RFC 3339 timestamps carry a four-digit year; anything else would
+		// serialize to an invalid wire value.
+		if year := score.Timestamp.UTC().Year(); year < 0 || year > 9999 {
+			return errors.New("langfuse: score timestamp year is outside the RFC 3339 range")
+		}
+	}
+	return nil
+}
 
+// buildScorePayload serializes a validated score as a complete single-event
+// ingestion request, returning the envelope event ID the ingestion result
+// must account for.
+func (c *Client) buildScorePayload(score Score) ([]byte, string, error) {
 	payload := map[string]any{
 		"name":        score.Name,
 		"environment": c.environment,
@@ -141,9 +198,6 @@ func (c *Client) scorePayload(score Score) ([]byte, string, error) {
 	if score.NumericValue != nil {
 		payload["value"] = *score.NumericValue
 	} else {
-		if !utf8.ValidString(*score.StringValue) {
-			return nil, "", errors.New("langfuse: score string value is not valid UTF-8")
-		}
 		payload["value"] = *score.StringValue
 	}
 	// Always submit an ID: retried deliveries must upsert, not duplicate.
@@ -186,10 +240,6 @@ func (c *Client) scorePayload(score Score) ([]byte, string, error) {
 	timestamp := score.Timestamp.UTC()
 	if score.Timestamp.IsZero() {
 		timestamp = time.Now().UTC()
-	} else if year := timestamp.Year(); year < 0 || year > 9999 {
-		// RFC 3339 timestamps carry a four-digit year; anything else would
-		// serialize to an invalid wire value.
-		return nil, "", errors.New("langfuse: score timestamp year is outside the RFC 3339 range")
 	}
 	eventID, err := newScoreID()
 	if err != nil {

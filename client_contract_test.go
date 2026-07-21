@@ -38,6 +38,7 @@ var langfuseEnvironmentVariables = []string{
 	"LANGFUSE_BASE_URL",
 	"LANGFUSE_TRACING_ENVIRONMENT",
 	"LANGFUSE_RELEASE",
+	"LANGFUSE_SAMPLE_RATE",
 	"LANGFUSE_TRACING_ENABLED",
 	"LANGFUSE_CONTENT_CAPTURE_ENABLED",
 	"LANGFUSE_HOST",
@@ -51,10 +52,12 @@ func TestConfigFromEnvReadsOnlyDocumentedVariables(t *testing.T) {
 	t.Setenv("LANGFUSE_BASE_URL", "https://us.cloud.langfuse.com")
 	t.Setenv("LANGFUSE_TRACING_ENVIRONMENT", "test_env")
 	t.Setenv("LANGFUSE_RELEASE", "release-test")
+	t.Setenv("LANGFUSE_SAMPLE_RATE", "0.25")
 	t.Setenv("LANGFUSE_TRACING_ENABLED", "false")
 	t.Setenv("LANGFUSE_CONTENT_CAPTURE_ENABLED", "false")
 	t.Setenv("LANGFUSE_HOST", "https://must-be-ignored.example")
 
+	quarter := 0.25
 	got := ConfigFromEnv()
 	want := Config{
 		BaseURL:               "https://us.cloud.langfuse.com",
@@ -62,6 +65,7 @@ func TestConfigFromEnvReadsOnlyDocumentedVariables(t *testing.T) {
 		SecretKey:             testClientSecretKey,
 		Environment:           "test_env",
 		Release:               "release-test",
+		SampleRate:            &quarter,
 		Disabled:              true,
 		DisableContentCapture: true,
 	}

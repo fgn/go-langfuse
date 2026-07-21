@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,9 +60,11 @@ type Client struct {
 	disableContentCapture bool
 	mask                  func(any) any
 
-	stopped         atomic.Bool
-	stoppedWarning  atomic.Bool
-	shutdownStarted atomic.Bool
+	stopped                 atomic.Bool
+	stoppedWarning          atomic.Bool
+	shutdownStarted         atomic.Bool
+	borrowedRateWarning     atomic.Bool
+	scoreSuppressionWarning atomic.Bool
 }
 
 var borrowedProviderRegistry = struct {
@@ -69,7 +72,7 @@ var borrowedProviderRegistry = struct {
 	owners map[*sdktrace.TracerProvider]*Client
 }{owners: make(map[*sdktrace.TracerProvider]*Client)}
 
-// ConfigFromEnv returns configuration from the seven documented LANGFUSE_*
+// ConfigFromEnv returns configuration from the eight documented LANGFUSE_*
 // variables. It intentionally does not read the deprecated LANGFUSE_HOST.
 func ConfigFromEnv() Config {
 	cfg := Config{
@@ -93,6 +96,15 @@ func ConfigFromEnv() Config {
 			cfg.envErr = errors.Join(cfg.envErr, err)
 		} else {
 			cfg.DisableContentCapture = !enabled
+		}
+	}
+	if raw, ok := os.LookupEnv("LANGFUSE_SAMPLE_RATE"); ok {
+		fraction, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
+		if err != nil || !validSampleFraction(fraction) {
+			cfg.envErr = errors.Join(cfg.envErr,
+				errors.New("langfuse: LANGFUSE_SAMPLE_RATE must be a number within [0, 1]"))
+		} else {
+			cfg.SampleRate = &fraction
 		}
 	}
 	return cfg
@@ -140,6 +152,9 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.MaxQueueSize < 0 {
 		return nil, errors.New("langfuse: max queue size must not be negative")
 	}
+	if cfg.SampleRate != nil && !validSampleFraction(*cfg.SampleRate) {
+		return nil, errors.New("langfuse: sample rate must be finite and within [0, 1]")
+	}
 
 	transportConfig := transport.Config{
 		BaseURL:          cfg.BaseURL,
@@ -177,6 +192,9 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		if cfg.DisableContentCapture {
 			diagnostic.Report("content capture is disabled only for SDK-supplied input and output; third-party OpenTelemetry content is unchanged")
 		}
+		if cfg.SampleRate != nil {
+			diagnostic.Report("sample rate is ignored on a borrowed tracer provider; the application's sampler remains authoritative")
+		}
 	}
 
 	exporter, err := transport.NewExporter(ctx, transportConfig)
@@ -205,6 +223,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		Release:           cfg.Release,
 		ContextAttributes: client.propagatedAttributes,
 		HasTraceClaim:     client.hasTraceClaim,
+		Admit:             client.admitObservation,
 	})
 	if err != nil {
 		_ = batch.Shutdown(context.Background())
@@ -219,8 +238,12 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 			_ = processor.Shutdown(context.Background())
 			return nil, err
 		}
+		defaultFraction := 1.0
+		if cfg.SampleRate != nil {
+			defaultFraction = *cfg.SampleRate
+		}
 		client.provider = sdktrace.NewTracerProvider(
-			sdktrace.WithSampler(sdktrace.AlwaysSample()),
+			sdktrace.WithSampler(sampler{client: client, defaultFraction: defaultFraction}),
 			sdktrace.WithResource(res),
 			sdktrace.WithRawSpanLimits(ownedSpanLimits()),
 			sdktrace.WithSpanProcessor(processor),
@@ -318,6 +341,20 @@ func (c *Client) isDisabled() bool {
 func (c *Client) reportStoppedOnce() {
 	if c != nil && c.stoppedWarning.CompareAndSwap(false, true) {
 		diagnostic.Report("observation ignored after client shutdown")
+	}
+}
+
+// admitObservation accepts a pending admission token. The Langfuse processor
+// calls it from OnStart for SDK-scope spans only, so admission is decided by
+// the component being torn down: once Shutdown publishes stopped or the
+// processor stops, no start can be admitted, while an ordinary Flush leaves
+// admission open. See StartObservation for the token's evaluation.
+func (c *Client) admitObservation(ctx context.Context) {
+	if c == nil || ctx == nil || c.stopped.Load() {
+		return
+	}
+	if token, ok := ctx.Value(admissionTokenContextKey{client: c}).(*atomic.Bool); ok && token != nil {
+		token.Store(true)
 	}
 }
 

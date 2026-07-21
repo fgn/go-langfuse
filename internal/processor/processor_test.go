@@ -581,3 +581,47 @@ func assertMissingAttribute(t *testing.T, span recordedSpan, key string) {
 		t.Fatalf("%s = %#v, want attribute absent", key, got)
 	}
 }
+
+func TestAdmitRunsOnlyForSDKScopeSpansWhileActive(t *testing.T) {
+	t.Parallel()
+
+	var admitted []string
+	processor, err := New(Config{
+		Next: newRecordingProcessor(),
+		Admit: func(ctx context.Context) {
+			name, _ := ctx.Value(admitProbeKey{}).(string)
+			admitted = append(admitted, name)
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+
+	// A foreign span whose context carries an admission value must not be
+	// admitted: only the SDK tracer's own spans confirm admission.
+	foreignCtx := context.WithValue(context.Background(), admitProbeKey{}, "foreign")
+	_, foreign := provider.Tracer("gen_ai.instrumentor").Start(foreignCtx, "foreign")
+	foreign.End()
+
+	sdkCtx := context.WithValue(context.Background(), admitProbeKey{}, "sdk")
+	_, sdk := provider.Tracer(lfattr.TracerName).Start(sdkCtx, "sdk")
+	sdk.End()
+
+	if len(admitted) != 1 || admitted[0] != "sdk" {
+		t.Fatalf("admitted contexts = %v, want exactly the SDK-scope span's context", admitted)
+	}
+
+	if err := processor.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	lateCtx := context.WithValue(context.Background(), admitProbeKey{}, "late")
+	_, late := provider.Tracer(lfattr.TracerName).Start(lateCtx, "late")
+	late.End()
+	if len(admitted) != 1 {
+		t.Fatalf("admitted contexts after shutdown = %v, want admission closed", admitted)
+	}
+}
+
+type admitProbeKey struct{}

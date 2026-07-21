@@ -5,6 +5,34 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+- Add deterministic trace sampling for isolated mode: `Config.SampleRate`
+  (`LANGFUSE_SAMPLE_RATE`, `[0, 1]`) sets the default fraction and
+  `Client.WithSampleRate` overrides it per context path, so one process can
+  export different kinds of traces at different rates. Decisions are a
+  deterministic threshold on the trace ID matching OpenTelemetry's
+  `TraceIDRatioBased`, made once per trace on the deciding context path and
+  inherited by every SDK observation in it, including across foreign middle
+  spans. The new `TraceSampledAt` exposes the same predicate for correlated
+  application-level sampling (for example, run an LLM-judge evaluation on 2%
+  of traces, guaranteed to be a subset of the traces kept for export), and
+  `Observation.Sampled` reports the decision — a sampling decision, not a
+  delivery guarantee.
+- Sampled-out observations keep their trace and span IDs and become cheap
+  no-ops: `Update` and `RecordError` return before serialization, `Mask`, or
+  `Error()` calls. A score recorded directly on a sampled-out, SDK-originated
+  context path targeting that trace is suppressed with a once-per-client
+  diagnostic, so sampled-out traces do not accumulate orphaned scores; all
+  other scores are delivered unchanged. Borrowed-mode sampling is unchanged:
+  the application's sampler remains authoritative and the new controls are
+  ignored there with a diagnostic.
+- **Behavior**: a start that misses processor admission or observes the
+  shutdown transition immediately after span start now returns the no-op
+  observation instead of a live handle whose export path is already torn
+  down. Admission is confirmed by the Langfuse processor during span start.
+  A start whose checks pass at the instant teardown begins can still return
+  a live handle that never exports, within `Sampled`'s documented
+  non-guarantee of delivery.
+
 ## [0.3.0] - 2026-07-21
 
 - Add prompt management reads: `Client.GetPrompt` fetches text and chat

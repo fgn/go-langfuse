@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -27,7 +28,13 @@ type Observation struct {
 	// startTime holds the explicit StartTime supplied to StartObservation, or
 	// zero when the span started at the current time. It is written once
 	// before the handle is shared and is read without the lock.
-	startTime          time.Time
+	startTime time.Time
+	// sampledOut is the immutable head-sampling classification captured at
+	// start. It must not be recomputed from the span later: IsRecording turns
+	// false after End, which would misclassify an ended borrowed-mode
+	// RecordOnly span and skip the after-end diagnostics. Written once before
+	// the handle is shared and read without the lock.
+	sampledOut         bool
 	ended              bool
 	explicit           map[string]struct{}
 	metadataKeys       map[string]struct{}
@@ -80,7 +87,32 @@ func (c *Client) StartObservation(
 	if !values.StartTime.IsZero() {
 		options = append(options, oteltrace.WithTimestamp(values.StartTime))
 	}
-	spanCtx, span := c.tracer.Start(ctx, name, options...)
+	// Admission: the Langfuse processor accepts this token from its OnStart,
+	// which OTel runs synchronously inside Tracer.Start, so acceptance proves
+	// the processor observed the start before any teardown. No lifecycle lock
+	// may span Tracer.Start — processor callbacks are allowed to re-enter
+	// Shutdown — so admission is decided by the component being torn down.
+	token := &atomic.Bool{}
+	parentSpanContext := oteltrace.SpanFromContext(ctx).SpanContext()
+	spanCtx, span := c.tracer.Start(
+		context.WithValue(ctx, admissionTokenContextKey{client: c}, token), name, options...,
+	)
+	if span.IsRecording() {
+		if !token.Load() || c.stopped.Load() {
+			// The processor was torn down mid-start, or Shutdown was re-entered
+			// from a later processor's OnStart after ours admitted the token.
+			// End the span so borrowed-provider processors see a balanced
+			// OnEnd, and refuse the start.
+			span.End()
+			c.reportStoppedOnce()
+			return ctx, &Observation{}
+		}
+	} else if c.stopped.Load() {
+		// A sampled-out span runs no OnStart, so the stopped re-check alone
+		// closes the shutdown race; nothing needs exporting either way.
+		c.reportStoppedOnce()
+		return ctx, &Observation{}
+	}
 	if values.Level == LevelError {
 		span.SetStatus(codes.Error, values.StatusMessage)
 	}
@@ -89,16 +121,47 @@ func (c *Client) StartObservation(
 		span:           span,
 		typeName:       typeName,
 		startTime:      values.StartTime,
+		sampledOut:     !span.IsRecording() && !span.SpanContext().IsSampled(),
 		explicit:       explicit,
 		metadataKeys:   observationMetadataKeys(spanAttributes),
 		attributeSizes: attributeSizes,
 		attributeBytes: attributeBytes,
 	}
 	spanCtx = context.WithValue(spanCtx, observationContextKey{client: c}, observation)
+	spanCtx = context.WithValue(spanCtx, traceDecisionContextKey{client: c},
+		c.nextTraceDecision(ctx, parentSpanContext, span.SpanContext()))
 	if span.IsRecording() && span.SpanContext().IsSampled() {
 		spanCtx = c.withTraceClaim(spanCtx, span.SpanContext().TraceID())
 	}
 	return spanCtx, observation
+}
+
+// nextTraceDecision derives the trace decision the started span publishes on
+// its context path. The first SDK observation of a trace on a path decides;
+// descendants copy traceID and sampled unchanged. Score-suppression authority
+// begins true only when the SDK originated the trace and downgrades
+// permanently once the ambient parent is no longer the previous SDK
+// observation — a foreign hop means another producer may have exported part
+// of this trace, which path-local state cannot rule out.
+func (c *Client) nextTraceDecision(
+	ctx context.Context,
+	parent oteltrace.SpanContext,
+	started oteltrace.SpanContext,
+) traceDecision {
+	decision := traceDecision{
+		traceID:       started.TraceID(),
+		sampled:       started.IsSampled(),
+		authoritative: !parent.IsValid(),
+		lastSDKSpanID: started.SpanID(),
+	}
+	if previous, ok := ctx.Value(traceDecisionContextKey{client: c}).(traceDecision); ok &&
+		previous.traceID == started.TraceID() {
+		decision.sampled = previous.sampled
+		decision.authoritative = previous.authoritative &&
+			parent.TraceID() == previous.traceID &&
+			parent.SpanID() == previous.lastSDKSpanID
+	}
+	return decision
 }
 
 // Observe starts an observation, runs fn with the child context and the
@@ -155,6 +218,12 @@ func (c *Client) Event(ctx context.Context, name string, values ObservationAttri
 // and is ignored with a diagnostic.
 func (o *Observation) Update(values ObservationAttributes) {
 	if o == nil || o.client == nil || o.span == nil {
+		return
+	}
+	if o.sampledOut {
+		// Nothing will be exported: skip serialization, Mask, accounting, and
+		// diagnostics entirely. Borrowed-mode RecordOnly spans keep the full
+		// path, including the after-end diagnostics.
 		return
 	}
 	if o.client.stopped.Load() {
@@ -349,6 +418,11 @@ func (o *Observation) RecordError(err error) {
 	if o == nil || err == nil || o.client == nil || o.span == nil {
 		return
 	}
+	if o.sampledOut {
+		// Nothing will be exported: do not invoke err.Error, mutate counters,
+		// or emit diagnostics for a span that cannot leave the process.
+		return
+	}
 	if o.client.stopped.Load() {
 		o.client.reportStoppedOnce()
 		return
@@ -520,6 +594,19 @@ func (o *Observation) endOnce(at time.Time) bool {
 	}
 	span.End(oteltrace.WithTimestamp(at))
 	return true
+}
+
+// Sampled reports whether this observation's trace was selected for export by
+// sampling. It reports false on a no-op observation. It is a sampling
+// decision, not a delivery guarantee: exporting still requires End, a live
+// client, and export success. Use it to skip work whose only purpose is
+// enriching an observation that will never be exported, together with
+// [TraceSampledAt] when gating on a smaller correlated fraction.
+func (o *Observation) Sampled() bool {
+	if o == nil || o.span == nil {
+		return false
+	}
+	return o.span.SpanContext().IsSampled()
 }
 
 // TraceID returns the lowercase 32-character OpenTelemetry trace ID, or an

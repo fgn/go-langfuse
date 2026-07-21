@@ -42,6 +42,12 @@ func (r *scoreWireReceiver) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 	r.requests = append(r.requests, record)
 	status := r.status
 	r.mu.Unlock()
+	if strings.HasSuffix(req.URL.Path, "/v1/traces") {
+		// Borrowed-mode sampling tests export OTLP spans to this server too;
+		// a plain success keeps the exporter quiet without a protobuf body.
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 	if status == 0 {
 		// Answer like the real ingestion endpoint: 207 with per-item results
 		// accounting for the submitted envelope event ID.
