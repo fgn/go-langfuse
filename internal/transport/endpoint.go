@@ -61,10 +61,10 @@ func NormalizeEndpoint(raw string) (string, error) {
 	return u.String(), nil
 }
 
-// NormalizeScoresEndpoint converts the same accepted base URL forms into the
-// Langfuse JSON ingestion endpoint on the host root, which carries score
+// NormalizeIngestionEndpoint converts the same accepted base URL forms into
+// the Langfuse JSON ingestion endpoint on the host root, which carries score
 // events.
-func NormalizeScoresEndpoint(raw string) (string, error) {
+func NormalizeIngestionEndpoint(raw string) (string, error) {
 	traces, err := NormalizeEndpoint(raw)
 	if err != nil {
 		return "", err

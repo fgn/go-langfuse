@@ -19,12 +19,14 @@ import (
 )
 
 const (
-	// maxScoreResponseBytes bounds how much of a response body is read. The
-	// body of a single-event ingestion response is inspected for per-item
-	// errors, so the bound is generous enough that an error entry echoing a
-	// full 128 KiB score payload still parses instead of being truncated into
-	// unparsable JSON.
+	// maxScoreResponseBytes bounds how much of a 207 ingestion response body
+	// is read. The body is inspected for per-item errors, so the bound is
+	// generous enough that an error entry echoing a full 128 KiB score
+	// payload still parses instead of being truncated into unparsable JSON.
 	maxScoreResponseBytes = 256 << 10
+	// maxScoreDrainBytes bounds how much of any other response body is read
+	// so the underlying connection can be reused.
+	maxScoreDrainBytes = 4 << 10
 	// defaultScoreQueueSize bounds how many serialized scores wait for the
 	// dispatcher. Scores are low-volume evaluation and feedback events, so the
 	// queue is intentionally much smaller than the span queue.
@@ -101,7 +103,7 @@ const maxConcurrentScoreDiagnostics = 4
 // configuration. It performs no network I/O and starts no goroutine; the
 // dispatcher starts on the first enqueued score.
 func NewScoresClient(cfg Config) (*ScoresClient, error) {
-	endpoint, err := NormalizeScoresEndpoint(cfg.BaseURL)
+	endpoint, err := NormalizeIngestionEndpoint(cfg.BaseURL)
 	if err != nil {
 		return nil, err
 	}
@@ -365,59 +367,46 @@ func (s *ScoresClient) post(ctx context.Context, event scoreEvent) (retryable bo
 		return true, 0, "the score request failed before a response"
 	}
 	defer func() { _ = response.Body.Close() }()
-	body, readErr := io.ReadAll(io.LimitReader(response.Body, maxScoreResponseBytes+1))
-	truncated := len(body) > maxScoreResponseBytes
-	if response.StatusCode < 300 {
+	retryAfter = parseRetryAfter(response.Header.Get("Retry-After"))
+	if response.StatusCode == http.StatusMultiStatus {
 		// A 207 is the ingestion endpoint's documented response and its body
 		// is part of the delivery contract: an unreadable, truncated, or
 		// malformed result — or one that does not account for the submitted
 		// envelope event ID in successes or errors — leaves the outcome
-		// unknown, so it is retried. Other 2xx statuses come from
-		// intermediaries or foreign deployments whose bodies carry no
-		// contract; they keep the previous status-only success rule unless a
-		// parsable body still reports an item error.
-		strict := response.StatusCode == http.StatusMultiStatus
+		// unknown, so it is retried.
+		body, readErr := io.ReadAll(io.LimitReader(response.Body, maxScoreResponseBytes+1))
 		result, parsed := parseIngestionResult(body)
-		if strict {
-			if readErr != nil || truncated || !parsed {
-				return true, parseRetryAfter(response.Header.Get("Retry-After")),
-					"the score ingestion response could not be read"
-			}
-			for _, item := range result.Errors {
-				if item.ID != event.eventID {
-					continue
-				}
-				failure = "the score ingestion endpoint reported item status " + strconv.Itoa(item.Status)
-				// An absent or zero item status leaves the outcome unknown;
-				// retry it like a transient failure rather than dropping.
-				if item.Status == 0 || retryableStatus(item.Status) {
-					return true, parseRetryAfter(response.Header.Get("Retry-After")), failure
-				}
-				return false, 0, failure
-			}
-			for _, item := range result.Successes {
-				if item.ID == event.eventID {
-					return false, 0, ""
-				}
-			}
-			return true, parseRetryAfter(response.Header.Get("Retry-After")),
-				"the score ingestion response did not account for the score"
+		if readErr != nil || len(body) > maxScoreResponseBytes || !parsed {
+			return true, retryAfter, "the score ingestion response could not be read"
 		}
-		if !parsed || len(result.Errors) == 0 {
-			return false, 0, ""
+		for _, item := range result.Errors {
+			if item.ID != event.eventID {
+				continue
+			}
+			failure = "the score ingestion endpoint reported item status " + strconv.Itoa(item.Status)
+			// An absent or zero item status leaves the outcome unknown;
+			// retry it like a transient failure rather than dropping.
+			if item.Status == 0 || retryableStatus(item.Status) {
+				return true, retryAfter, failure
+			}
+			return false, 0, failure
 		}
-		status := result.Errors[0].Status
-		failure = "the score ingestion endpoint reported item status " + strconv.Itoa(status)
-		// An absent or zero item status leaves the outcome unknown; retry it
-		// like a transient failure rather than dropping the score.
-		if status == 0 || retryableStatus(status) {
-			return true, parseRetryAfter(response.Header.Get("Retry-After")), failure
+		for _, item := range result.Successes {
+			if item.ID == event.eventID {
+				return false, 0, ""
+			}
 		}
-		return false, 0, failure
+		return true, retryAfter, "the score ingestion response did not account for the score"
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxScoreDrainBytes))
+	if response.StatusCode < 300 {
+		// Other 2xx statuses come from intermediaries or foreign deployments
+		// whose bodies carry no contract; the status alone means success.
+		return false, 0, ""
 	}
 	failure = "the score ingestion endpoint returned status " + strconv.Itoa(response.StatusCode)
 	if retryableStatus(response.StatusCode) {
-		return true, parseRetryAfter(response.Header.Get("Retry-After")), failure
+		return true, retryAfter, failure
 	}
 	return false, 0, failure
 }

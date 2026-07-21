@@ -137,14 +137,14 @@ serialized score events serviced by one background sender posting to the JSON
 ingestion endpoint. Transient failures — network errors, HTTP 408, 429, and
 5xx responses, per-item ingestion errors with those statuses or without a
 status, and 207 responses whose body cannot be read or does not account for
-the submitted event — are retried
-with exponential backoff and jitter (5-second initial interval, 30-second
-maximum, one minute in total, honoring `Retry-After`); other error statuses
-and an exhausted retry budget drop the score with a payload-free diagnostic. Each score is serialized once as a complete ingestion event, so a
-retried delivery resends the identical event and stays idempotent through the
-event ID and the score ID. On a full score queue new scores are dropped with
-a diagnostic, and `Config.BlockOnQueueFull` opts into the same blocking
-backpressure as for observations.
+the submitted event — are retried with exponential backoff and jitter
+(5-second initial interval, 30-second maximum, one minute in total, honoring
+`Retry-After`); other error statuses and an exhausted retry budget drop the
+score with a payload-free diagnostic. Each score is serialized once as a
+complete ingestion event, so a retried delivery resends the identical event
+and stays idempotent through the event ID and the score ID. On a full score
+queue new scores are dropped with a diagnostic, and `Config.BlockOnQueueFull`
+opts into the same blocking backpressure as for observations.
 
 ## Flush and shutdown
 

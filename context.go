@@ -18,6 +18,11 @@ const (
 	maxTraceTagBytes = 16 << 10
 )
 
+// A detached context — the ambient span context cleared with the standard
+// OpenTelemetry helper so background work starts a new trace — needs no
+// cleanup of these keys: a fresh random trace ID cannot match a stale
+// application-root claim, and the active-observation pointer is only
+// consulted while the ambient span context still matches that observation.
 type (
 	traceStateContextKey  struct{ client *Client }
 	observationContextKey struct{ client *Client }
@@ -63,16 +68,6 @@ func (c *Client) WithTraceAttributes(ctx context.Context, values TraceAttributes
 	}
 	return result
 }
-
-// Detaching background work into a new trace needs no SDK API: clearing the
-// ambient span context with
-// oteltrace.ContextWithSpanContext(ctx, oteltrace.SpanContext{}) makes the
-// next observation a new application root. The client-scoped state keys below
-// stay correct without cleanup — the fresh random trace ID cannot match a
-// stale application-root claim, and the active-observation pointer is only
-// consulted while the ambient span context still matches that observation.
-// This contract is locked by TestDetachedContextStartsNewApplicationRoot and
-// documented in docs/reference.md.
 
 func (s traceState) clone() traceState {
 	result := s

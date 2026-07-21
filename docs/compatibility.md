@@ -19,11 +19,9 @@ Scores are submitted as single-event `score-create` batches to the JSON
 ingestion endpoint `/api/public/ingestion` on the same host, with the same
 Basic authentication; the event envelope carries the score timestamp, matching
 the official SDKs. This endpoint is independent of the OTLP ingestion version.
-Its 207 multi-status responses are inspected for per-item errors: item
-statuses 408, 429, and 5xx are retried, other item errors drop the score with
-a payload-free diagnostic. A 207 body is part of the delivery contract, so one that is unreadable,
-malformed, or does not account for the submitted event is retried; item
-errors without a status retry as transient.
+Its 207 multi-status body is part of the delivery contract; how per-item
+results are classified for retry is described in the
+[reference](reference.md#buffering-and-backpressure).
 
 go-langfuse uses the instrumentation scope `langfuse-sdk.go`. Langfuse treats
 the `langfuse-sdk` prefix as an ingestion marker that prevents semantic
