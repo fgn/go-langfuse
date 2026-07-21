@@ -90,8 +90,9 @@ func (c *Client) StartObservation(
 	// Admission: the Langfuse processor accepts this token from its OnStart,
 	// which OTel runs synchronously inside Tracer.Start, so acceptance proves
 	// the processor observed the start before any teardown. No lifecycle lock
-	// may span Tracer.Start — processor callbacks are allowed to re-enter
-	// Shutdown — so admission is decided by the component being torn down.
+	// may span Tracer.Start, because processor callbacks are allowed to
+	// re-enter Shutdown, so admission is decided by the component being torn
+	// down.
 	token := &atomic.Bool{}
 	parentSpanContext := oteltrace.SpanFromContext(ctx).SpanContext()
 	spanCtx, span := c.tracer.Start(
@@ -141,7 +142,7 @@ func (c *Client) StartObservation(
 // descendants copy traceID and sampled unchanged. Score-suppression authority
 // begins true only when the SDK originated the trace and downgrades
 // permanently once the ambient parent is no longer the previous SDK
-// observation — a foreign hop means another producer may have exported part
+// observation. A foreign hop means another producer may have exported part
 // of this trace, which path-local state cannot rule out.
 func (c *Client) nextTraceDecision(
 	ctx context.Context,
@@ -169,8 +170,8 @@ func (c *Client) nextTraceDecision(
 // panics. A non-nil error returned by fn is recorded through
 // [Observation.RecordError] and returned unchanged, so fn does not need to
 // record it itself. When fn panics,
-// the observation is marked failed with the payload-free status "panic" — the
-// panic value is never captured — and the panic propagates. On a nil,
+// the observation is marked failed with the payload-free status "panic",
+// the panic value is never captured, and the panic propagates. On a nil,
 // disabled, or stopped client fn still runs, receiving ctx unchanged and a
 // no-op handle. A nil fn reports a diagnostic and starts no observation.
 func (c *Client) Observe(

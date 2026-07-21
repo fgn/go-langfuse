@@ -17,8 +17,8 @@ Versioning once the first release is tagged.
   spans. The new `TraceSampledAt` exposes the same predicate for correlated
   application-level sampling (for example, run an LLM-judge evaluation on 2%
   of traces, guaranteed to be a subset of the traces kept for export), and
-  `Observation.Sampled` reports the decision — a sampling decision, not a
-  delivery guarantee.
+  `Observation.Sampled` reports the sampling decision, not a delivery
+  guarantee.
 - Sampled-out observations keep their trace and span IDs and become cheap
   no-ops: `Update` and `RecordError` return before serialization, `Mask`, or
   `Error()` calls. A score recorded directly on a sampled-out, SDK-originated

@@ -895,8 +895,8 @@ func TestSiblingsWithDifferentRatesAreSubtreeScoped(t *testing.T) {
 	defer parent.End()
 
 	// Two siblings from the same pre-decision foreign context at rates 0 and
-	// 1: membership becomes subtree-scoped, and each sibling's descendants —
-	// including Event, which discards its child context internally — must
+	// 1: membership becomes subtree-scoped, and each sibling's descendants
+	// (including Event, which discards its child context internally) must
 	// stay inside their subtree's decision.
 	droppedCtx, droppedSibling := client.StartObservation(client.WithSampleRate(parentCtx, 0),
 		"dropped-sibling", langfuse.TypeSpan, langfuse.ObservationAttributes{})

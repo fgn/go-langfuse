@@ -113,7 +113,7 @@ type PromptFallback struct {
 }
 
 // PromptMessage is one chat prompt message. A regular message sets Role
-// (required) and Content (optional — tool-call messages may have empty
+// (required) and Content (optional; tool-call messages may have empty
 // content); a placeholder message sets only PlaceholderName, a named slot
 // filled at Compile time.
 type PromptMessage struct {
@@ -129,7 +129,7 @@ type PromptMessage struct {
 }
 
 // Prompt is one fetched prompt version. GetPrompt returns an independent
-// deep copy — the SDK's cached master is never exposed — so callers may
+// deep copy (the SDK's cached master is never exposed), so callers may
 // retain or modify the value freely.
 type Prompt struct {
 	Name          string
@@ -147,8 +147,8 @@ type Prompt struct {
 }
 
 // Ref returns the reference that links observations to this prompt version,
-// for ObservationAttributes.Prompt. It returns nil — safely skipping
-// linking — for a fallback prompt and for any value that cannot form a valid
+// for ObservationAttributes.Prompt. It returns nil, safely skipping
+// linking, for a fallback prompt and for any value that cannot form a valid
 // reference (empty Name or Version <= 0, such as a zero Prompt).
 func (p Prompt) Ref() *PromptRef {
 	if p.Source == PromptSourceFallback || p.Name == "" || p.Version <= 0 {
@@ -295,8 +295,8 @@ func normalizePromptFallback(fallback PromptFallback) (promptFallbackValue, erro
 	if len(fallback.Messages) > maxPromptFallbackMessages {
 		return promptFallbackValue{}, errors.New("langfuse: prompt fallback carries too many messages")
 	}
-	// Gate on an in-memory size budget — raw field bytes plus per-message
-	// structural overhead — before any O(n) UTF-8 or JSON scan, so an
+	// Gate on an in-memory size budget (raw field bytes plus per-message
+	// structural overhead) before any O(n) UTF-8 or JSON scan, so an
 	// oversized fallback cannot burn validation CPU or force a large copy on
 	// the request path. It is a conservative in-memory bound, not the exact
 	// JSON-escaped wire size, and is paired with the message-count cap above.
@@ -383,7 +383,7 @@ func (p Prompt) DecodeConfig(v any) error {
 // Compile substitutes {{variable}} occurrences in the prompt content and
 // returns the compiled copy; the receiver is unchanged. String values
 // substitute verbatim; any other value is JSON-encoded, and a conversion
-// that fails or panics leaves that occurrence unresolved — Compile never
+// that fails or panics leaves that occurrence unresolved; Compile never
 // fails and never panics. For chat prompts, a variable whose value is
 // []PromptMessage fills the placeholder of that name: an empty slice removes
 // the placeholder, and a slice containing any invalid message leaves the

@@ -371,8 +371,8 @@ func (s *ScoresClient) post(ctx context.Context, event scoreEvent) (retryable bo
 	if response.StatusCode == http.StatusMultiStatus {
 		// A 207 is the ingestion endpoint's documented response and its body
 		// is part of the delivery contract: an unreadable, truncated, or
-		// malformed result — or one that does not account for the submitted
-		// envelope event ID in successes or errors — leaves the outcome
+		// malformed result, or one that does not account for the submitted
+		// envelope event ID in successes or errors, leaves the outcome
 		// unknown, so it is retried.
 		body, readErr := io.ReadAll(io.LimitReader(response.Body, maxScoreResponseBytes+1))
 		result, parsed := parseIngestionResult(body)

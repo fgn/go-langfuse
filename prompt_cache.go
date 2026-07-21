@@ -56,7 +56,7 @@ type promptEntry struct {
 
 // promptFlight is one in-progress miss fetch shared by concurrent callers of
 // the same key. Its request runs on the client lifecycle context with the
-// fetch budget — never any single caller's context — so one caller canceling
+// fetch budget, never any single caller's context, so one caller canceling
 // cannot fail the fetch for the others. When the last waiter departs the
 // flight is canceled; its map reservation stays until the worker exits, so a
 // later caller can never attach to a canceled flight.
@@ -85,7 +85,7 @@ type promptCache struct {
 	diagSlots         chan struct{}
 
 	// newFetchContext derives one fetch's context: bounded by the fetch
-	// budget, canceled by client shutdown, and — when parent is non-nil — by
+	// budget, canceled by client shutdown, and, when parent is non-nil, by
 	// that caller context too. Background work passes nil to run on the
 	// client lifecycle alone. The closure owns the lifecycle context, so no
 	// context lives in the struct.
@@ -198,7 +198,7 @@ func (pc *promptCache) get(ctx context.Context, name string, query PromptQuery, 
 		}
 		if !joined {
 			// The existing flight was abandoned (its context is canceled).
-			// Wait for its worker to release the key, then retry admission —
+			// Wait for its worker to release the key, then retry admission;
 			// rechecking cancellation before looping so a caller whose
 			// context ended does not consume the newly cached value.
 			select {
@@ -403,8 +403,8 @@ func (pc *promptCache) maybeRefreshLocked(key promptKey, entry *promptEntry) {
 }
 
 // refresh re-fetches one stale entry on the lifecycle context. Its commit is
-// generation-guarded: every mutation — a successful store, a 404 eviction,
-// or cooldown state — applies only while the exact refreshed entry is still
+// generation-guarded: every mutation (a successful store, a 404 eviction,
+// or cooldown state) applies only while the exact refreshed entry is still
 // installed, so a slow refresh can neither overwrite a newer result nor
 // resurrect or evict a replacement.
 func (pc *promptCache) refresh(key promptKey, entry *promptEntry, generation uint64) {

@@ -52,8 +52,8 @@ internal application-root claim propagate only through the local Go context.
 Consequently, a downstream service can correctly continue the trace ID while
 still being shown as a separate Langfuse application root.
 
-Work that outlives its request — a goroutine started from an HTTP handler
-with `context.WithoutCancel`, for example — should not attach observations to
+Work that outlives its request, such as a goroutine started from an HTTP
+handler with `context.WithoutCancel`, should not attach observations to
 the handler's already-ended span. Detach it with the standard OpenTelemetry
 helper; no SDK-specific API is involved:
 
@@ -67,7 +67,7 @@ jobCtx, job := lf.StartObservation(jobCtx, "background-job", langfuse.TypeChain,
 
 Clearing the span context makes the next observation the root of a new trace,
 marked as an application root, while trace attributes already set through
-`WithTraceAttributes` — user, session, tags, metadata, version — continue to
+`WithTraceAttributes` (user, session, tags, metadata, version) continue to
 propagate. Session and user grouping in Langfuse therefore survive the
 handoff even though the background work is a separate trace. This contract is
 locked by the SDK's tests. The span-context reset is shared OpenTelemetry
@@ -120,8 +120,8 @@ provider):
   inside the callback cannot be bounded by the SDK.
 - A serialized score event is limited to 128 KiB.
 - A prompt response body and a prompt fallback: 1 MiB each. Prompt names: 500
-  bytes; labels: 200 characters (local wire-safety bounds, not Langfuse
-  validation — the server is stricter for labels).
+  bytes; labels: 200 characters. These are local wire-safety bounds, not
+  Langfuse validation; the server is stricter for labels.
 
 ## Prompt management
 
@@ -147,7 +147,7 @@ Caching semantics, per cache key (name plus version or label):
 - A fresh entry (age within `CacheTTL`, default 60 seconds) is returned from
   memory with `PromptSourceCache` and no I/O. Freshness is judged against the
   age of the entry at call time, so callers using different TTLs share one
-  entry — a deliberate divergence from the official SDKs, which stamp an
+  entry. This deliberately diverges from the official SDKs, which stamp an
   expiry at insert.
 - An expired entry is returned immediately while one background refresh per
   key runs (stale-while-revalidate), stamped `PromptSourceStale`. A failed
@@ -183,7 +183,7 @@ contexts remain errors in every client state.
 
 `Compile` substitutes `{{variable}}` occurrences (string values verbatim,
 other values JSON-encoded) and fills chat placeholder messages from
-`[]PromptMessage` variables — an empty slice removes the placeholder, an
+`[]PromptMessage` variables. An empty slice removes the placeholder, and an
 invalid message list leaves it unchanged. Unresolved variables and unfilled
 placeholders stay verbatim, matching the Python SDK, and `Compile` never
 fails or panics. `CompileStrict` produces the same compiled copy but also
@@ -216,10 +216,10 @@ that alone exceeds the cap is dropped with a diagnostic.
 
 Scores accepted by `RecordScore` wait in their own bounded queue of 256
 serialized score events serviced by one background sender posting to the JSON
-ingestion endpoint. Transient failures — network errors, HTTP 408, 429, and
-5xx responses, per-item ingestion errors with those statuses or without a
-status, and 207 responses whose body cannot be read or does not account for
-the submitted event — are retried with exponential backoff and jitter
+ingestion endpoint. Transient failures are retried with exponential backoff
+and jitter: network errors, HTTP 408, 429, and 5xx responses, per-item
+ingestion errors with those statuses or without a status, and 207 responses
+whose body cannot be read or does not account for the submitted event
 (5-second initial interval, 30-second maximum, one minute in total, honoring
 `Retry-After`); other error statuses and an exhausted retry budget drop the
 score with a payload-free diagnostic. Each score is serialized once as a
@@ -249,9 +249,9 @@ starting another.
 Isolated mode samples whole traces. The default keeps everything;
 `Config.SampleRate` (or `LANGFUSE_SAMPLE_RATE`) selects a fraction, and
 `Client.WithSampleRate` overrides that fraction for the sampling decision
-made by the first SDK observation subsequently started on that context path —
-set it once per request, before the first observation, to give different
-kinds of work different rates in one process.
+made by the first SDK observation subsequently started on that context
+path. Set it once per request, before the first observation, to give
+different kinds of work different rates in one process.
 
 - The decision is a deterministic threshold on the trace ID using the same
   scheme as OpenTelemetry's `TraceIDRatioBased`, so equal fractions always
@@ -259,7 +259,7 @@ kinds of work different rates in one process.
   exposes the same predicate for correlated application-level sampling, such
   as running an expensive evaluation on 2% of traces: with an evaluation
   fraction no larger than the export fraction, every evaluated trace is also
-  kept for export. Kept is a sampling decision, not delivery — export still
+  kept for export. Kept is a sampling decision, not delivery: export still
   requires ending observations, a live client, and export success.
 - The decision is made once per context path and inherited by every SDK
   observation started from the deciding observation's returned context, even
@@ -270,18 +270,18 @@ kinds of work different rates in one process.
   subtree-scoped, with each subtree internally consistent.
 - Sampled-out observations keep their trace and span IDs and become cheap
   no-ops: `Update` and `RecordError` return before serialization, `Mask`, or
-  `Error()` calls. `Observation.Sampled` reports the decision — a sampling
-  decision, not a delivery guarantee. Start attributes are necessarily built
+  `Error()` calls. `Observation.Sampled` reports the sampling decision, not
+  a delivery guarantee. Start attributes are necessarily built
   before the decision, so start observations with minimal fields and attach
   expensive payloads in `Update` after checking `Sampled`.
 - A score recorded directly on a sampled-out, SDK-originated context path
   targeting that same trace is suppressed (returning nil) so sampled-out
   traces do not accumulate orphaned scores; the first suppression per client
   emits one diagnostic. This is the path's drop decision applied to scores,
-  not proof the trace is absent remotely. All other scores — session-only,
-  other traces, out-of-context, traces with remote or foreign parents, any
-  path a foreign span has joined, and all borrowed-mode scores — are
-  delivered.
+  not proof the trace is absent remotely. All other scores are delivered:
+  session-only, other traces, out-of-context, traces with remote or foreign
+  parents, any path a foreign span has joined, and all borrowed-mode
+  scores.
 - Detached contexts start a new trace root and re-decide with the surviving
   requested rate. `SampleRate: 0` exports no traces while scores and prompts
   keep working; `Disabled: true` remains the complete no-op.

@@ -18,8 +18,8 @@ const (
 	maxTraceTagBytes = 16 << 10
 )
 
-// A detached context — the ambient span context cleared with the standard
-// OpenTelemetry helper so background work starts a new trace — needs no
+// A detached context (the ambient span context cleared with the standard
+// OpenTelemetry helper so background work starts a new trace) needs no
 // cleanup of these keys: a fresh random trace ID cannot match a stale
 // application-root claim, and the active-observation pointer is only
 // consulted while the ambient span context still matches that observation.

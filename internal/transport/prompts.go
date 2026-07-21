@@ -139,9 +139,9 @@ func (p *PromptsClient) Fetch(ctx context.Context, name string, version int, lab
 }
 
 // attempt performs one request. Retryable failures are network errors and
-// 408/429/5xx statuses; everything else — including 3xx (redirects are never
+// 408/429/5xx statuses; everything else, including 3xx (redirects are never
 // followed), 404 (ErrPromptNotFound), and any decode or semantic-validation
-// failure — is terminal because retrying a deterministic failure would never
+// failure, is terminal because retrying a deterministic failure would never
 // converge.
 func (p *PromptsClient) attempt(ctx context.Context, requestURL, name string, version int, label string) (prompt Prompt, retryable bool, retryAfter time.Duration, err error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
@@ -297,7 +297,7 @@ func decodePrompt(body []byte, name string, version int, label string) (Prompt, 
 // ({role, content, ...extra}, optionally discriminated with
 // type "chatmessage") and placeholder slots ({type: "placeholder", name}).
 // Unknown regular-message keys are preserved verbatim in Extra; an unknown
-// message shape is a decode error — failing loud beats dropping content.
+// message shape is a decode error: failing loud beats dropping content.
 func decodePromptMessages(raw json.RawMessage) ([]PromptMessage, error) {
 	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil {

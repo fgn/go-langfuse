@@ -74,8 +74,8 @@ type Score struct {
 
 // RecordScore submits one score through the Langfuse JSON ingestion endpoint
 // using the client's credentials and environment. The score is validated
-// synchronously — every returned error marks a score that was not accepted —
-// and then queued for asynchronous delivery with bounded retry (network
+// synchronously, so every returned error marks a score that was not
+// accepted, and then queued for asynchronous delivery with bounded retry (network
 // errors, HTTP 408, 429, and 5xx responses, and per-item ingestion errors
 // with those statuses, using the same backoff defaults as observation
 // export), so transport failures never reach the caller: after the retry
@@ -111,13 +111,13 @@ func (c *Client) RecordScore(ctx context.Context, score Score) error {
 // suppressScore applies the sampling decision of the caller's context path to
 // a validated score. Suppression is a policy, not a proof: a score recorded
 // directly on a sampled-out, SDK-originated context path inherits that path's
-// drop decision — deliberate, documented loss, narrower than the official
-// SDKs, which suppress on the local sampler decision alone. The conditions
-// keep suppression where it is least likely to discard an attachable score;
-// they cannot rule out a sibling branch having handed the context to a
-// foreign exporter. Everything not matched — session-only scores, other
-// traces, out-of-context scores, foreign-origin or downgraded paths, borrowed
-// mode — is delivered.
+// drop decision. This is deliberate, documented loss, narrower than the
+// official SDKs, which suppress on the local sampler decision alone. The
+// conditions keep suppression where it is least likely to discard an
+// attachable score; they cannot rule out a sibling branch having handed the
+// context to a foreign exporter. Everything not matched is delivered:
+// session-only scores, other traces, out-of-context scores, foreign-origin
+// or downgraded paths, and borrowed mode.
 func (c *Client) suppressScore(ctx context.Context, score Score) bool {
 	if !c.owned || score.TraceID == "" {
 		return false

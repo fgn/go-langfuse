@@ -9,7 +9,7 @@ the official OpenTelemetry Go SDK. Not affiliated with or endorsed by
 Langfuse.
 
 - **One small API for everything you trace.** Every operation is an
-  observation; only its type differs — `span`, `generation`, `event`,
+  observation. Only its type differs: `span`, `generation`, `event`,
   `agent`, `tool`, `chain`, `retriever`, `evaluator`, `embedding`, or
   `guardrail`, the full set the Langfuse platform defines.
 - **OpenTelemetry-native.** Exports OTLP/HTTP protobuf (Langfuse ingestion
@@ -144,10 +144,10 @@ The main entry points have runnable examples on
 
 Everything you trace uses the same two calls; only the
 [observation type](https://langfuse.com/docs/observability/features/observation-types)
-differs. Prefer `Observe` when the work fits one function — the callback
-receives the child context, the observation always ends (a panic is marked
-as a payload-free failure before it propagates), and a returned error is
-recorded and passed through unchanged:
+differs. Prefer `Observe` when the work fits one function. The callback
+receives the child context, and the observation always ends, even on a
+panic, which is marked as a payload-free failure before it propagates. A
+returned error is recorded and passed through unchanged:
 
 ```go
 err := lf.Observe(ctx, "retrieve-documents", langfuse.TypeRetriever,
@@ -175,8 +175,8 @@ full pattern.
 ## Scores
 
 `RecordScore` submits evaluations and user feedback. Validation is
-synchronous — every returned error means the score was not accepted —
-delivery is asynchronous with bounded retry, and `Flush`/`Shutdown` drain
+synchronous, so every returned error means the score was not accepted.
+Delivery is asynchronous with bounded retry, and `Flush`/`Shutdown` drain
 accepted scores:
 
 ```go
@@ -196,10 +196,10 @@ evaluation job, and `ConfigID` binds it to a Langfuse score config.
 
 ## Prompts
 
-`GetPrompt` loads prompt-management prompts with client-side caching: fresh
-hits are local reads, expired entries are served stale while one background
+`GetPrompt` loads prompt-management prompts with client-side caching. Fresh
+hits are local reads. Expired entries are served stale while one background
 refresh runs, and concurrent misses share a single fetch. A `Fallback`
-makes prompt loading safe to depend on — it also covers nil, disabled, and
+makes prompt loading safe to depend on. It also covers nil, disabled, and
 shut-down clients, so optional observability needs no guards:
 
 ```go
