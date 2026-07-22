@@ -106,7 +106,7 @@ func (c *call) FeedEvent(data []byte) wiretap.EventVerdict {
 		c.partial = true
 		return wiretap.EventVerdict{}
 	}
-	if chunk.Error != nil {
+	if isRealError(chunk.Error) {
 		c.errorCategory = "provider error"
 		return wiretap.EventVerdict{Terminal: wiretap.TerminalError}
 	}
@@ -119,7 +119,7 @@ func (c *call) FeedEvent(data []byte) wiretap.EventVerdict {
 	output := false
 	for _, choice := range chunk.Choices {
 		if choice.FinishReason != "" {
-			c.finishReasons = append(c.finishReasons, choice.FinishReason)
+			c.appendFinishReason(choice.FinishReason)
 		}
 		text, bearing := choice.outputDelta()
 		if !bearing {
@@ -162,7 +162,7 @@ func (c *call) FinishUnary(body []byte, httpStatus int) {
 	var outputs []any
 	for _, choice := range response.Choices {
 		if choice.FinishReason != "" {
-			c.finishReasons = append(c.finishReasons, choice.FinishReason)
+			c.appendFinishReason(choice.FinishReason)
 		}
 		if choice.Message != nil {
 			outputs = append(outputs, sanitizeValue(choice.Message))
@@ -181,21 +181,18 @@ func (c *call) FinishUnary(body []byte, httpStatus int) {
 
 func (c *call) Result() wiretap.Result {
 	result := wiretap.Result{
-		Input:           c.input,
+		Input: c.input,
+		// Only the response model is eligible for the Model field; a
+		// request-body model must stay Mask-governed (metadata).
 		Model:           c.responseModel,
+		RequestModel:    c.requestModel,
 		ModelParameters: c.modelParameters,
 		Usage:           c.usage,
 		ErrorCategory:   c.errorCategory,
 		TelemetryPartial: c.partial ||
 			c.deltasOver,
 	}
-	if c.responseModel == "" {
-		result.Model = c.requestModel
-	}
 	metadata := map[string]any{}
-	if c.requestModel != "" && c.requestModel != result.Model {
-		metadata["request_model"] = c.requestModel
-	}
 	if len(c.finishReasons) == 1 {
 		metadata["finish_reason"] = c.finishReasons[0]
 	} else if len(c.finishReasons) > 1 {
@@ -225,11 +222,21 @@ func (c *call) Result() wiretap.Result {
 	return result
 }
 
+// maxChoices bounds provider-controlled fan-out: choice indices,
+// candidate slots, and finish-reason accumulation. Wire fields are
+// untrusted input and must never size allocations.
+const maxChoices = 128
+
 // appendDelta grows per-choice accumulated output, bounded in aggregate
-// by the capture cap: over the cap, output is dropped entirely (never
-// truncated) while usage and terminal scanning continue.
+// by the capture cap and in fan-out by maxChoices: over either bound,
+// output capture degrades to partial telemetry (never truncated,
+// never provider-sized).
 func (c *call) appendDelta(index int, text string) {
 	if c.deltasOver {
+		return
+	}
+	if index < 0 || index >= maxChoices {
+		c.partial = true
 		return
 	}
 	if c.deltaBytes+len(text) > c.captureCap {
@@ -242,6 +249,12 @@ func (c *call) appendDelta(index int, text string) {
 	}
 	c.deltas[index].WriteString(text)
 	c.deltaBytes += len(text)
+}
+
+func (c *call) appendFinishReason(reason string) {
+	if len(c.finishReasons) < maxChoices {
+		c.finishReasons = append(c.finishReasons, reason)
+	}
 }
 
 type streamChunk struct {
@@ -259,10 +272,14 @@ type streamChoice struct {
 }
 
 type streamDelta struct {
-	Role      string          `json:"role"`
-	Content   string          `json:"content"`
-	Refusal   string          `json:"refusal"`
-	Audio     json.RawMessage `json:"audio"`
+	Role         string          `json:"role"`
+	Content      string          `json:"content"`
+	Refusal      string          `json:"refusal"`
+	Audio        json.RawMessage `json:"audio"`
+	FunctionCall *struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function_call"`
 	ToolCalls []struct {
 		Function struct {
 			Name      string `json:"name"`
@@ -271,9 +288,11 @@ type streamDelta struct {
 	} `json:"tool_calls"`
 }
 
-// outputDelta reports the first output-bearing content of a stream
-// choice: text, refusal, audio, or tool-call argument deltas. Role-only
-// and empty control chunks are not output.
+// outputDelta reports whether a stream choice carried output-bearing
+// content (text, refusal, audio, legacy function_call, or tool-call
+// deltas) and the text to accumulate: every tool element's argument
+// delta is collected, so a name-only element cannot suppress later
+// arguments. Role-only and empty control chunks are not output.
 func (choice streamChoice) outputDelta() (text string, bearing bool) {
 	if choice.Text != "" {
 		return choice.Text, true
@@ -287,15 +306,27 @@ func (choice streamChoice) outputDelta() (text string, bearing bool) {
 		return delta.Content, true
 	case delta.Refusal != "":
 		return delta.Refusal, true
-	case len(delta.Audio) > 0:
+	case len(delta.Audio) > 0 && !bytes.Equal(bytes.TrimSpace(delta.Audio), []byte("null")):
 		return "", true
 	}
+	if delta.FunctionCall != nil {
+		return delta.FunctionCall.Arguments, true
+	}
+	var arguments strings.Builder
 	for _, tool := range delta.ToolCalls {
 		if tool.Function.Name != "" || tool.Function.Arguments != "" {
-			return tool.Function.Arguments, true
+			bearing = true
+			arguments.WriteString(tool.Function.Arguments)
 		}
 	}
-	return "", false
+	return arguments.String(), bearing
+}
+
+// isRealError distinguishes an actual error object from an explicit
+// JSON null, which providers may emit as a field placeholder.
+func isRealError(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
 }
 
 type unaryResponse struct {
@@ -384,6 +415,15 @@ func sanitizeValue(value any) any {
 		}
 		sanitized := make(map[string]any, len(value))
 		for key, item := range value {
+			// Response messages carry audio without a part type
+			// (message.audio.data holds base64); replace the whole
+			// object so media bytes never reach export.
+			if key == "audio" {
+				if _, isMap := item.(map[string]any); isMap {
+					sanitized[key] = map[string]any{"media": "omitted"}
+					continue
+				}
+			}
 			sanitized[key] = sanitizeValue(item)
 		}
 		return sanitized

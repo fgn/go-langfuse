@@ -190,3 +190,59 @@ func TestRecorderContentLengthUntouched(t *testing.T) {
 		t.Fatalf("ContentLength changed to %d", clone.ContentLength)
 	}
 }
+
+// TestRecorderStaleGenerationCannotCorruptReplay locks the generation
+// token semantics: after a replay begins, the previous transmission's
+// reads must not append to the replacement capture and its Close must
+// not mark the replacement complete.
+func TestRecorderStaleGenerationCannotCorruptReplay(t *testing.T) {
+	recorder := &requestRecorder{cap: 1 << 16}
+	req := newBodyRequest(t, "correct-replay-body")
+	clone := req.Clone(req.Context())
+	recorder.instrument(clone)
+
+	first := clone.Body
+	buf := make([]byte, 7)
+	if _, err := first.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+
+	replay, err := clone.GetBody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Stale generation closes AFTER the replay started: must not make
+	// the still-empty replacement snapshot-eligible.
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if body, ok := recorder.snapshot(); ok {
+		t.Fatalf("stale Close completed the replacement capture: %q", body)
+	}
+
+	recorder2 := &requestRecorder{cap: 1 << 16}
+	clone2 := req.Clone(req.Context())
+	recorder2.instrument(clone2)
+	first2 := clone2.Body
+	if _, err := first2.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+	replay2, err := clone2.GetBody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(replay2); err != nil {
+		t.Fatal(err)
+	}
+	// Stale generation reads AFTER the replay completed: must not
+	// append to the replacement capture.
+	if _, err := first2.Read(buf); err != nil && err != io.EOF {
+		t.Fatal(err)
+	}
+	_ = replay2.Close()
+	captured, ok := recorder2.snapshot()
+	if !ok || string(captured) != "correct-replay-body" {
+		t.Fatalf("stale read corrupted the replay capture: %q, %v", captured, ok)
+	}
+	_ = replay
+}

@@ -41,6 +41,9 @@ type Outcome struct {
 	// any point before finalization; it accompanies ambiguous races as
 	// metadata without asserting cause.
 	CancelObserved bool
+	// CaptureDegraded reports that bounded capture dropped content (an
+	// oversized SSE event or unary body); mapped to telemetry_partial.
+	CaptureDegraded bool
 	// End is the time the terminal event was observed.
 	End time.Time
 	// CompletionStart is the read-completion time of the first
@@ -70,6 +73,7 @@ type bodyWrapper struct {
 	finalized bool
 	frozen    bool // hard terminal seen; reads keep flowing untouched
 	framer    sseFramer
+	sniff     []byte // bounded undecided prefix awaiting SSE/JSON proof
 	unary     []byte
 	unaryOver bool
 	capBytes  int
@@ -77,6 +81,7 @@ type bodyWrapper struct {
 
 	completionStart time.Time
 	cancelObserved  *atomic.Bool
+	ctxDone         func() bool
 	ctxErr          func() error
 	finalize        func(Outcome)
 }
@@ -102,6 +107,7 @@ func newBodyWrapper(
 		capBytes:       capBytes,
 		status:         status,
 		cancelObserved: cancelObserved,
+		ctxDone:        func() bool { return ctx.Err() != nil },
 		ctxErr:         func() error { return context.Cause(ctx) },
 		finalize:       finalize,
 	}
@@ -140,7 +146,19 @@ func (w *bodyWrapper) process(p []byte) {
 	}
 	defer w.recoverParse()
 	if w.mode == modeUndecided {
-		w.mode = sniffMode(p)
+		// Buffer a bounded prefix until SSE versus JSON is decisive:
+		// a first read of "d" or "da" must not misclassify the stream.
+		w.sniff = append(w.sniff, p...)
+		w.mode = sniffDecide(w.sniff)
+		if w.mode == modeUndecided {
+			if len(w.sniff) > 16 {
+				w.mode = modeUnary
+			} else {
+				return
+			}
+		}
+		p = w.sniff
+		w.sniff = nil
 	}
 	switch w.mode {
 	case modeUnary:
@@ -190,7 +208,11 @@ func (w *bodyWrapper) terminalRead(err error) {
 		defer w.recoverParse()
 		if w.mode == modeUnary || w.mode == modeUndecided {
 			if !w.unaryOver {
-				w.call.FinishUnary(w.unary, w.status)
+				body := w.unary
+				if w.mode == modeUndecided {
+					body = w.sniff // short body that never left sniffing
+				}
+				w.call.FinishUnary(body, w.status)
 			}
 			w.finalizeLocked(StateComplete)
 			return
@@ -199,10 +221,12 @@ func (w *bodyWrapper) terminalRead(err error) {
 			w.finalizeLocked(StateComplete)
 			return
 		}
-		// SSE stream ended cleanly. Whether that is success depends on
-		// the protocol: the parser reports, via a zero-data probe, if a
-		// hard sentinel was required and missing.
-		if w.call.FeedEvent(nil).Terminal == TerminalSuccess {
+		// SSE stream ended cleanly. Success requires both the
+		// protocol's judgment (via a zero-data probe: a sentinel
+		// protocol needs its sentinel) and framing completeness (a
+		// truncated final frame is incomplete even for sentinel-free
+		// protocols).
+		if w.call.FeedEvent(nil).Terminal == TerminalSuccess && !w.framer.pending() {
 			w.finalizeLocked(StateComplete)
 		} else {
 			w.finalizeLocked(StateIncomplete)
@@ -228,10 +252,13 @@ func (w *bodyWrapper) closeTelemetry() {
 	w.finalizeLocked(StateClosedEarly)
 }
 
-// causallyCanceled requires both the ordered cancellation observation
-// and a compatible error, per the design's conservative rule.
+// causallyCanceled requires a compatible terminal error together with
+// the context actually being done at classification time. Checking the
+// context directly is deterministic where the AfterFunc flag, which
+// runs on its own goroutine, can lag the error by a few instructions;
+// the flag still feeds the CancelObserved metadata.
 func (w *bodyWrapper) causallyCanceled(err error) bool {
-	if !w.cancelObserved.Load() {
+	if !w.ctxDone() {
 		return false
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -254,7 +281,8 @@ func (w *bodyWrapper) finalizeLocked(state FinalState) {
 	w.finalized = true
 	w.finalize(Outcome{
 		State:           state,
-		CancelObserved:  w.cancelObserved.Load(),
+		CancelObserved:  w.cancelObserved.Load() || w.ctxDone(),
+		CaptureDegraded: w.framer.discarded || w.unaryOver,
 		End:             time.Now(),
 		CompletionStart: w.completionStart,
 	})
@@ -270,17 +298,26 @@ func (w *bodyWrapper) recoverParse() {
 	}
 }
 
-// sniffMode decides SSE versus unary from leading bytes when neither
-// the URL shape nor the Content-Type answered: SSE bodies begin with a
-// field name or comment; JSON bodies begin with a JSON value.
-func sniffMode(p []byte) streamMode {
-	trimmed := bytes.TrimLeft(p, " \t\r\n")
+// sniffDecide classifies a buffered prefix: JSON bodies start with a
+// JSON value; SSE bodies start with a comment or a field name. A
+// prefix that is still a proper prefix of an SSE field name stays
+// undecided until more bytes arrive (bounded by the caller).
+func sniffDecide(prefix []byte) streamMode {
+	trimmed := bytes.TrimLeft(prefix, " \t\r\n")
 	if len(trimmed) == 0 {
 		return modeUndecided
 	}
-	if trimmed[0] == ':' || bytes.HasPrefix(trimmed, []byte("data")) ||
-		bytes.HasPrefix(trimmed, []byte("event")) {
+	if trimmed[0] == ':' {
 		return modeSSE
+	}
+	for _, field := range []string{"data", "event", "id", "retry"} {
+		name := []byte(field)
+		switch {
+		case bytes.HasPrefix(trimmed, name):
+			return modeSSE
+		case bytes.HasPrefix(name, trimmed):
+			return modeUndecided
+		}
 	}
 	return modeUnary
 }

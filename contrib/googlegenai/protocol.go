@@ -80,36 +80,41 @@ func classifyProvider(host string) string {
 }
 
 // parseModelResource extracts the model and API version from the
-// resource path preceding the method. Supported shapes, tolerating
-// reverse-proxy prefixes via segment scanning:
+// resource path preceding the method, using the complete resource
+// productions the pinned genai SDK constructs (reverse-proxy prefixes
+// are tolerated by locating the version segment):
 //
-//	.../{version}/models/{model}
-//	.../{version}/tunedModels/{model}
-//	.../{version}/projects/{p}/locations/{l}/publishers/{pub}/models/{model}
+//	{version}/models/{model}
+//	{version}/tunedModels/{model}
+//	{version}/projects/{p}/locations/{l}/publishers/{pub}/models/{model}
 //
-// Any other resource returns model "" and the percent-decoded resource
-// tail for metadata. Segments are decoded individually and bounded.
+// Every other resource the SDK accepts (for example
+// projects/{p}/locations/{l}/models/{m} or cached content) is
+// deliberately NOT collapsed to a bare model: it returns model "" and
+// the percent-decoded resource tail for metadata, per the reviewed
+// design. Segments are decoded individually and bounded.
 func parseModelResource(escapedPath string) (model, version, qualified string) {
 	segments := strings.Split(strings.Trim(escapedPath, "/"), "/")
+	versionIndex := -1
 	for index, segment := range segments {
-		switch segment {
-		case "v1", "v1beta", "v1beta1":
+		if segment == "v1" || segment == "v1beta" || segment == "v1beta1" {
+			versionIndex = index
 			version = segment
-		case "models", "tunedModels":
-			if index == len(segments)-1 {
-				continue
-			}
-			if decoded, ok := decodeSegment(segments[index+1]); ok {
-				// The last models/... pair wins: Vertex paths contain
-				// exactly one, Developer paths contain exactly one.
-				model = decoded
-			}
 		}
 	}
-	if model != "" {
-		return model, version, ""
+	rest := segments[versionIndex+1:]
+	switch {
+	case len(rest) == 2 && (rest[0] == "models" || rest[0] == "tunedModels"):
+		if decoded, ok := decodeSegment(rest[1]); ok {
+			return decoded, version, ""
+		}
+	case len(rest) == 8 && rest[0] == "projects" && rest[2] == "locations" &&
+		rest[4] == "publishers" && rest[6] == "models":
+		if decoded, ok := decodeSegment(rest[7]); ok {
+			return decoded, version, ""
+		}
 	}
-	tail := segments
+	tail := rest
 	if len(tail) > 8 {
 		tail = tail[len(tail)-8:]
 	}

@@ -22,10 +22,10 @@ func TestRecognizeRouteGrammar(t *testing.T) {
 		provider  string
 	}{
 		{
-			url:       "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+			url:       "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
 			wantOK:    true,
 			wantName:  "genai.generate_content",
-			wantModel: "gemini-2.5-flash",
+			wantModel: "gemini-3.6-flash",
 			wantType:  langfuse.TypeGeneration,
 			provider:  "google-genai",
 		},
@@ -39,10 +39,10 @@ func TestRecognizeRouteGrammar(t *testing.T) {
 			provider:  "google-genai",
 		},
 		{
-			url:       "https://eu-aiplatform.googleapis.com/v1beta1/projects/proj-1/locations/eu/publishers/google/models/gemini-2.5-pro:generateContent",
+			url:       "https://eu-aiplatform.googleapis.com/v1beta1/projects/proj-1/locations/eu/publishers/google/models/gemini-3.6-pro:generateContent",
 			wantOK:    true,
 			wantName:  "genai.generate_content",
-			wantModel: "gemini-2.5-pro",
+			wantModel: "gemini-3.6-pro",
 			wantType:  langfuse.TypeGeneration,
 			provider:  "google-vertex",
 		},
@@ -56,10 +56,10 @@ func TestRecognizeRouteGrammar(t *testing.T) {
 			provider:  "google-vertex",
 		},
 		{
-			url:       "https://gw.example.com/langfuse-proxy/v1beta/models/gemini-2.5-flash:embedContent",
+			url:       "https://gw.example.com/langfuse-proxy/v1beta/models/gemini-3.6-flash:embedContent",
 			wantOK:    true,
 			wantName:  "genai.embed_content",
-			wantModel: "gemini-2.5-flash",
+			wantModel: "gemini-3.6-flash",
 			wantType:  langfuse.TypeEmbedding,
 			provider:  "google-genai-compatible",
 		},
@@ -89,7 +89,7 @@ func TestRecognizeRouteGrammar(t *testing.T) {
 			provider:  "google-genai",
 		},
 		{
-			url:    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:countTokens",
+			url:    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:countTokens",
 			wantOK: false,
 		},
 		{

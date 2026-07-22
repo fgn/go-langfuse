@@ -18,9 +18,12 @@
 //
 // Everything recorded flows through the core client's privacy
 // controls: Config.Mask, LANGFUSE_CONTENT_CAPTURE_ENABLED, sampling,
-// and payload limits apply unchanged. The adapter reads no request
-// headers and exports no headers. This module depends only on the core
-// go-langfuse module; it has no OpenAI SDK dependency.
+// and payload limits apply unchanged, with one documented exception: a
+// strictly validated response model string is promoted to the model
+// field, which Langfuse pricing requires. The adapter reads no request
+// headers and exports no headers. This module adds no provider SDK to
+// the dependency graph: beyond the core module and its OpenTelemetry
+// dependencies it uses only the standard library.
 package langfuseopenai
 
 import (
@@ -28,6 +31,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 
@@ -78,11 +82,16 @@ var providerShape = regexp.MustCompile(`^[a-z0-9_-]{1,40}$`)
 // name. Invalid values fall back to the classifier with a diagnostic.
 func WithProvider(name string) Option {
 	return func(o *options) {
-		if !providerShape.MatchString(name) {
+		normalized := strings.ToLower(name)
+		if !providerShape.MatchString(normalized) {
+			// Last-wins includes invalid values: the override is
+			// cleared so classification falls back to the host
+			// classifier rather than a stale earlier option.
+			o.provider = ""
 			otel.Handle(errors.New("langfuse contrib: invalid provider override ignored"))
 			return
 		}
-		o.provider = name
+		o.provider = normalized
 	}
 }
 

@@ -106,7 +106,7 @@ func TestLiveAdapters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := gemini.Models.GenerateContent(traceCtx, "gemini-2.5-flash",
+	if _, err := gemini.Models.GenerateContent(traceCtx, "gemini-3.6-flash",
 		genai.Text("synthetic live question"), nil); err != nil {
 		t.Fatal(err)
 	}

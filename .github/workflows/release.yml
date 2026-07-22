@@ -4,9 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Exact stable tag to create (for example v0.1.0)"
+        description: "Exact stable version to create (for example v0.1.0); contrib modules are tagged as <module>/<version>"
         required: true
         type: string
+      module:
+        description: "Module to release"
+        required: true
+        default: core
+        type: choice
+        options:
+          - core
+          - contrib/openai
+          - contrib/googlegenai
       live_gate_passed:
         description: "I attest that the credentialed synthetic-project live gate passed"
         required: true
@@ -39,7 +48,8 @@ jobs:
     timeout-minutes: 25
     environment: release
     env:
-      RELEASE_TAG: ${{ inputs.version }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_MODULE: ${{ inputs.module }}
       LIVE_GATE_PASSED: ${{ inputs.live_gate_passed }}
       LIVE_GATE_EVIDENCE: ${{ inputs.live_gate_evidence }}
       DOGFOOD_PASSED: ${{ inputs.dogfood_passed }}
@@ -55,7 +65,14 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF_TYPE" = "branch"
           test "$GITHUB_REF_NAME" = "main"
-          [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$RELEASE_VERSION" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if [ "$RELEASE_MODULE" = "core" ]; then
+            RELEASE_TAG="$RELEASE_VERSION"
+          else
+            [[ "$RELEASE_MODULE" =~ ^contrib/(openai|googlegenai)$ ]]
+            RELEASE_TAG="$RELEASE_MODULE/$RELEASE_VERSION"
+          fi
+          echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
           test "$LIVE_GATE_PASSED" = "true"
           test "$DOGFOOD_PASSED" = "true"
           live_evidence="${LIVE_GATE_EVIDENCE//[[:space:]]/}"
@@ -126,6 +143,24 @@ jobs:
       - name: Vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 
+      - name: Contrib release gates
+        if: ${{ inputs.module != 'core' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          diff -r contrib/openai/internal/wiretap contrib/googlegenai/internal/wiretap
+          cd "$RELEASE_MODULE"
+          # The declared core version must already be published (core
+          # releases first), and the module must be releasable without
+          # the workspace.
+          GOWORK=off GOFLAGS=-mod=readonly go mod download
+          GOWORK=off go mod tidy -diff
+          GOWORK=off go vet ./...
+          GOWORK=off go test -race -count=1 -mod=readonly ./...
+          providers='sashabaranov|github.com/openai/|google.golang.org/genai|cloud.google.com'
+          ! grep -E "$providers" go.mod go.sum
+          GOWORK=off go list -deps ./... | (! grep -E "$providers")
+
       - name: Verify repository and release metadata
         shell: bash
         run: |
@@ -134,9 +169,13 @@ jobs:
           grep -q "Apache License" LICENSE
           test "$(go mod edit -json | jq -r .Go)" = "1.25.0"
           test "$(go mod edit -json | jq -r .Toolchain)" = "go1.25.12"
-          version="${RELEASE_TAG#v}"
-          test "$RELEASE_TAG" = "v$(awk -F'\"' '/sdkVersion/{print $2}' version.go)"
-          grep -Eq "^## \\[${version}\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md
+          version="${RELEASE_VERSION#v}"
+          if [ "$RELEASE_MODULE" = "core" ]; then
+            test "$RELEASE_VERSION" = "v$(awk -F'\"' '/sdkVersion/{print $2}' version.go)"
+            grep -Eq "^## \\[${version}\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md
+          else
+            grep -Eq "^## \\[${version}\\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" "$RELEASE_MODULE/CHANGELOG.md"
+          fi
           ! grep -Fq '<!-- PRE_RELEASE_WARNING:' README.md
           ! grep -Fq 'do not use it in production until a tagged release is available' README.md
           git diff --exit-code

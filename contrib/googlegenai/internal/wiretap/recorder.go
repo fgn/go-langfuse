@@ -21,6 +21,7 @@ type requestRecorder struct {
 	closed   bool // the current generation's body reached Close or EOF
 	active   bool // a generation exists
 	disabled bool // capture abandoned (over cap or finalized)
+	gen      int  // monotonic transmission generation token
 }
 
 // instrument replaces body and GetBody on the already-cloned request.
@@ -42,22 +43,25 @@ func (r *requestRecorder) instrument(clone *http.Request) {
 }
 
 // newGeneration resets capture state for a (re)transmission and wraps
-// its reader. The newest generation's bytes replace older ones, so the
-// capture always describes the transmission the provider accepted.
+// its reader with a generation token. The newest generation's bytes
+// replace older ones, and a stale generation's late reads or Close can
+// neither corrupt nor complete the replacement capture.
 func (r *requestRecorder) newGeneration(rc io.ReadCloser) io.ReadCloser {
 	r.mu.Lock()
+	r.gen++
 	r.buf = r.buf[:0]
 	r.overCap = false
 	r.closed = false
 	r.active = true
+	generation := r.gen
 	r.mu.Unlock()
-	return &recorderBody{rec: r, rc: rc}
+	return &recorderBody{rec: r, rc: rc, gen: generation}
 }
 
-func (r *requestRecorder) observe(p []byte) {
+func (r *requestRecorder) observe(gen int, p []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.disabled || r.overCap {
+	if gen != r.gen || r.disabled || r.overCap {
 		return
 	}
 	if len(r.buf)+len(p) > r.cap {
@@ -70,9 +74,11 @@ func (r *requestRecorder) observe(p []byte) {
 	r.buf = append(r.buf, p...)
 }
 
-func (r *requestRecorder) markClosed() {
+func (r *requestRecorder) markClosed(gen int) {
 	r.mu.Lock()
-	r.closed = true
+	if gen == r.gen {
+		r.closed = true
+	}
 	r.mu.Unlock()
 }
 
@@ -109,21 +115,22 @@ func (r *requestRecorder) overCapped() bool {
 type recorderBody struct {
 	rec *requestRecorder
 	rc  io.ReadCloser
+	gen int
 }
 
 func (b *recorderBody) Read(p []byte) (int, error) {
 	n, err := b.rc.Read(p)
 	if n > 0 {
-		b.rec.observe(p[:n])
+		b.rec.observe(b.gen, p[:n])
 	}
 	if err == io.EOF {
-		b.rec.markClosed()
+		b.rec.markClosed(b.gen)
 	}
 	return n, err
 }
 
 func (b *recorderBody) Close() error {
 	err := b.rc.Close()
-	b.rec.markClosed()
+	b.rec.markClosed(b.gen)
 	return err
 }

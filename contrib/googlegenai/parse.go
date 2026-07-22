@@ -1,6 +1,7 @@
 package langfusegenai
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 
@@ -44,9 +45,14 @@ type call struct {
 	deltas     []strings.Builder
 	deltaBytes int
 	deltasOver bool
+	extraParts []any // sanitized non-text stream parts, bounded
 	sawStream  bool
 	embeddings int
 }
+
+// maxCandidates bounds provider-controlled fan-out; wire fields are
+// untrusted and never size allocations.
+const maxCandidates = 128
 
 func (c *call) ParseRequest(body []byte) {
 	var request map[string]json.RawMessage
@@ -123,7 +129,7 @@ func (c *call) FeedEvent(data []byte) wiretap.EventVerdict {
 		c.partial = true
 		return wiretap.EventVerdict{}
 	}
-	if chunk.Error != nil {
+	if isRealError(chunk.Error) {
 		c.errorCategory = "provider error"
 		return wiretap.EventVerdict{Terminal: wiretap.TerminalError}
 	}
@@ -156,15 +162,13 @@ func (c *call) Result() wiretap.Result {
 	result := wiretap.Result{
 		Input:            c.input,
 		Model:            c.modelVersion,
+		RequestModel:     c.route.Model,
 		ModelParameters:  c.modelParameters,
 		Usage:            c.usage,
 		ErrorCategory:    c.errorCategory,
 		TelemetryPartial: c.partial || c.deltasOver,
 	}
 	metadata := map[string]any{}
-	if c.modelVersion != "" && c.route.Model != "" && c.modelVersion != c.route.Model {
-		metadata["request_model"] = c.route.Model
-	}
 	if len(c.finishReasons) == 1 {
 		metadata["finish_reason"] = c.finishReasons[0]
 	} else if len(c.finishReasons) > 1 {
@@ -179,16 +183,25 @@ func (c *call) Result() wiretap.Result {
 	if c.unaryOutput != nil {
 		result.Output = c.unaryOutput
 	} else if c.sawStream && !c.deltasOver {
+		var text any
 		switch len(c.deltas) {
 		case 0:
 		case 1:
-			result.Output = c.deltas[0].String()
+			text = c.deltas[0].String()
 		default:
 			texts := make([]any, len(c.deltas))
 			for index := range c.deltas {
 				texts[index] = c.deltas[index].String()
 			}
-			result.Output = texts
+			text = texts
+		}
+		switch {
+		case text != nil && len(c.extraParts) > 0:
+			result.Output = map[string]any{"text": text, "parts": c.extraParts}
+		case len(c.extraParts) > 0:
+			result.Output = c.extraParts
+		case text != nil:
+			result.Output = text
 		}
 	}
 	return result
@@ -216,7 +229,7 @@ func (c *call) consumeResponse(response *wireResponse, streaming bool) bool {
 	}
 	output := false
 	for index, candidate := range response.Candidates {
-		if candidate.FinishReason != "" {
+		if candidate.FinishReason != "" && len(c.finishReasons) < maxCandidates {
 			c.finishReasons = append(c.finishReasons, candidate.FinishReason)
 		}
 		for _, part := range candidate.Content.Parts {
@@ -224,8 +237,16 @@ func (c *call) consumeResponse(response *wireResponse, streaming bool) bool {
 				continue
 			}
 			output = true
-			if streaming && part.Text != "" {
+			if !streaming {
+				continue
+			}
+			if part.Text != "" {
 				c.appendDelta(index, part.Text)
+			} else if len(c.extraParts) < maxCandidates {
+				// Non-text output (function calls, executable code,
+				// media placeholders) is preserved sanitized so a
+				// tool-only stream still exports Output.
+				c.extraParts = append(c.extraParts, part.sanitized())
 			}
 		}
 	}
@@ -258,6 +279,10 @@ func (c *call) candidateOutputs(response *wireResponse) any {
 
 func (c *call) appendDelta(index int, text string) {
 	if c.deltasOver {
+		return
+	}
+	if index < 0 || index >= maxCandidates {
+		c.partial = true
 		return
 	}
 	if c.deltaBytes+len(text) > c.captureCap {
@@ -336,6 +361,13 @@ func (p wirePart) sanitized() any {
 	}
 }
 
+// isRealError distinguishes an actual error object from an explicit
+// JSON null placeholder.
+func isRealError(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null"))
+}
+
 func rawValue(raw json.RawMessage) any {
 	var value any
 	if json.Unmarshal(raw, &value) != nil {
@@ -349,19 +381,28 @@ type wireUsage struct {
 	CandidatesTokenCount    int64 `json:"candidatesTokenCount"`
 	CachedContentTokenCount int64 `json:"cachedContentTokenCount"`
 	ThoughtsTokenCount      int64 `json:"thoughtsTokenCount"`
+	ToolUsePromptTokenCount int64 `json:"toolUsePromptTokenCount"`
 }
 
 // mapUsage converts Gemini usage to the core inclusive semantics.
 // Gemini's candidatesTokenCount excludes thought tokens, while the
 // core OutputTokens is inclusive of reasoning, so the two are summed;
-// promptTokenCount already includes cached content tokens.
+// promptTokenCount already includes cached content but excludes
+// tool-use prompt tokens, which the SDK's own total adds separately,
+// so they join the inclusive input side with their own detail bucket.
 func mapUsage(usage *wireUsage) *langfuse.Usage {
-	return &langfuse.Usage{
-		InputTokens:           usage.PromptTokenCount,
+	mapped := &langfuse.Usage{
+		InputTokens:           usage.PromptTokenCount + usage.ToolUsePromptTokenCount,
 		OutputTokens:          usage.CandidatesTokenCount + usage.ThoughtsTokenCount,
 		CacheReadInputTokens:  usage.CachedContentTokenCount,
 		ReasoningOutputTokens: usage.ThoughtsTokenCount,
 	}
+	if usage.ToolUsePromptTokenCount > 0 {
+		mapped.Details = map[string]int64{
+			"input_tool_use_tokens": usage.ToolUsePromptTokenCount,
+		}
+	}
+	return mapped
 }
 
 func allowedParameters(config map[string]json.RawMessage) map[string]any {

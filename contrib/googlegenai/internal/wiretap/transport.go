@@ -94,12 +94,20 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// than making a fresh sampling decision.
 	clone := req.Clone(obsCtx)
 
-	// Sampled-out attempts skip all capture: the observation is a
-	// cheap no-op and content work would be pure waste.
+	// Sampled-out attempts skip all capture (no recorder, no parser,
+	// no masker) but keep honest lifetimes: the observation ends when
+	// the response attempt ends, not when headers arrive, which
+	// matters to borrowed-mode RecordOnly samplers and processors.
 	if !obs.Sampled() {
 		resp, err := t.base.RoundTrip(clone)
-		obs.End()
-		return resp, err
+		if err != nil || resp.Body == nil || resp.Body == http.NoBody {
+			obs.End()
+			return resp, err
+		}
+		resp.Body = newBodyWrapper(obsCtx, resp.Body, nil, modeIgnore, 0,
+			resp.StatusCode, 0, &atomic.Bool{},
+			func(outcome Outcome) { obs.EndAt(outcome.End) })
+		return resp, nil
 	}
 
 	cancelObserved := &atomic.Bool{}
@@ -113,7 +121,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	resp, err := t.base.RoundTrip(clone)
 	if err != nil {
-		t.finalizeTransportError(obs, cancelObserved, stopCancelWatch)
+		t.finalizeTransportError(obsCtx, obs, err, stopCancelWatch)
 		return resp, err
 	}
 
@@ -152,13 +160,20 @@ func (t *Transport) safeName(route Route) (name string, ok bool) {
 }
 
 // finalizeTransportError ends an attempt whose exchange failed before
-// any response arrived. The error text is never exported; the fixed
-// category and the causal cancellation rule apply.
-func (t *Transport) finalizeTransportError(obs *langfuse.Observation, cancelObserved *atomic.Bool, stop func() bool) {
-	defer stop()
+// any response arrived. The error text is never exported, and canceled
+// requires causal evidence: a compatible error while the context is
+// actually done.
+func (t *Transport) finalizeTransportError(ctx context.Context, obs *langfuse.Observation, err error, stop func() bool) {
+	stop()
 	status := "transport error"
 	level := langfuse.LevelError
-	if cancelObserved.Load() {
+	compatible := errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	if !compatible {
+		if cause := context.Cause(ctx); cause != nil {
+			compatible = errors.Is(err, cause)
+		}
+	}
+	if compatible && ctx.Err() != nil {
 		status = "canceled"
 		level = langfuse.LevelWarning
 	}
@@ -179,7 +194,9 @@ func (t *Transport) newFinalizer(
 	stopCancelWatch func() bool,
 ) func(Outcome) {
 	return func(outcome Outcome) {
-		defer stopCancelWatch()
+		// Release the cancellation watcher before any potentially
+		// blocking parse, mask, or export work.
+		stopCancelWatch()
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				diagnose("attempt finalization panicked; observation ended with partial telemetry")
@@ -207,15 +224,18 @@ func (t *Transport) newFinalizer(
 			update.Input = result.Input
 			update.Output = result.Output
 		}
+		// Model provenance: only the validated RESPONSE model may reach
+		// the unmasked Model field (the documented single exception).
+		// Request models are Mask-governed metadata, always.
 		if result.Model != "" {
 			if responseModelShape.MatchString(result.Model) {
 				update.Model = result.Model
 			} else {
-				if update.Metadata == nil {
-					update.Metadata = map[string]any{}
-				}
 				update.Metadata["unvalidated_model"] = result.Model
 			}
+		}
+		if result.RequestModel != "" && result.RequestModel != result.Model {
+			update.Metadata["request_model"] = result.RequestModel
 		}
 		if !outcome.CompletionStart.IsZero() {
 			update.CompletionStartTime = outcome.CompletionStart
@@ -225,35 +245,34 @@ func (t *Transport) newFinalizer(
 		if state == StateComplete && result.ErrorCategory != "" {
 			state = StateFailed
 		}
-		switch state {
-		case StateComplete:
-			// The status model marks every non-2xx as a wire-provable
-			// failure with its fixed category, including redirect hops.
-			if httpStatus >= 300 {
-				update.Level = langfuse.LevelError
-				update.StatusMessage = httpStatusCategory(httpStatus)
-			} else if result.TelemetryPartial {
-				update.Level = langfuse.LevelWarning
-				update.StatusMessage = "telemetry_partial"
+		switch {
+		case httpStatus >= 300:
+			// An obtained non-2xx status is primary regardless of how
+			// the body lifecycle ended; the lifecycle fact is retained
+			// as metadata.
+			update.Level = langfuse.LevelError
+			update.StatusMessage = httpStatusCategory(httpStatus)
+			if state != StateComplete && state != StateFailed {
+				update.Metadata["body_lifecycle"] = lifecycleName(state)
 			}
-		case StateFailed:
+		case state == StateFailed:
 			update.Level = langfuse.LevelError
 			update.StatusMessage = failureCategory(httpStatus, result.ErrorCategory)
-		case StateIncomplete:
+		case state == StateIncomplete:
 			update.Level = langfuse.LevelWarning
 			update.StatusMessage = "incomplete"
-		case StateCanceled:
+		case state == StateCanceled:
 			update.Level = langfuse.LevelWarning
 			update.StatusMessage = "canceled"
-		case StateClosedEarly:
+		case state == StateClosedEarly:
 			update.Level = langfuse.LevelWarning
 			update.StatusMessage = "closed_early"
 			if outcome.CancelObserved {
-				if update.Metadata == nil {
-					update.Metadata = map[string]any{}
-				}
 				update.Metadata["context_canceled_observed"] = true
 			}
+		case result.TelemetryPartial || outcome.CaptureDegraded:
+			update.Level = langfuse.LevelWarning
+			update.StatusMessage = "telemetry_partial"
 		}
 		obs.Update(update)
 		if update.Level == langfuse.LevelError {
@@ -307,6 +326,21 @@ func startMetadata(route Route, call CallAttributes) map[string]any {
 
 func httpStatusCategory(status int) string {
 	return fmt.Sprintf("http %d", status)
+}
+
+func lifecycleName(state FinalState) string {
+	switch state {
+	case StateIncomplete:
+		return "incomplete"
+	case StateCanceled:
+		return "canceled"
+	case StateClosedEarly:
+		return "closed_early"
+	case StateComplete, StateFailed:
+		return "terminal"
+	default:
+		return "terminal"
+	}
 }
 
 func failureCategory(httpStatus int, parserCategory string) string {

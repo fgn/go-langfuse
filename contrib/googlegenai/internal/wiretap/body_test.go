@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 )
 
@@ -290,3 +291,68 @@ func (panicCall) ParseRequest([]byte)           {}
 func (panicCall) FeedEvent([]byte) EventVerdict { panic("parser defect") }
 func (panicCall) FinishUnary([]byte, int)       {}
 func (panicCall) Result() Result                { return Result{} }
+
+// TestBodyNWithEOFSameRead locks the review-mandated n > 0 with io.EOF
+// case for both stream and unary modes: bytes are processed before the
+// error is classified.
+func TestBodyNWithEOFSameRead(t *testing.T) {
+	call := &scriptedCall{sentinel: "[DONE]"}
+	reader := &errReader{data: []byte("data: [DONE]\n\n"), err: io.EOF}
+	got, wrapper := drive(t, t.Context(), io.NopCloser(reader), call, modeSSE, nil)
+	_, _ = io.ReadAll(wrapper)
+	if got.outcome.State != StateComplete {
+		t.Fatalf("SSE n>0+io.EOF: %+v, want StateComplete", got.outcome)
+	}
+
+	unary := &scriptedCall{}
+	reader = &errReader{data: []byte(`{"ok":true}`), err: io.EOF}
+	got, wrapper = drive(t, t.Context(), io.NopCloser(reader), unary, modeUnary, nil)
+	_, _ = io.ReadAll(wrapper)
+	if got.outcome.State != StateComplete || string(unary.unary) != `{"ok":true}` {
+		t.Fatalf("unary n>0+io.EOF: %+v body %q", got.outcome, unary.unary)
+	}
+}
+
+// TestBodySniffOneByteReads locks that mode sniffing survives maximal
+// fragmentation: "d", "a", "t", "a" must not misclassify SSE as JSON.
+func TestBodySniffOneByteReads(t *testing.T) {
+	stream := "data: delta-1\n\ndata: [DONE]\n\n"
+	call := &scriptedCall{sentinel: "[DONE]"}
+	got, wrapper := drive(t, t.Context(),
+		io.NopCloser(iotest.OneByteReader(strings.NewReader(stream))), call, modeUndecided, nil)
+	_, _ = io.ReadAll(wrapper)
+	if got.outcome.State != StateComplete {
+		t.Fatalf("one-byte sniffed SSE: %+v", got.outcome)
+	}
+	found := false
+	for _, event := range call.events {
+		if event == "delta-1" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("sniffed SSE lost events: %v", call.events)
+	}
+
+	unary := &scriptedCall{}
+	got, wrapper = drive(t, t.Context(),
+		io.NopCloser(iotest.OneByteReader(strings.NewReader(`{"deep":true}`))), unary, modeUndecided, nil)
+	_, _ = io.ReadAll(wrapper)
+	if string(unary.unary) != `{"deep":true}` {
+		t.Fatalf("one-byte sniffed unary body %q", unary.unary)
+	}
+	_ = got
+}
+
+// TestBodyTruncatedFinalFrameIsIncomplete locks framing completeness
+// for sentinel-free protocols: EOF inside an unterminated event is not
+// success.
+func TestBodyTruncatedFinalFrameIsIncomplete(t *testing.T) {
+	call := &scriptedCall{} // sentinel-free (Gemini-style)
+	got, wrapper := drive(t, t.Context(),
+		io.NopCloser(strings.NewReader("data: complete-1\n\ndata: truncat")), call, modeSSE, nil)
+	_, _ = io.ReadAll(wrapper)
+	if got.outcome.State != StateIncomplete {
+		t.Fatalf("truncated final frame: %+v, want StateIncomplete", got.outcome)
+	}
+}

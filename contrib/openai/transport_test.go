@@ -16,6 +16,8 @@ import (
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/proto"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
 	"github.com/fgn/go-langfuse"
 	langfuseopenai "github.com/fgn/go-langfuse/contrib/openai"
 )
@@ -683,5 +685,227 @@ func TestAttemptNestsUnderLogicalObservation(t *testing.T) {
 	}
 	if !bytes.Equal(attempt.GetTraceId(), logicalSpan.GetTraceId()) {
 		t.Fatal("attempt left the logical trace")
+	}
+}
+
+// identityCheck asserts the no-op fast path forwards the exact original
+// request: same pointer, same Body, same GetBody behavior.
+type identityCheck struct {
+	t        *testing.T
+	expected *http.Request
+	inner    http.RoundTripper
+	calls    int
+}
+
+func (c *identityCheck) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.calls++
+	if req != c.expected {
+		c.t.Error("no-op path did not forward the original request pointer")
+	}
+	if req.Body != c.expected.Body {
+		c.t.Error("no-op path replaced the request body")
+	}
+	return c.inner.RoundTrip(req)
+}
+
+func TestNoOpFastPathForwardsExactRequestIdentity(t *testing.T) {
+	provider := chatServer(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), "SECRET-INPUT") {
+			t.Error("provider did not receive the untouched body")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, chatResponse)
+	})
+
+	disabled, err := langfuse.New(context.Background(), langfuse.Config{Disabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := `{"model":"m","messages":[{"role":"user","content":"SECRET-INPUT"}]}`
+	req, err := http.NewRequest(http.MethodPost, provider.URL+"/v1/chat/completions",
+		strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := &identityCheck{t: t, expected: req, inner: http.DefaultTransport}
+	transport := langfuseopenai.NewTransport(disabled, check)
+	resp, err := transport.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if check.calls != 1 {
+		t.Fatalf("base transport calls %d", check.calls)
+	}
+	if req.GetBody == nil {
+		t.Fatal("original GetBody lost")
+	}
+	replay, err := req.GetBody()
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, _ := io.ReadAll(replay)
+	if string(replayed) != body {
+		t.Fatalf("original GetBody altered: %q", replayed)
+	}
+}
+
+// TestDuplicateBorrowedDisabledIsNoOp locks the remaining no-op state:
+// a second client on an already-reserved borrowed provider is disabled
+// and must take the fast path.
+func TestDuplicateBorrowedDisabledIsNoOp(t *testing.T) {
+	provider := sdktrace.NewTracerProvider()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = provider.Shutdown(ctx)
+	})
+	receiver := newOTLPReceiver(t)
+	first := newTestClient(t, receiver, func(cfg *langfuse.Config) { cfg.TracerProvider = provider })
+	_ = first
+	duplicate, err := langfuse.New(context.Background(), langfuse.Config{
+		BaseURL: receiver.server.URL, PublicKey: "pk-lf-test", SecretKey: "sk-lf-test",
+		TracerProvider: provider,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	target := chatServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, chatResponse)
+	})
+	req, err := http.NewRequest(http.MethodPost, target.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"m","messages":[]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := &identityCheck{t: t, expected: req, inner: http.DefaultTransport}
+	resp, err := langfuseopenai.NewTransport(duplicate, check).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if check.calls != 1 {
+		t.Fatal("duplicate-disabled client did not take the fast path")
+	}
+}
+
+// TestHostileStreamIndicesStayBounded locks that provider-controlled
+// indices never size allocations: a huge or negative index degrades to
+// partial telemetry instead of allocating or panicking.
+func TestHostileStreamIndicesStayBounded(t *testing.T) {
+	receiver := newOTLPReceiver(t)
+	lf := newTestClient(t, receiver, nil)
+	provider := chatServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		for _, chunk := range []string{
+			`data: {"choices":[{"index":1000000000,"delta":{"content":"x"}}]}`,
+			`data: {"choices":[{"index":-1,"delta":{"content":"y"}}]}`,
+			`data: [DONE]`,
+		} {
+			_, _ = io.WriteString(w, chunk+"\n\n")
+			flusher.Flush()
+		}
+	})
+	httpClient := &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
+	resp := postChat(t, httpClient, provider.URL, context.Background())
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	flush(t, lf)
+	span := receiver.nextSpan(t)
+	if status := attrString(t, span, "langfuse.observation.status_message"); status != "telemetry_partial" {
+		t.Fatalf("hostile indices status %q, want telemetry_partial", status)
+	}
+}
+
+// TestResponseAudioReplacedByPlaceholder locks the media boundary for
+// the response direction: message.audio carries base64 without a part
+// type and must never reach export.
+func TestResponseAudioReplacedByPlaceholder(t *testing.T) {
+	receiver := newOTLPReceiver(t)
+	lf := newTestClient(t, receiver, nil)
+	provider := chatServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"model":"m","choices":[{"message":{
+			"role":"assistant","content":"spoken",
+			"audio":{"id":"a1","data":"BASE64AUDIOSECRET","transcript":"SECRET-TRANSCRIPT"}
+		}}]}`)
+	})
+	httpClient := &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
+	resp := postChat(t, httpClient, provider.URL, context.Background())
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	flush(t, lf)
+	span := receiver.nextSpan(t)
+	for _, attribute := range span.GetAttributes() {
+		if strings.Contains(attribute.GetValue().GetStringValue(), "BASE64AUDIOSECRET") ||
+			strings.Contains(attribute.GetValue().GetStringValue(), "SECRET-TRANSCRIPT") {
+			t.Fatalf("response audio leaked via %q", attribute.GetKey())
+		}
+	}
+	if output := attrString(t, span, "langfuse.observation.output"); !strings.Contains(output, `"media":"omitted"`) {
+		t.Fatalf("audio placeholder missing: %q", output)
+	}
+}
+
+// TestNon2xxStatusOutranksBodyLifecycle locks precedence: closing a 429
+// body early still reports http 429, with the lifecycle as metadata.
+func TestNon2xxStatusOutranksBodyLifecycle(t *testing.T) {
+	receiver := newOTLPReceiver(t)
+	lf := newTestClient(t, receiver, nil)
+	provider := chatServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, "data: {\"error\":{\"message\":\"slow down\"}}\n\ndata: more")
+	})
+	httpClient := &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
+	resp := postChat(t, httpClient, provider.URL, context.Background())
+	buf := make([]byte, 4)
+	_, _ = resp.Body.Read(buf)
+	_ = resp.Body.Close() // close before any terminal
+
+	flush(t, lf)
+	span := receiver.nextSpan(t)
+	if status := attrString(t, span, "langfuse.observation.status_message"); status != "http 429" {
+		t.Fatalf("status %q; non-2xx must outrank body lifecycle", status)
+	}
+	if got := attrString(t, span, "langfuse.observation.metadata.body_lifecycle"); got != "closed_early" {
+		t.Fatalf("lifecycle metadata %q", got)
+	}
+}
+
+// TestNamingCallbackSeesEmptyModelOnOpenAIRoutes locks NOTE 39: the
+// model travels in the body, so RouteInfo.Model is empty at naming
+// time and callbacks must tolerate that.
+func TestNamingCallbackSeesEmptyModelOnOpenAIRoutes(t *testing.T) {
+	receiver := newOTLPReceiver(t)
+	lf := newTestClient(t, receiver, nil)
+	provider := chatServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, chatResponse)
+	})
+	var seen langfuseopenai.RouteInfo
+	httpClient := &http.Client{Transport: langfuseopenai.NewTransport(lf, nil,
+		langfuseopenai.WithObservationName(func(info langfuseopenai.RouteInfo) string {
+			seen = info
+			return ""
+		}))}
+	resp := postChat(t, httpClient, provider.URL, context.Background())
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	flush(t, lf)
+	span := receiver.nextSpan(t)
+	if seen.Model != "" || seen.Route != "openai.chat.completions" {
+		t.Fatalf("naming-time RouteInfo %+v", seen)
+	}
+	if span.GetName() != "openai.chat.completions" {
+		t.Fatalf("empty callback name did not fall back to route default: %q", span.GetName())
 	}
 }

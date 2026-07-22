@@ -26,7 +26,7 @@ func TestGenAIDeveloperAPIUnary(t *testing.T) {
 		_, _ = io.WriteString(w, `{
 			"candidates":[{"content":{"role":"model","parts":[{"text":"synthetic answer"}]},"finishReason":"STOP"}],
 			"usageMetadata":{"promptTokenCount":6,"candidatesTokenCount":2},
-			"modelVersion":"gemini-2.5-flash-002"
+			"modelVersion":"gemini-3.6-flash-002"
 		}`)
 	}))
 	t.Cleanup(provider.Close)
@@ -43,7 +43,7 @@ func TestGenAIDeveloperAPIUnary(t *testing.T) {
 		t.Fatal(err)
 	}
 	response, err := client.Models.GenerateContent(context.Background(),
-		"gemini-2.5-flash", genai.Text("synthetic question"), nil)
+		"gemini-3.6-flash", genai.Text("synthetic question"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestGenAIDeveloperAPIUnary(t *testing.T) {
 	if span.GetName() != "genai.generate_content" {
 		t.Fatalf("span name %q", span.GetName())
 	}
-	if got := attrString(span, "langfuse.observation.model.name"); got != "gemini-2.5-flash-002" {
+	if got := attrString(span, "langfuse.observation.model.name"); got != "gemini-3.6-flash-002" {
 		t.Fatalf("modelVersion override missing: %q", got)
 	}
 	if got := attrString(span, "langfuse.observation.usage_details"); got == "" {
@@ -95,7 +95,7 @@ func TestGenAIStreaming(t *testing.T) {
 	}
 	var assembled string
 	for chunk, err := range client.Models.GenerateContentStream(context.Background(),
-		"gemini-2.5-flash", genai.Text("synthetic question"), nil) {
+		"gemini-3.6-flash", genai.Text("synthetic question"), nil) {
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -191,7 +191,7 @@ func TestVertexCompositionPreservesPolicyAndAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	response, err := gemini.Models.GenerateContent(context.Background(),
-		"gemini-2.5-pro", genai.Text("synthetic question"), nil)
+		"gemini-3.6-pro", genai.Text("synthetic question"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,5 +215,62 @@ func TestVertexCompositionPreservesPolicyAndAuth(t *testing.T) {
 	}
 	if got := attrString(span, "langfuse.observation.output"); got == "" {
 		t.Fatal("output missing through Vertex composition")
+	}
+}
+
+// TestGenAITransformerModelForms drives the pinned genai transformer
+// with every model-name form it accepts and asserts the adapter's URL
+// grammar classifies each as reviewed: bare and tuned Developer models
+// and Vertex publisher models yield a model; other fully qualified
+// project resources are observed with the model unset.
+func TestGenAITransformerModelForms(t *testing.T) {
+	cases := []struct {
+		backend   genai.Backend
+		model     string
+		wantModel string
+	}{
+		{genai.BackendGeminiAPI, "gemini-3.6-flash", "gemini-3.6-flash"},
+		{genai.BackendGeminiAPI, "models/gemini-3.6-flash", "gemini-3.6-flash"},
+		{genai.BackendGeminiAPI, "tunedModels/my-tuned-1", "my-tuned-1"},
+		{genai.BackendVertexAI, "gemini-3.6-pro", "gemini-3.6-pro"},
+		{genai.BackendVertexAI, "publishers/anthropic/models/claude-sonnet-5", "claude-sonnet-5"},
+		// A fully qualified project-model resource is deliberately not
+		// collapsed to a bare model (reviewed design).
+		{genai.BackendVertexAI, "projects/p/locations/eu/models/custom-1", ""},
+	}
+	for _, tc := range cases {
+		receiver := newOTLPReceiver(t)
+		lf := newTestClient(t, receiver)
+		provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}`)
+		}))
+		cfg := &genai.ClientConfig{
+			Backend:     tc.backend,
+			HTTPClient:  &http.Client{Transport: langfusegenai.NewTransport(lf, nil)},
+			HTTPOptions: genai.HTTPOptions{BaseURL: provider.URL},
+		}
+		if tc.backend == genai.BackendVertexAI {
+			cfg.Project = "p"
+			cfg.Location = "eu"
+			cfg.Credentials = auth.NewCredentials(&auth.CredentialsOptions{TokenProvider: staticToken{}})
+		} else {
+			cfg.APIKey = "synthetic-key"
+		}
+		client, err := genai.NewClient(context.Background(), cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := client.Models.GenerateContent(context.Background(),
+			tc.model, genai.Text("q"), nil); err != nil {
+			t.Fatalf("%s %q: %v", tc.backend, tc.model, err)
+		}
+		flush(t, lf)
+		span := receiver.nextSpan(t)
+		got := attrString(span, "langfuse.observation.model.name")
+		if got != tc.wantModel {
+			t.Fatalf("%s %q: adapter model %q, want %q", tc.backend, tc.model, got, tc.wantModel)
+		}
+		provider.Close()
 	}
 }

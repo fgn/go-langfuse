@@ -103,14 +103,20 @@ const (
 
 // Result is the provider-parsed contribution to one observation.
 type Result struct {
-	Input               any
-	Output              any
-	Model               string
-	ModelParameters     map[string]any
-	Usage               *langfuse.Usage
-	Metadata            map[string]any
-	CompletionStart     bool
-	CompletionStartTime int64 // unix nanoseconds; 0 when unset
+	Input any
+	// Output and Input are exported only through Mask-governed fields.
+	Output any
+	// Model is the validated RESPONSE model only. It is the sole
+	// body-derived value eligible for the unmasked Model field; request
+	// models are never promoted (they travel as Mask-governed
+	// metadata via RequestModel).
+	Model string
+	// RequestModel is the model named by the request body or URL,
+	// recorded as metadata when it differs from the response model.
+	RequestModel    string
+	ModelParameters map[string]any
+	Usage           *langfuse.Usage
+	Metadata        map[string]any
 	// ErrorCategory is a fixed adapter-owned status such as
 	// "provider error"; empty means no protocol error was proven.
 	ErrorCategory string

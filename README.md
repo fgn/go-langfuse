@@ -95,7 +95,7 @@ func run(ctx context.Context) error {
 	messages := []string{question}
 	generationCtx, generation := lf.StartObservation(rootCtx, "generate-answer",
 		langfuse.TypeGeneration, langfuse.ObservationAttributes{
-			Model: "gemini-2.5-flash", Input: messages,
+			Model: "gemini-3.6-flash", Input: messages,
 		})
 	defer generation.End()
 

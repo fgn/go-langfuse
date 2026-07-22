@@ -8,9 +8,10 @@ install this adapter only when you want it:
 go get github.com/fgn/go-langfuse/contrib/openai
 ```
 
-This module depends on the core module and the standard library only.
-It has no OpenAI SDK dependency either: it observes the documented wire
-format at the HTTP transport, so one adapter covers
+This module adds no provider SDK to your dependency graph: beyond the
+core module and its OpenTelemetry dependencies it uses only the
+standard library. There is no OpenAI SDK dependency either: it observes
+the documented wire format at the HTTP transport, so one adapter covers
 `sashabaranov/go-openai`, the official `openai-go`, Azure OpenAI
 deployments, and OpenAI-compatible endpoints, and your native client
 code stays exactly as it is.
@@ -84,7 +85,12 @@ sampling, and payload limits apply unchanged. The adapter never reads
 request headers, never exports any header, replaces multimodal media
 parts with placeholders during parsing, restricts `ModelParameters` to
 a numeric/boolean allowlist, and reports errors as fixed categories
-(`http 429`, `transport error`) rather than raw error text. Content
+(`http 429`, `transport error`) rather than raw error text. One
+documented exception to the Mask boundary exists: the response's model
+string, validated against a strict shape (128 chars,
+`[A-Za-z0-9._:/-]`), is promoted to the observation's model field
+because Langfuse model-based pricing requires it; request-body models
+are never promoted and travel as Mask-governed metadata. Content
 larger than the 512 KiB capture cap is omitted entirely, never
 truncated. `WithoutContentExport()` keeps usage and model but drops
 Input/Output; `WithoutBodyInspection()` prevents body reading

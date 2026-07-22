@@ -21,9 +21,12 @@
 // recognized HTTP attempt (generateContent, streamGenerateContent,
 // embedContent, batchEmbedContents, and Vertex predict in v0.1),
 // parented by the observation in the request context. Everything
-// recorded flows through the core client's privacy controls. This
-// module depends only on the core go-langfuse module; it has no Google
-// SDK dependency.
+// recorded flows through the core client's privacy controls, with one
+// documented exception: a strictly validated response model string is
+// promoted to the model field, which Langfuse pricing requires. This
+// module adds no provider SDK to the dependency graph: beyond the core
+// module and its OpenTelemetry dependencies it uses only the standard
+// library.
 package langfusegenai
 
 import (
@@ -31,6 +34,7 @@ import (
 	"errors"
 	"net/http"
 	"regexp"
+	"strings"
 
 	"go.opentelemetry.io/otel"
 
@@ -42,8 +46,8 @@ const adapterMarker = "langfusegenai"
 
 // RouteInfo is the sanitized route descriptor passed to naming
 // callbacks: never the request, never headers, never body content.
-// Model is URL-derived and present on Gemini routes, which carry the
-// model in the path.
+// Model is URL-derived; it is present when the path names a bare or
+// publisher model and empty for other qualified resources.
 type RouteInfo struct {
 	Provider   string
 	Route      string
@@ -78,11 +82,16 @@ var providerShape = regexp.MustCompile(`^[a-z0-9_-]{1,40}$`)
 // fall back to the classifier with a diagnostic.
 func WithProvider(name string) Option {
 	return func(o *options) {
-		if !providerShape.MatchString(name) {
+		normalized := strings.ToLower(name)
+		if !providerShape.MatchString(normalized) {
+			// Last-wins includes invalid values: the override is
+			// cleared so classification falls back to the host
+			// classifier rather than a stale earlier option.
+			o.provider = ""
 			otel.Handle(errors.New("langfuse contrib: invalid provider override ignored"))
 			return
 		}
-		o.provider = name
+		o.provider = normalized
 	}
 }
 

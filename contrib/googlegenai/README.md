@@ -9,10 +9,11 @@ want it:
 go get github.com/fgn/go-langfuse/contrib/googlegenai
 ```
 
-This module depends on the core module and the standard library only.
-It has no Google SDK dependency either: it observes the documented wire
-format at the HTTP transport, so `google.golang.org/genai` client code
-stays exactly as it is.
+This module adds no provider SDK to your dependency graph: beyond the
+core module and its OpenTelemetry dependencies it uses only the
+standard library. There is no Google SDK dependency either: it observes
+the documented wire format at the HTTP transport, so
+`google.golang.org/genai` client code stays exactly as it is.
 
 ## Wiring: Developer API
 
@@ -78,7 +79,9 @@ models, and any Vertex publisher); a response `modelVersion` overrides
 it. Gemini streams have no terminal sentinel: clean EOF completes the
 observation, and `finishReason` values are recorded as metadata, never
 used to end the stream early (Gemini can send usage and further
-content after a `STOP`).
+content after a `STOP`). Thought parts are reasoning, not output: they
+are marked in exported content but do not stamp time-to-first-token,
+which measures the first user-visible output delta.
 
 ## Attempts, retries, metrics, and privacy
 

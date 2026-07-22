@@ -21,6 +21,13 @@ type sseFramer struct {
 // feed appends p and emits each completed event's joined data payload.
 // emit returning false stops parsing permanently (terminal reached);
 // remaining bytes still flow to the application unchanged elsewhere.
+// pending reports bytes of an unterminated final frame, including a
+// partially discarded one: a stream that ends with pending bytes did
+// not close on an event boundary.
+func (f *sseFramer) pending() bool {
+	return len(f.buf) > 0 || f.dropping
+}
+
 func (f *sseFramer) feed(p []byte, emit func(data []byte) bool) {
 	if f.stopped {
 		return
@@ -44,6 +51,13 @@ func (f *sseFramer) feed(p []byte, emit func(data []byte) bool) {
 			// This boundary terminates the partially discarded event,
 			// not a fully buffered one.
 			f.dropping = false
+			continue
+		}
+		if len(event) > f.maxEvent {
+			// A complete oversized event delivered in one read is
+			// bounded exactly like a fragmented one: discarded before
+			// any copy or decode.
+			f.discarded = true
 			continue
 		}
 		data, hasData := eventData(event)

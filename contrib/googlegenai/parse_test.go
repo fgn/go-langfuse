@@ -10,7 +10,7 @@ import (
 
 func generationRoute() wiretap.Route {
 	return wiretap.Route{
-		Name: "genai.generate_content", Model: "gemini-2.5-flash",
+		Name: "genai.generate_content", Model: "gemini-3.6-flash",
 		Type: langfuse.TypeGeneration,
 	}
 }
@@ -65,7 +65,7 @@ func TestParseRequestMediaPlaceholders(t *testing.T) {
 func TestStreamAccumulationAndUsageMapping(t *testing.T) {
 	call := &call{route: generationRoute(), captureCap: 1 << 16}
 	chunks := []string{
-		`{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello "}]}}],"modelVersion":"gemini-2.5-flash-002"}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello "}]}}],"modelVersion":"gemini-3.6-flash-002"}`,
 		`{"candidates":[{"content":{"role":"model","parts":[{"text":"thinking...","thought":true}]}}]}`,
 		`{"candidates":[{"content":{"role":"model","parts":[{"text":"world"}]},"finishReason":"STOP"}],
 		  "usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":4,"thoughtsTokenCount":6,"cachedContentTokenCount":2}}`,
@@ -91,7 +91,7 @@ func TestStreamAccumulationAndUsageMapping(t *testing.T) {
 	if result.Output != "Hello world!" {
 		t.Fatalf("accumulated output %q", result.Output)
 	}
-	if result.Model != "gemini-2.5-flash-002" {
+	if result.Model != "gemini-3.6-flash-002" {
 		t.Fatalf("modelVersion override missing: %q", result.Model)
 	}
 	usage := result.Usage
@@ -102,8 +102,10 @@ func TestStreamAccumulationAndUsageMapping(t *testing.T) {
 	if result.Metadata["finish_reason"] != "STOP" {
 		t.Fatalf("finish reason metadata %v", result.Metadata)
 	}
-	if result.Metadata["request_model"] != "gemini-2.5-flash" {
-		t.Fatalf("request model metadata %v", result.Metadata)
+	// Provenance split: the transport promotes only the validated
+	// response model; the URL-derived request model travels separately.
+	if result.RequestModel != "gemini-3.6-flash" {
+		t.Fatalf("request model provenance %q", result.RequestModel)
 	}
 }
 
@@ -175,5 +177,46 @@ func TestOverCapDeltaDropsOutputKeepsUsage(t *testing.T) {
 	}
 	if result.Usage == nil || result.Usage.InputTokens != 2 {
 		t.Fatalf("usage lost after over-cap drop: %+v", result.Usage)
+	}
+}
+
+// TestToolOnlyStreamExportsOutput locks that a function-call-only
+// stream still exports Output (sanitized parts) while stamping
+// completion start via its output-bearing verdicts.
+func TestToolOnlyStreamExportsOutput(t *testing.T) {
+	call := &call{route: generationRoute(), captureCap: 1 << 16}
+	verdict := call.FeedEvent([]byte(`{"candidates":[{"content":{"role":"model","parts":[
+		{"functionCall":{"name":"lookup","args":{"q":"go"}}}
+	]}}]}`))
+	if !verdict.Output {
+		t.Fatal("function-call delta not output-bearing")
+	}
+	rendered := renderJSON(t, call.Result().Output)
+	if !strings.Contains(rendered, `"functionCall"`) {
+		t.Fatalf("tool-only stream lost output: %s", rendered)
+	}
+}
+
+// TestNullErrorFieldIsNotAnError locks the explicit-null distinction.
+func TestNullErrorFieldIsNotAnError(t *testing.T) {
+	call := &call{route: generationRoute(), captureCap: 1 << 16}
+	verdict := call.FeedEvent([]byte(`{"error":null,"candidates":[{"content":{"parts":[{"text":"ok"}]}}]}`))
+	if verdict.Terminal != wiretap.TerminalNone {
+		t.Fatal("explicit null error treated as provider error")
+	}
+}
+
+// TestToolUsePromptTokensJoinInclusiveInput locks the v1.59.0 usage
+// bucket: toolUsePromptTokenCount joins the inclusive input side with
+// its own detail bucket.
+func TestToolUsePromptTokensJoinInclusiveInput(t *testing.T) {
+	call := &call{route: generationRoute(), captureCap: 1 << 16}
+	call.FinishUnary([]byte(`{
+		"candidates":[{"content":{"parts":[{"text":"x"}]}}],
+		"usageMetadata":{"promptTokenCount":10,"toolUsePromptTokenCount":4,"candidatesTokenCount":2}
+	}`), 200)
+	usage := call.Result().Usage
+	if usage.InputTokens != 14 || usage.Details["input_tool_use_tokens"] != 4 {
+		t.Fatalf("tool-use usage mapping %+v", usage)
 	}
 }
