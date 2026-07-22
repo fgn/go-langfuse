@@ -93,6 +93,10 @@ linters:
           - bodyclose
           - forbidigo
         path: (.+)_test\.go
+      # Example programs print their observable results to stdout.
+      - linters:
+          - forbidigo
+        path: examples/
       # Wire tests intentionally use raw headers/protobuf fields, while some
       # test helpers keep generic parameters to make assertions readable.
       - linters:

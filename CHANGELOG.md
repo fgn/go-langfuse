@@ -5,6 +5,11 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+- Add runnable examples for prompt management (`examples/prompts`), scores
+  (`examples/scores`), and deterministic trace sampling with a correlated
+  LLM-judge gate (`examples/sampling`), and link them from the README
+  feature sections.
+
 ## [0.4.0] - 2026-07-21
 
 - Add deterministic trace sampling for isolated mode: `Config.SampleRate`
