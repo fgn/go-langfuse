@@ -31,6 +31,9 @@
 // Langfuse JSON ingestion endpoint, [Client.GetPrompt] loads
 // prompt-management prompts with client-side caching and an optional local
 // fallback, and [Client.Flush] and [Client.Shutdown] control the export
-// lifecycle. A nil or disabled [Client] and the zero [Observation] are safe
-// no-ops.
+// lifecycle. Whole traces can be sampled deterministically by trace ID
+// through [Config.SampleRate] and [Client.WithSampleRate], with
+// [TraceSampledAt] exposing the same decision for correlated
+// application-level sampling. A nil or disabled [Client] and the zero
+// [Observation] are safe no-ops.
 package langfuse

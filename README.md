@@ -1,24 +1,37 @@
 # go-langfuse
 
-go-langfuse is an independent, observation-first community Langfuse client for
-Go, built on the official OpenTelemetry Go SDK: tracing over OTLP/HTTP
-protobuf (Langfuse ingestion version 4), all ten observation types,
-request-scoped trace identity, scores for evaluations and user feedback, and
-strict content-privacy controls. Prompt retrieval, caching, compilation, and
-trace linking are included; datasets and administrative APIs remain out of
-scope. Use the Langfuse REST API for those.
-go-langfuse is not affiliated with or endorsed by Langfuse.
+[![Go Reference](https://pkg.go.dev/badge/github.com/fgn/go-langfuse.svg)](https://pkg.go.dev/github.com/fgn/go-langfuse)
+[![CI](https://github.com/fgn/go-langfuse/actions/workflows/ci.yml/badge.svg)](https://github.com/fgn/go-langfuse/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Observation types are first-class: alongside `span`, `generation`, and
-`event`, go-langfuse supports the typed observations Langfuse introduced in
-2025 — `agent`, `tool`, `chain`, `retriever`, `evaluator`, `embedding`, and
-`guardrail` — with the same semantics as `as_type` in the Python SDK (v3.3+)
-and `asType` in the JS/TS SDK (v4+). These types give traces clearer,
-filterable structure in the Langfuse UI.
+An independent, observation-first community Langfuse client for Go, built on
+the official OpenTelemetry Go SDK. Not affiliated with or endorsed by
+Langfuse.
 
-go-langfuse follows semantic versioning. Until v1.0, minor releases may
-contain documented breaking changes; patch releases are always backward
-compatible.
+- **One small API for everything you trace.** Every operation is an
+  observation. Only its type differs: `span`, `generation`, `event`,
+  `agent`, `tool`, `chain`, `retriever`, `evaluator`, `embedding`, or
+  `guardrail`, the full set the Langfuse platform defines.
+- **OpenTelemetry-native.** Exports OTLP/HTTP protobuf (Langfuse ingestion
+  version 4). Owns an isolated tracer provider, or attaches to yours and
+  also exports third-party `gen_ai.*` spans. Never touches global OTel
+  state.
+- **Scores and prompts included.** Evaluations and user feedback with
+  asynchronous retried delivery; prompt management reads with caching,
+  compilation, and guaranteed-availability fallbacks.
+- **Deterministic trace sampling.** Per-request rates in one process, and a
+  pure predicate for correlated app-level sampling such as gating an
+  expensive LLM-judge evaluation to a subset of the traces kept for export.
+- **Strict content privacy.** Exports only what you explicitly supply; a
+  capture kill-switch and a masking hook cover input, output, and metadata.
+- **Safe by default.** Nil and disabled clients are true no-ops, zero
+  values are safe, lifecycle calls are idempotent, and telemetry failures
+  never become application failures.
+
+Datasets and administrative APIs are out of scope; use the Langfuse REST
+API for those. go-langfuse follows semantic versioning: until v1.0, minor
+releases may contain documented breaking changes; patch releases are always
+backward compatible.
 
 ## Install
 
@@ -31,12 +44,11 @@ Set the project credentials from **Langfuse -> Settings -> API Keys**:
 ```sh
 export LANGFUSE_PUBLIC_KEY=pk-lf-...
 export LANGFUSE_SECRET_KEY=sk-lf-...
-export LANGFUSE_BASE_URL=https://cloud.langfuse.com
+export LANGFUSE_BASE_URL=https://cloud.langfuse.com  # or self-hosted
 ```
 
-`LANGFUSE_BASE_URL` may point at Langfuse Cloud or a self-hosted instance as a
-host root, `/api/public/otel`, or the full traces endpoint. Path-prefixed
-reverse-proxy base URLs are not supported in v0.1.
+`LANGFUSE_BASE_URL` accepts a host root, `/api/public/otel`, or the full
+traces endpoint. Path-prefixed reverse-proxy base URLs are not supported.
 
 ## Quickstart
 
@@ -111,107 +123,84 @@ func callModel(ctx context.Context, messages []string) (string, langfuse.Usage, 
 ```
 <!-- README_QUICKSTART_END -->
 
-Runnable examples: [quickstart](examples/quickstart/main.go),
+Three rules prevent most tracing mistakes:
+
+1. **Pass the returned context to child work.** Go context is the
+   parent-child relationship; keep parent contexts in distinct variables as
+   the example does with `rootCtx` and `generationCtx`.
+2. **End an observation only after its work is complete.** For streaming
+   model calls, consume the stream before ending the generation.
+3. **End observations before flushing or shutting down**, and give
+   lifecycle calls a fresh timeout context, not a canceled request context.
+
+More runnable examples: [quickstart](examples/quickstart/main.go),
 [streaming](examples/streaming/main.go),
 [existing OpenTelemetry provider](examples/existingotel/main.go), and
 [short-lived jobs, events, masking, disabled mode, and flushing](examples/shortlived/main.go).
-
-Three rules prevent most tracing mistakes:
-
-1. Pass the context returned by `StartObservation` to child work, and keep
-   parent contexts in distinct variables as the example does with `rootCtx`
-   and `generationCtx`. Go context is the parent-child relationship; there is
-   no package-global current observation.
-2. End an observation only after its work is complete. For streaming model
-   calls, consume the stream before ending the generation.
-3. End observations before flushing or shutting down, and use a fresh timeout
-   context rather than a canceled request context for lifecycle calls.
+The main entry points have runnable examples on
+[pkg.go.dev](https://pkg.go.dev/github.com/fgn/go-langfuse).
 
 ## Observations
 
-Every operation uses the same API and differs only by its observation type:
-`span`, `generation`, `event`, `embedding`, `agent`, `tool`, `chain`,
-`retriever`, `evaluator`, or `guardrail` — the full set defined by the
-current Langfuse platform ([observation
-types](https://langfuse.com/docs/observability/features/observation-types)).
-When the work fits one function,
-prefer `Observe`: the callback receives the child context, the observation
-always ends (a panic is marked as a payload-free failure before it
-propagates), and a returned error is recorded and passed through unchanged:
+Everything you trace uses the same two calls; only the
+[observation type](https://langfuse.com/docs/observability/features/observation-types)
+differs. Prefer `Observe` when the work fits one function. The callback
+receives the child context, and the observation always ends, even on a
+panic, which is marked as a payload-free failure before it propagates. A
+returned error is recorded and passed through unchanged:
 
 ```go
-err := lf.Observe(parentCtx, "retrieve-documents", langfuse.TypeRetriever,
+err := lf.Observe(ctx, "retrieve-documents", langfuse.TypeRetriever,
 	langfuse.ObservationAttributes{Input: query},
-	func(ctx context.Context, observation *langfuse.Observation) error {
+	func(ctx context.Context, o *langfuse.Observation) error {
 		documents, err := retrieve(ctx, query)
 		if err != nil {
-			return err // recorded via RecordError automatically
+			return err // recorded automatically
 		}
-		observation.Update(langfuse.ObservationAttributes{Output: documents})
+		o.Update(langfuse.ObservationAttributes{Output: documents})
 		return nil
 	})
 ```
 
-Use `StartObservation` directly when an observation's lifetime cannot be
-scoped to one function, as the quickstart does. `Event` records a
-point-in-time event, `Update` merges non-zero fields, and `RecordError` marks
-an observation failed without ending it. Instrumentation that records
-already-finished work can reproduce the observed timeline with
-`ObservationAttributes.StartTime`, `CompletionStartTime`, and `EndAt`. For
-work that outlives its request — a goroutine that keeps running after the
-handler returned — clear the parent span context with the standard
-OpenTelemetry helper (`oteltrace.ContextWithSpanContext(ctx,
-oteltrace.SpanContext{})`) so the work becomes a new trace root with the
-propagated user and session intact, instead of a child of an already-ended
-request span; the [reference](docs/reference.md) shows the full pattern along
-with semantics and limits.
+Use `StartObservation` when a lifetime spans functions, as the quickstart
+does; `Event` records a point in time. `Update` merges non-zero fields,
+`RecordError` marks a failure without ending, and
+`StartTime`/`CompletionStartTime`/`EndAt` reproduce an already-observed
+timeline when instrumenting after the fact. For background work that
+outlives its request, clear the span context with the standard
+OpenTelemetry helper so the work becomes a new trace that keeps the
+propagated user and session; the [reference](docs/reference.md) shows the
+full pattern.
 
 ## Scores
 
-`RecordScore` submits evaluations and user feedback through the Langfuse JSON
-ingestion endpoint. A score is validated synchronously — every returned error
-means the score was not accepted — and then delivered asynchronously with
-bounded retry using the same backoff defaults as observation export, so a
-Langfuse blip neither blocks the request path nor loses feedback to one
-failed attempt. `Flush` and `Shutdown`
-drain accepted scores; a delivery that outlives the retry budget is dropped
-with a payload-free diagnostic through the OpenTelemetry error handler. When
-`ID` is empty the SDK generates one, keeping retried deliveries idempotent. A
-disabled client is a no-op. `Timestamp` backdates a score — a nightly
-evaluation job can stamp feedback with the time of the scored interaction —
-and `ConfigID` binds it to a Langfuse score config for server-side
-validation.
+`RecordScore` submits evaluations and user feedback. Validation is
+synchronous, so every returned error means the score was not accepted.
+Delivery is asynchronous with bounded retry, and `Flush`/`Shutdown` drain
+accepted scores:
 
 ```go
 rating := float64(feedback.Rating)
 err := lf.RecordScore(ctx, langfuse.Score{
 	ID:           "feedback-" + feedback.ID, // idempotent upsert key
 	Name:         "user-feedback",
-	SessionID:    "conversation-456",        // or TraceID / TraceID+ObservationID
+	SessionID:    sessionID, // or TraceID / TraceID+ObservationID
 	NumericValue: &rating,
 	Comment:      feedback.Text,
 })
 ```
 
+The SDK generates the upsert ID when `ID` is empty, so retried deliveries
+cannot create duplicates. `Timestamp` backdates a score from a later
+evaluation job, and `ConfigID` binds it to a Langfuse score config.
+
 ## Prompts
 
-`GetPrompt` loads a prompt version from Langfuse prompt management with
-client-side caching: a fresh cache hit is a local read, an expired entry is
-served immediately while one background refresh runs (stale-while-revalidate),
-and concurrent cache misses share a single fetch. `PromptQuery.Type` rejects a
-server or cached prompt with the wrong shape, resolving to `Fallback` when one
-is supplied or `ErrPromptTypeMismatch` otherwise. `Prompt.Source` distinguishes
-server fetches, fresh cache hits, stale cache hits, and local fallbacks through
-`PromptSourceServer`, `PromptSourceCache`, `PromptSourceStale`, and
-`PromptSourceFallback`.
-
-`Fallback` pins a local prompt for fetch and type failures, so prompt loading
-never becomes a hard runtime dependency. `GetPrompt` is nil-safe: an optional,
-disabled, or shut-down client returns the fallback without requiring a nil
-guard. `Compile` remains lenient, while `CompileStrict` reports unresolved
-variables, values that cannot be stringified, and unfilled chat placeholders.
-`DecodeConfig` applies prompt config to a caller-defaulted target, and `Ref()`
-links only server-backed prompt versions to generations:
+`GetPrompt` loads prompt-management prompts with client-side caching. Fresh
+hits are local reads. Expired entries are served stale while one background
+refresh runs, and concurrent misses share a single fetch. A `Fallback`
+makes prompt loading safe to depend on. It also covers nil, disabled, and
+shut-down clients, so optional observability needs no guards:
 
 ```go
 prompt, err := lf.GetPrompt(ctx, "response-template", langfuse.PromptQuery{
@@ -230,19 +219,19 @@ _ = lf.Observe(ctx, "generate-response", langfuse.TypeGeneration,
 	generate)
 ```
 
-Selection defaults to the `production` label; `Version` or `Label` pin others.
-Caching, bounds, and failure semantics are detailed in the
-[reference](docs/reference.md).
+Selection defaults to the `production` label; `Version` or `Label` pin
+others. `Compile` is lenient, `CompileStrict` reports unresolved variables,
+`DecodeConfig` applies prompt config to a caller-defaulted struct, and
+`Ref()` links only server-backed versions to generations.
+`Prompt.Source` distinguishes server, cache, stale, and fallback results.
 
 ## Sampling
 
 In isolated mode the client samples whole traces deterministically by trace
 ID. `Config.SampleRate` (or `LANGFUSE_SAMPLE_RATE`) sets the default
-fraction, and `WithSampleRate` overrides it per context path, so one process
-can keep every trace from a critical path while exporting only a fraction of
-high-volume routine work. Set the rate once per request, before the first
-observation; the decision is then inherited by every observation in that
-trace:
+fraction; `WithSampleRate` overrides it per request, so one process can
+keep every trace from a critical path while exporting a fraction of
+high-volume routine work:
 
 ```go
 ctx = lf.WithSampleRate(ctx, 0.02) // keep 2% of a high-volume path
@@ -250,12 +239,11 @@ ctx, root := lf.StartObservation(ctx, "generate-answer", langfuse.TypeGeneration
 	langfuse.ObservationAttributes{Input: prompt})
 ```
 
-`TraceSampledAt` exposes the same deterministic predicate for correlated
-application-level sampling. Because smaller fractions select subsets of
-larger ones, gating an expensive LLM-judge evaluation at 2% guarantees every
-evaluated trace was also kept for export when the trace fraction is at least
-2% (kept, not delivered: export still requires ending observations and a
-graceful shutdown):
+Set the rate once per request, before the first observation; the whole
+trace is then kept or dropped together. Because smaller fractions select
+subsets of larger ones, `TraceSampledAt` can gate an expensive LLM-judge
+evaluation at 2% with the guarantee that every evaluated trace was also
+kept for export:
 
 ```go
 keep, err := langfuse.TraceSampledAt(root.TraceID(), 0.02)
@@ -268,11 +256,10 @@ if err == nil && keep && root.Sampled() {
 ```
 
 Sampled-out observations keep their IDs, become cheap no-ops, and suppress
-scores recorded directly on their own context path so sampled-out traces do
-not accumulate orphaned scores. In borrowed mode the application's sampler
-remains authoritative and these controls are ignored with a diagnostic. The
-[reference](docs/reference.md) details the decision scope and score
-semantics.
+scores recorded on their own context path so dropped traces do not
+accumulate orphaned scores. In borrowed mode the application's sampler
+remains authoritative. Decision scope and score semantics are in the
+[reference](docs/reference.md).
 
 ## Provider modes
 
@@ -284,8 +271,8 @@ lf, err := langfuse.New(ctx, langfuse.ConfigFromEnv())
 ```
 
 If the application already owns an `*sdktrace.TracerProvider`, attach the
-client as another processor; a smart filter then also exports third-party AI
-spans (`gen_ai.*` attributes and known LLM instrumentation scopes):
+client as another processor; a smart filter then also exports third-party
+AI spans (`gen_ai.*` attributes and known LLM instrumentation scopes):
 
 ```go
 cfg := langfuse.ConfigFromEnv()
@@ -304,21 +291,22 @@ lf, err := langfuse.New(ctx, cfg)
 | Global OTel provider | Never replaced | Never replaced |
 
 Neither mode ever changes the global OpenTelemetry provider. Borrowed-mode
-lifecycle, annotation visibility, and the one-client-per-provider rule are
-covered in the [existing OpenTelemetry guide](docs/existing-opentelemetry.md).
+lifecycle and the one-client-per-provider rule are covered in the
+[existing OpenTelemetry guide](docs/existing-opentelemetry.md).
 
 ## Content and sensitive data
 
-The SDK never inspects function arguments, HTTP bodies, or model clients; it
-exports only fields explicitly supplied by the caller.
-`LANGFUSE_CONTENT_CAPTURE_ENABLED=false` drops SDK-supplied input and output,
-and `Config.Mask` transforms input, output, and metadata before export.
-Identifiers, model data, status messages, error text, and third-party spans
-sit outside both controls; the exact boundary and a masker example are in the
-[privacy guide](docs/privacy.md).
+The SDK never inspects function arguments, HTTP bodies, or model clients;
+it exports only fields explicitly supplied by the caller.
+`LANGFUSE_CONTENT_CAPTURE_ENABLED=false` drops SDK-supplied input and
+output, and `Config.Mask` transforms input, output, and metadata before
+export. Identifiers, model data, status messages, error text, and
+third-party spans sit outside both controls; the exact boundary and a
+masker example are in the [privacy guide](docs/privacy.md).
 
 ## Documentation
 
+- [API reference and examples on pkg.go.dev](https://pkg.go.dev/github.com/fgn/go-langfuse)
 - [Configuration and behavior reference](docs/reference.md): environment
   variables, buffering and backpressure, flush/shutdown, limits, sampling,
   and current limitations
@@ -334,10 +322,9 @@ sit outside both controls; the exact boundary and a masker example are in the
 task ci
 ```
 
-This checks formatting and module tidiness, runs static analysis, compiles the
-examples and README quickstart, and runs the test, fuzz-smoke, and vulnerability
-suites. Run `task format` to apply source and module formatting.
-
-The module language version is Go 1.25; `go.mod` records the suggested
-patched toolchain. Tests never require Langfuse credentials. Release steps
-are documented in [RELEASING.md](RELEASING.md).
+This checks formatting and module tidiness, runs static analysis, compiles
+the examples and README quickstart, and runs the test, fuzz-smoke, and
+vulnerability suites. Run `task format` to apply source and module
+formatting. The module language version is Go 1.25; `go.mod` records the
+suggested patched toolchain. Tests never require Langfuse credentials.
+Release steps are documented in [RELEASING.md](RELEASING.md).

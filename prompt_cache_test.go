@@ -247,8 +247,8 @@ func TestPromptCacheLastWaiterAbandonmentThenNewCaller(t *testing.T) {
 		done <- err
 	}()
 	// Wait until the first caller's request is actually blocked in the
-	// handler (its request reached the server), so canceling it — not a
-	// later caller — is what abandons the flight.
+	// handler (its request reached the server), so canceling it, not a
+	// later caller, is what abandons the flight.
 	awaitPromptCondition(t, "first flight blocked in the handler", func() bool {
 		return receiver.count() == 1 && langfuse.ProductionFlightWaiters(client, "greeting") == 1
 	})

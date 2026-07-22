@@ -196,8 +196,8 @@ func TestScoresRetryMultiStatusResponsesAccountingForNoEvent(t *testing.T) {
 		w.WriteHeader(http.StatusMultiStatus)
 		call := calls.Add(1)
 		if int(call) <= len(bodies) {
-			// A 207 that does not account for the submitted event ID — even
-			// one naming a different event, or reporting a foreign error —
+			// A 207 that does not account for the submitted event ID, even
+			// one naming a different event, or reporting a foreign error,
 			// leaves the outcome unknown and must be retried, never counted
 			// as success and never dropped on another event's failure.
 			_, _ = w.Write([]byte(bodies[call-1]))

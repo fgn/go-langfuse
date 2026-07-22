@@ -88,7 +88,7 @@ func validSampleFraction(fraction float64) bool {
 
 // TraceSampledAt reports whether the trace identified by the 32-character
 // lowercase hex traceID falls inside fraction under the SDK's deterministic
-// threshold scheme — the same scheme the isolated-mode sampler uses, shared
+// threshold scheme, the same scheme the isolated-mode sampler uses, shared
 // with OpenTelemetry's TraceIDRatioBased. A trace selected at a smaller
 // fraction is always selected at any larger one, so work gated at a small
 // fraction (an expensive evaluation on 2% of traces) runs only on traces that
