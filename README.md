@@ -135,6 +135,9 @@ Three rules prevent most tracing mistakes:
 
 More runnable examples: [quickstart](examples/quickstart/main.go),
 [streaming](examples/streaming/main.go),
+[prompt management](examples/prompts/main.go),
+[scores](examples/scores/main.go),
+[sampling](examples/sampling/main.go),
 [existing OpenTelemetry provider](examples/existingotel/main.go), and
 [short-lived jobs, events, masking, disabled mode, and flushing](examples/shortlived/main.go).
 The main entry points have runnable examples on
@@ -192,7 +195,9 @@ err := lf.RecordScore(ctx, langfuse.Score{
 
 The SDK generates the upsert ID when `ID` is empty, so retried deliveries
 cannot create duplicates. `Timestamp` backdates a score from a later
-evaluation job, and `ConfigID` binds it to a Langfuse score config.
+evaluation job, and `ConfigID` binds it to a Langfuse score config. The
+[scores example](examples/scores/main.go) records session, observation, and
+trace scores in one runnable program.
 
 ## Prompts
 
@@ -224,6 +229,7 @@ others. `Compile` is lenient, `CompileStrict` reports unresolved variables,
 `DecodeConfig` applies prompt config to a caller-defaulted struct, and
 `Ref()` links only server-backed versions to generations.
 `Prompt.Source` distinguishes server, cache, stale, and fallback results.
+The [prompts example](examples/prompts/main.go) runs this flow end to end.
 
 ## Sampling
 
@@ -259,7 +265,9 @@ Sampled-out observations keep their IDs, become cheap no-ops, and suppress
 scores recorded on their own context path so dropped traces do not
 accumulate orphaned scores. In borrowed mode the application's sampler
 remains authoritative. Decision scope and score semantics are in the
-[reference](docs/reference.md).
+[reference](docs/reference.md); the
+[sampling example](examples/sampling/main.go) shows both gates on a
+simulated high-volume route.
 
 ## Provider modes
 
