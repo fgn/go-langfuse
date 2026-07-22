@@ -76,6 +76,26 @@ tasks:
       - test "$(go mod edit -json | jq -r .Go)" = "1.25.0"
       - test "$(go mod edit -json | jq -r .Toolchain)" = "go1.25.12"
 
+  contrib:sync:check:
+    desc: Verify the mirrored wiretap package copies are identical
+    cmds:
+      - diff -r contrib/openai/internal/wiretap contrib/googlegenai/internal/wiretap
+
+  contrib:test:
+    desc: Lint and test the contrib and integration-test modules
+    deps: [install:golangci-lint]
+    cmds:
+      - cd contrib/openai && ../../bin/golangci-lint run --timeout 2m && go vet ./... && go test -race ./...
+      - cd contrib/googlegenai && ../../bin/golangci-lint run --timeout 2m && go vet ./... && go test -race ./...
+      - cd contrib/integrationtest && go vet ./... && go test -race ./...
+
+  contrib:purity:check:
+    desc: Verify contrib modules against the released core without the workspace and without provider SDKs
+    cmds:
+      - cd contrib/openai && GOWORK=off go mod tidy -diff && GOWORK=off go test -count=1 ./...
+      - cd contrib/googlegenai && GOWORK=off go mod tidy -diff && GOWORK=off go test -count=1 ./...
+      - "! grep -E 'sashabaranov|github.com/openai/|google.golang.org/genai|cloud.google.com' contrib/openai/go.mod contrib/googlegenai/go.mod"
+
   ci:
     desc: Run all continuous-integration checks
     cmds:
@@ -87,6 +107,9 @@ tasks:
       - task: test
       - go vet -mod=readonly ./...
       - task: fuzz:check
+      - task: contrib:sync:check
+      - task: contrib:test
+      - task: contrib:purity:check
       - task: vuln:check
       - task: policy:check
 

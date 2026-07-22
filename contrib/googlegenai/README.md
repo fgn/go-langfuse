@@ -1,0 +1,92 @@
+# langfusegenai
+
+Opt-in Langfuse instrumentation for Gemini API calls from Go (Google AI
+Developer API and Vertex AI). The core `github.com/fgn/go-langfuse`
+module has **no Google dependency**; install this adapter only when you
+want it:
+
+```sh
+go get github.com/fgn/go-langfuse/contrib/googlegenai
+```
+
+This module depends on the core module and the standard library only.
+It has no Google SDK dependency either: it observes the documented wire
+format at the HTTP transport, so `google.golang.org/genai` client code
+stays exactly as it is.
+
+## Wiring: Developer API
+
+```go
+client, err := genai.NewClient(ctx, &genai.ClientConfig{
+	APIKey: apiKey,
+	HTTPClient: &http.Client{
+		Transport: langfusegenai.NewTransport(lf, nil),
+	},
+})
+```
+
+## Wiring: Vertex AI
+
+genai uses a caller-supplied `HTTPClient` as-is and does not wire your
+credentials into it. Compose the authenticated transport explicitly
+with the public `cloud.google.com/go/auth/httptransport` API and layer
+the Langfuse transport outside it. Starting from your existing client
+preserves its `Timeout`, `CheckRedirect`, cookie jar, and transport
+policy:
+
+```go
+base := app.HTTPClient // your policy client; may be plain &http.Client{}
+baseRT := base.Transport
+if baseRT == nil {
+	baseRT = http.DefaultTransport
+}
+authed, err := httptransport.NewClient(&httptransport.Options{
+	Credentials:      creds, // cloud.google.com/go/auth
+	BaseRoundTripper: baseRT,
+})
+if err != nil { ... }
+client := *base
+client.Transport = langfusegenai.NewTransport(lf, authed.Transport)
+
+gemini, err := genai.NewClient(ctx, &genai.ClientConfig{
+	Backend:     genai.BackendVertexAI,
+	Project:     projectID,
+	Location:    location,
+	Credentials: creds,
+	HTTPClient:  &client,
+})
+```
+
+The Authorization header is added by the inner auth transport after the
+Langfuse layer runs, so the adapter never sees credentials; the
+adapter reads no request headers in any composition. Token refresh time
+counts toward the attempt's duration; the refresh request itself is not
+observed.
+
+## Scope (v0.1)
+
+| Route | Observation | Streaming |
+| --- | --- | --- |
+| `generateContent` | generation | no |
+| `streamGenerateContent` | generation | yes (SSE) |
+| `embedContent`, `batchEmbedContents` | embedding | no |
+| `predict` (Vertex embedding models) | embedding | no |
+
+`countTokens` and file/cache management routes pass through
+unobserved. The model is extracted from the URL (bare models, tuned
+models, and any Vertex publisher); a response `modelVersion` overrides
+it. Gemini streams have no terminal sentinel: clean EOF completes the
+observation, and `finishReason` values are recorded as metadata, never
+used to end the stream early (Gemini can send usage and further
+content after a `STOP`).
+
+## Attempts, retries, metrics, and privacy
+
+Identical to the OpenAI adapter: one observation per HTTP attempt;
+group logical operations under a span-typed observation without
+duplicating model or usage; `ContextWithCall` attaches names, prompt
+links, and metadata; the core Mask/capture controls govern all content;
+media parts (`inlineData`, `fileData`) are replaced with placeholders
+during parsing; `generationConfig` exports through a numeric/boolean
+allowlist only. See the [OpenAI adapter README](../openai/README.md)
+for the shared semantics and status vocabulary.

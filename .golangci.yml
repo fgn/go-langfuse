@@ -97,6 +97,10 @@ linters:
       - linters:
           - forbidigo
         path: examples/
+      # Adapter wire structs mirror provider JSON field casing exactly.
+      - linters:
+          - tagliatelle
+        path: contrib/.+/parse\.go
       # Wire tests intentionally use raw headers/protobuf fields, while some
       # test helpers keep generic parameters to make assertions readable.
       - linters:

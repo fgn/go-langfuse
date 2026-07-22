@@ -1,0 +1,179 @@
+package langfusegenai
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/fgn/go-langfuse"
+	"github.com/fgn/go-langfuse/contrib/googlegenai/internal/wiretap"
+)
+
+func generationRoute() wiretap.Route {
+	return wiretap.Route{
+		Name: "genai.generate_content", Model: "gemini-2.5-flash",
+		Type: langfuse.TypeGeneration,
+	}
+}
+
+func TestParseRequestGenerationConfigAllowlist(t *testing.T) {
+	call := &call{route: generationRoute(), captureCap: 1 << 16}
+	call.ParseRequest([]byte(`{
+		"contents": [{"role":"user","parts":[{"text":"question"}]}],
+		"systemInstruction": {"parts":[{"text":"be terse"}]},
+		"generationConfig": {
+			"temperature": 0.3, "topK": 40, "maxOutputTokens": 512,
+			"stopSequences": ["SECRET-STOP"],
+			"responseSchema": {"type":"object","description":"SECRET-SCHEMA"}
+		}
+	}`))
+	result := call.Result()
+	if result.ModelParameters["temperature"] != 0.3 || result.ModelParameters["topK"] != 40.0 {
+		t.Fatalf("allowlisted parameters missing: %v", result.ModelParameters)
+	}
+	for key := range result.ModelParameters {
+		if key == "stopSequences" || key == "responseSchema" {
+			t.Fatalf("content-bearing key %q leaked into model parameters", key)
+		}
+	}
+	input, ok := result.Input.(map[string]any)
+	if !ok {
+		t.Fatalf("input shape %T", result.Input)
+	}
+	if input["system_instruction"] == nil || input["contents"] == nil {
+		t.Fatalf("input missing sections: %v", input)
+	}
+}
+
+func TestParseRequestMediaPlaceholders(t *testing.T) {
+	call := &call{route: generationRoute(), captureCap: 1 << 16}
+	call.ParseRequest([]byte(`{
+		"contents": [{"role":"user","parts":[
+			{"text":"describe"},
+			{"inlineData":{"mimeType":"image/png","data":"BASE64SECRET"}},
+			{"fileData":{"fileUri":"gs://bucket/SECRET-URI"}}
+		]}]
+	}`))
+	rendered := renderJSON(t, call.Result().Input)
+	if strings.Contains(rendered, "BASE64SECRET") || strings.Contains(rendered, "SECRET-URI") {
+		t.Fatalf("media leaked: %s", rendered)
+	}
+	if !strings.Contains(rendered, `"media":"omitted"`) || !strings.Contains(rendered, "describe") {
+		t.Fatalf("placeholder or text missing: %s", rendered)
+	}
+}
+
+func TestStreamAccumulationAndUsageMapping(t *testing.T) {
+	call := &call{route: generationRoute(), captureCap: 1 << 16}
+	chunks := []string{
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"Hello "}]}}],"modelVersion":"gemini-2.5-flash-002"}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"thinking...","thought":true}]}}]}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"world"}]},"finishReason":"STOP"}],
+		  "usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":4,"thoughtsTokenCount":6,"cachedContentTokenCount":2}}`,
+		`{"candidates":[{"content":{"role":"model","parts":[{"text":"!"}]}}]}`,
+	}
+	outputs := 0
+	for _, chunk := range chunks {
+		verdict := call.FeedEvent([]byte(chunk))
+		if verdict.Terminal != wiretap.TerminalNone {
+			t.Fatalf("chunk treated as terminal: %q", chunk)
+		}
+		if verdict.Output {
+			outputs++
+		}
+	}
+	// The thought-only chunk is reasoning, not output.
+	if outputs != 3 {
+		t.Fatalf("output-bearing chunks = %d, want 3", outputs)
+	}
+	// Content after finishReason STOP must still accumulate (locked by
+	// the genai SDK's own behavior).
+	result := call.Result()
+	if result.Output != "Hello world!" {
+		t.Fatalf("accumulated output %q", result.Output)
+	}
+	if result.Model != "gemini-2.5-flash-002" {
+		t.Fatalf("modelVersion override missing: %q", result.Model)
+	}
+	usage := result.Usage
+	if usage == nil || usage.InputTokens != 10 || usage.OutputTokens != 10 ||
+		usage.ReasoningOutputTokens != 6 || usage.CacheReadInputTokens != 2 {
+		t.Fatalf("usage mapping %+v; OutputTokens must include thoughts", usage)
+	}
+	if result.Metadata["finish_reason"] != "STOP" {
+		t.Fatalf("finish reason metadata %v", result.Metadata)
+	}
+	if result.Metadata["request_model"] != "gemini-2.5-flash" {
+		t.Fatalf("request model metadata %v", result.Metadata)
+	}
+}
+
+func TestStreamCleanEOFProbe(t *testing.T) {
+	call := &call{route: generationRoute(), captureCap: 1 << 16}
+	if verdict := call.FeedEvent(nil); verdict.Terminal != wiretap.TerminalNone {
+		t.Fatal("zero-event stream EOF reported success")
+	}
+	call.FeedEvent([]byte(`{"candidates":[{"content":{"parts":[{"text":"x"}]}}]}`))
+	if verdict := call.FeedEvent(nil); verdict.Terminal != wiretap.TerminalSuccess {
+		t.Fatal("clean EOF after events did not report success")
+	}
+}
+
+func TestStreamErrorEvent(t *testing.T) {
+	call := &call{route: generationRoute(), captureCap: 1 << 16}
+	verdict := call.FeedEvent([]byte(`{"error":{"code":429,"message":"SECRET quota"}}`))
+	if verdict.Terminal != wiretap.TerminalError {
+		t.Fatal("error event not terminal")
+	}
+	if call.Result().ErrorCategory != "provider error" {
+		t.Fatalf("error category %q", call.Result().ErrorCategory)
+	}
+}
+
+func TestUnaryFunctionCallOutput(t *testing.T) {
+	call := &call{route: generationRoute(), captureCap: 1 << 16}
+	call.FinishUnary([]byte(`{
+		"candidates":[{"content":{"role":"model","parts":[
+			{"functionCall":{"name":"lookup","args":{"q":"go"}}}
+		]},"finishReason":"STOP"}],
+		"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":1}
+	}`), 200)
+	rendered := renderJSON(t, call.Result().Output)
+	if !strings.Contains(rendered, `"functionCall"`) || !strings.Contains(rendered, `"lookup"`) {
+		t.Fatalf("function call output missing: %s", rendered)
+	}
+}
+
+func TestUnaryEmbeddingCounts(t *testing.T) {
+	batch := &call{route: wiretap.Route{
+		Name: "genai.batch_embed_contents",
+		Type: langfuse.TypeEmbedding,
+	}, captureCap: 1 << 16}
+	batch.FinishUnary([]byte(`{"embeddings":[{"values":[0.1]},{"values":[0.2]},{"values":[0.3]}]}`), 200)
+	if batch.Result().Metadata["embeddings"] != 3 {
+		t.Fatalf("batch embedding count %v", batch.Result().Metadata)
+	}
+	predict := &call{route: wiretap.Route{
+		Name: "genai.predict",
+		Type: langfuse.TypeEmbedding,
+	}, captureCap: 1 << 16}
+	predict.FinishUnary([]byte(`{"predictions":[{"embeddings":{"values":[0.1]}}]}`), 200)
+	if predict.Result().Metadata["embeddings"] != 1 {
+		t.Fatalf("predict embedding count %v", predict.Result().Metadata)
+	}
+}
+
+func TestOverCapDeltaDropsOutputKeepsUsage(t *testing.T) {
+	call := &call{route: generationRoute(), captureCap: 16}
+	call.FeedEvent([]byte(`{"candidates":[{"content":{"parts":[{"text":"0123456789ABCDEF-overflow"}]}}]}`))
+	call.FeedEvent([]byte(`{"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1}}`))
+	result := call.Result()
+	if result.Output != nil {
+		t.Fatalf("over-cap output not dropped: %v", result.Output)
+	}
+	if !result.TelemetryPartial {
+		t.Fatal("over-cap drop not reported as partial telemetry")
+	}
+	if result.Usage == nil || result.Usage.InputTokens != 2 {
+		t.Fatalf("usage lost after over-cap drop: %+v", result.Usage)
+	}
+}
