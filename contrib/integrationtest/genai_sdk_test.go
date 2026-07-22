@@ -191,7 +191,7 @@ func TestVertexCompositionPreservesPolicyAndAuth(t *testing.T) {
 		t.Fatal(err)
 	}
 	response, err := gemini.Models.GenerateContent(context.Background(),
-		"gemini-3.6-pro", genai.Text("synthetic question"), nil)
+		"gemini-3.6-flash", genai.Text("synthetic question"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,7 +232,7 @@ func TestGenAITransformerModelForms(t *testing.T) {
 		{genai.BackendGeminiAPI, "gemini-3.6-flash", "gemini-3.6-flash"},
 		{genai.BackendGeminiAPI, "models/gemini-3.6-flash", "gemini-3.6-flash"},
 		{genai.BackendGeminiAPI, "tunedModels/my-tuned-1", "my-tuned-1"},
-		{genai.BackendVertexAI, "gemini-3.6-pro", "gemini-3.6-pro"},
+		{genai.BackendVertexAI, "gemini-3.6-flash", "gemini-3.6-flash"},
 		{genai.BackendVertexAI, "publishers/anthropic/models/claude-sonnet-5", "claude-sonnet-5"},
 		// A fully qualified project-model resource is deliberately not
 		// collapsed to a bare model (reviewed design).

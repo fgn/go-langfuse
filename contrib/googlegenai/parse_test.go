@@ -86,10 +86,19 @@ func TestStreamAccumulationAndUsageMapping(t *testing.T) {
 		t.Fatalf("output-bearing chunks = %d, want 3", outputs)
 	}
 	// Content after finishReason STOP must still accumulate (locked by
-	// the genai SDK's own behavior).
+	// the genai SDK's own behavior), and the thought part is retained
+	// marked in the exported content without being output-bearing.
 	result := call.Result()
-	if result.Output != "Hello world!" {
-		t.Fatalf("accumulated output %q", result.Output)
+	composite, ok := result.Output.(map[string]any)
+	if !ok {
+		t.Fatalf("output shape %T: %v", result.Output, result.Output)
+	}
+	if composite["text"] != "Hello world!" {
+		t.Fatalf("accumulated text %q", composite["text"])
+	}
+	rendered := renderJSON(t, composite["parts"])
+	if !strings.Contains(rendered, `"thought":true`) || !strings.Contains(rendered, "thinking...") {
+		t.Fatalf("thought part not retained marked: %s", rendered)
 	}
 	if result.Model != "gemini-3.6-flash-002" {
 		t.Fatalf("modelVersion override missing: %q", result.Model)

@@ -92,7 +92,10 @@ string, validated against a strict shape (128 chars,
 because Langfuse model-based pricing requires it; request-body models
 are never promoted and travel as Mask-governed metadata. Content
 larger than the 512 KiB capture cap is omitted entirely, never
-truncated. `WithoutContentExport()` keeps usage and model but drops
+truncated; individual streaming events are additionally bounded at
+256 KiB, and an oversized event is discarded whole (including any
+usage fields inside it) with a `telemetry_partial` warning while
+framing and terminal detection continue. `WithoutContentExport()` keeps usage and model but drops
 Input/Output; `WithoutBodyInspection()` prevents body reading
 completely. A disabled core client (`LANGFUSE_TRACING_ENABLED=false`)
 disables inspection, not only export.

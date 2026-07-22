@@ -121,3 +121,88 @@ func TestSSEFieldParsing(t *testing.T) {
 		}
 	}
 }
+
+// TestSSEFramerDiscardSplitDelimiterDoesNotSwallowNext locks review
+// round 2 finding 16: when an oversized event's delimiter splits
+// across reads, the next valid event must survive. The exact failing
+// sequence: the over-cap event ends with "\n", the following read
+// starts with the delimiter's second "\n".
+func TestSSEFramerDiscardSplitDelimiterDoesNotSwallowNext(t *testing.T) {
+	framer := sseFramer{maxEvent: 64}
+	var events []string
+	emit := func(data []byte) bool {
+		events = append(events, string(data))
+		return true
+	}
+	framer.feed([]byte("data: "+strings.Repeat("x", 70)+"\n"), emit)
+	framer.feed([]byte("\ndata: [DONE]\n\n"), emit)
+	if len(events) != 1 || events[0] != "[DONE]" {
+		t.Fatalf("terminal swallowed after split-delimiter discard: %q", events)
+	}
+	if !framer.discarded {
+		t.Fatal("oversized event not flagged")
+	}
+}
+
+// TestSSEFramerDiscardSplitSweep drives every split position around an
+// oversized event's delimiter followed by a small event, under LF and
+// CRLF framing.
+func TestSSEFramerDiscardSplitSweep(t *testing.T) {
+	for _, newline := range []string{"\n", "\r\n"} {
+		stream := "data: " + strings.Repeat("x", 70) + newline + newline +
+			"data: [DONE]" + newline + newline
+		for split := 1; split < len(stream); split++ {
+			framer := sseFramer{maxEvent: 64}
+			var events []string
+			emit := func(data []byte) bool {
+				events = append(events, string(data))
+				return true
+			}
+			framer.feed([]byte(stream[:split]), emit)
+			framer.feed([]byte(stream[split:]), emit)
+			if len(events) != 1 || events[0] != "[DONE]" {
+				t.Fatalf("newline %q split %d: events %q", newline, split, events)
+			}
+		}
+	}
+}
+
+// TestSSEFramerBoundedCopyOnJumboRead locks review round 2 finding 17:
+// one arbitrarily large Read must never be duplicated into the buffer
+// beyond the per-event bound.
+func TestSSEFramerBoundedCopyOnJumboRead(t *testing.T) {
+	framer := sseFramer{maxEvent: 1 << 10}
+	jumbo := []byte("data: " + strings.Repeat("y", 1<<20) + "\n\ndata: [DONE]\n\n")
+	var events []string
+	framer.feed(jumbo, func(data []byte) bool {
+		events = append(events, string(data))
+		return true
+	})
+	if cap(framer.buf) > (1<<10)+delimiterSlack+1024 {
+		t.Fatalf("buffer grew to %d for a jumbo read", cap(framer.buf))
+	}
+	if len(events) != 1 || events[0] != "[DONE]" {
+		t.Fatalf("jumbo oversized event handling: %q", events)
+	}
+	if !framer.discarded {
+		t.Fatal("jumbo event not flagged as discarded")
+	}
+}
+
+// FuzzSSEFramer asserts bounded memory and panic freedom under
+// arbitrary bytes and fragmentation.
+func FuzzSSEFramer(f *testing.F) {
+	f.Add([]byte("data: hello\n\ndata: [DONE]\n\n"), uint8(3))
+	f.Add([]byte(": ping\r\n\r\ndata: "+strings.Repeat("z", 300)+"\r\n\r\n"), uint8(1))
+	f.Fuzz(func(t *testing.T, stream []byte, chunk uint8) {
+		size := int(chunk)%37 + 1
+		framer := sseFramer{maxEvent: 128}
+		for offset := 0; offset < len(stream); offset += size {
+			end := min(offset+size, len(stream))
+			framer.feed(stream[offset:end], func([]byte) bool { return true })
+			if len(framer.buf) > 128+delimiterSlack {
+				t.Fatalf("buffer exceeded bound: %d", len(framer.buf))
+			}
+		}
+	})
+}

@@ -150,9 +150,11 @@ jobs:
           set -euo pipefail
           diff -r contrib/openai/internal/wiretap contrib/googlegenai/internal/wiretap
           cd "$RELEASE_MODULE"
-          # The declared core version must already be published (core
-          # releases first), and the module must be releasable without
-          # the workspace.
+          # A fresh module cache proves the declared core version is
+          # published and the module graph is complete (core releases
+          # first); the module must be releasable without the
+          # workspace.
+          export GOMODCACHE="$RUNNER_TEMP/contrib-modcache"
           GOWORK=off GOFLAGS=-mod=readonly go mod download
           GOWORK=off go mod tidy -diff
           GOWORK=off go vet ./...
@@ -160,6 +162,8 @@ jobs:
           providers='sashabaranov|github.com/openai/|google.golang.org/genai|cloud.google.com'
           ! grep -E "$providers" go.mod go.sum
           GOWORK=off go list -deps ./... | (! grep -E "$providers")
+          GOWORK=off go test -mod=readonly ./internal/wiretap -run='^$' -fuzz=FuzzSSEFramer -fuzztime=2s
+          GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 
       - name: Verify repository and release metadata
         shell: bash

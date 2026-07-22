@@ -45,7 +45,13 @@ func (p protocol) Recognize(u *url.URL) (wiretap.Route, bool) {
 		return wiretap.Route{}, false
 	}
 	resource := path[:colon]
-	model, version, qualified := parseModelResource(resource)
+	model, version, qualified, matched := parseModelResource(resource)
+	if !matched {
+		// A known method suffix alone is not a supported production:
+		// arbitrary same-suffix resources pass through unobserved and
+		// uninspected (review round 2 finding 19).
+		return wiretap.Route{}, false
+	}
 	route := wiretap.Route{
 		Provider:   classifyProvider(u.Host),
 		Name:       spec.name,
@@ -55,9 +61,8 @@ func (p protocol) Recognize(u *url.URL) (wiretap.Route, bool) {
 		Streaming:  spec.streaming || u.Query().Get("alt") == "sse",
 	}
 	if model == "" && qualified != "" {
-		// A fully qualified resource the grammar does not map to a
-		// bare model (for example cached content or corpora) is still
-		// observed, with the resource recorded as metadata only.
+		// A fully qualified project resource (for example cached
+		// content) is observed with the resource as metadata only.
 		route.Metadata = map[string]any{"resource": qualified}
 	}
 	return route, true
@@ -88,12 +93,15 @@ func classifyProvider(host string) string {
 //	{version}/tunedModels/{model}
 //	{version}/projects/{p}/locations/{l}/publishers/{pub}/models/{model}
 //
-// Every other resource the SDK accepts (for example
-// projects/{p}/locations/{l}/models/{m} or cached content) is
-// deliberately NOT collapsed to a bare model: it returns model "" and
+// Qualified project resources the SDK accepts (for example
+// projects/{p}/locations/{l}/models/{m} or cached content) are
+// deliberately NOT collapsed to a bare model: they return model "" and
 // the percent-decoded resource tail for metadata, per the reviewed
-// design. Segments are decoded individually and bounded.
-func parseModelResource(escapedPath string) (model, version, qualified string) {
+// design. Everything else, including paths with no supported API
+// version, does not match: matched=false rejects arbitrary
+// same-suffix resources entirely. Segments are decoded individually
+// and bounded.
+func parseModelResource(escapedPath string) (model, version, qualified string, matched bool) {
 	segments := strings.Split(strings.Trim(escapedPath, "/"), "/")
 	versionIndex := -1
 	for index, segment := range segments {
@@ -102,26 +110,30 @@ func parseModelResource(escapedPath string) (model, version, qualified string) {
 			version = segment
 		}
 	}
+	if versionIndex < 0 {
+		return "", "", "", false
+	}
 	rest := segments[versionIndex+1:]
 	switch {
 	case len(rest) == 2 && (rest[0] == "models" || rest[0] == "tunedModels"):
 		if decoded, ok := decodeSegment(rest[1]); ok {
-			return decoded, version, ""
+			return decoded, version, "", true
 		}
 	case len(rest) == 8 && rest[0] == "projects" && rest[2] == "locations" &&
 		rest[4] == "publishers" && rest[6] == "models":
 		if decoded, ok := decodeSegment(rest[7]); ok {
-			return decoded, version, ""
+			return decoded, version, "", true
+		}
+	case len(rest) >= 5 && rest[0] == "projects" && rest[2] == "locations":
+		tail := rest
+		if len(tail) > 8 {
+			tail = tail[len(tail)-8:]
+		}
+		if decoded, err := url.PathUnescape(strings.Join(tail, "/")); err == nil && len(decoded) <= 400 {
+			return "", version, decoded, true
 		}
 	}
-	tail := rest
-	if len(tail) > 8 {
-		tail = tail[len(tail)-8:]
-	}
-	if decoded, err := url.PathUnescape(strings.Join(tail, "/")); err == nil && len(decoded) <= 400 {
-		qualified = decoded
-	}
-	return "", version, qualified
+	return "", version, "", false
 }
 
 func decodeSegment(segment string) (string, bool) {

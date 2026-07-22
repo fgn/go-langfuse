@@ -46,13 +46,28 @@ type call struct {
 	errorCategory string
 	partial       bool
 
-	// Streaming accumulation, bounded by captureCap in total.
-	deltas       []strings.Builder
+	// Streaming accumulation, bounded by captureCap in total and by
+	// maxChoices in fan-out.
+	choices      []choiceAccumulator
 	deltaBytes   int
 	deltasOver   bool
 	sawDone      bool
 	streamEvents bool
 	embeddings   int
+}
+
+// choiceAccumulator gathers one choice's streamed output: text and
+// per-tool-index call accumulation, so parallel tool calls export as
+// distinct structured calls rather than one joined string.
+type choiceAccumulator struct {
+	text      strings.Builder
+	toolOrder []int
+	tools     map[int]*toolAccumulator
+}
+
+type toolAccumulator struct {
+	name string
+	args strings.Builder
 }
 
 func (c *call) ParseRequest(body []byte) {
@@ -121,12 +136,9 @@ func (c *call) FeedEvent(data []byte) wiretap.EventVerdict {
 		if choice.FinishReason != "" {
 			c.appendFinishReason(choice.FinishReason)
 		}
-		text, bearing := choice.outputDelta()
-		if !bearing {
-			continue
+		if choice.consumeInto(c) {
+			output = true
 		}
-		output = true
-		c.appendDelta(choice.Index, text)
 	}
 	return wiretap.EventVerdict{Output: output}
 }
@@ -207,17 +219,23 @@ func (c *call) Result() wiretap.Result {
 	if c.unaryOutput != nil {
 		result.Output = c.unaryOutput
 	} else if c.streamEvents && !c.deltasOver {
-		switch len(c.deltas) {
-		case 0:
-		case 1:
-			result.Output = c.deltas[0].String()
-		default:
-			texts := make([]any, len(c.deltas))
-			for index := range c.deltas {
-				texts[index] = c.deltas[index].String()
+		outputs := make([]any, 0, len(c.choices))
+		structured := false
+		for index := range c.choices {
+			rendered := c.choices[index].render()
+			if _, plain := rendered.(string); !plain {
+				structured = true
 			}
-			result.Output = texts
+			outputs = append(outputs, rendered)
 		}
+		switch {
+		case len(outputs) == 0:
+		case len(outputs) == 1:
+			result.Output = outputs[0]
+		default:
+			result.Output = outputs
+		}
+		_ = structured
 	}
 	return result
 }
@@ -227,34 +245,130 @@ func (c *call) Result() wiretap.Result {
 // untrusted input and must never size allocations.
 const maxChoices = 128
 
-// appendDelta grows per-choice accumulated output, bounded in aggregate
-// by the capture cap and in fan-out by maxChoices: over either bound,
-// output capture degrades to partial telemetry (never truncated,
-// never provider-sized).
-func (c *call) appendDelta(index int, text string) {
+// choiceAt returns the bounded accumulator for a provider-supplied
+// index, or nil when the index is hostile: wire fields never size
+// allocations.
+func (c *call) choiceAt(index int) *choiceAccumulator {
 	if c.deltasOver {
-		return
+		return nil
 	}
+	if index < 0 || index >= maxChoices {
+		c.partial = true
+		return nil
+	}
+	for len(c.choices) <= index {
+		c.choices = append(c.choices, choiceAccumulator{})
+	}
+	return &c.choices[index]
+}
+
+// charge counts retained output bytes against the capture cap; over
+// the cap, streamed output is dropped entirely (never truncated).
+func (c *call) charge(n int) bool {
+	if c.deltaBytes+n > c.captureCap {
+		c.deltasOver = true
+		c.choices = nil
+		return false
+	}
+	c.deltaBytes += n
+	return true
+}
+
+func (c *call) appendFinishReason(reason string) {
+	if len(c.finishReasons) < maxChoices && c.charge(len(reason)) {
+		c.finishReasons = append(c.finishReasons, reason)
+	}
+}
+
+// consumeInto folds one stream choice into the call state and reports
+// whether it carried output-bearing content.
+func (choice streamChoice) consumeInto(c *call) bool {
+	if choice.Text != "" {
+		if acc := c.choiceAt(choice.Index); acc != nil && c.charge(len(choice.Text)) {
+			acc.text.WriteString(choice.Text)
+		}
+		return true
+	}
+	delta := choice.Delta
+	if delta == nil {
+		return false
+	}
+	bearing := false
+	switch {
+	case delta.Content != "":
+		bearing = true
+		if acc := c.choiceAt(choice.Index); acc != nil && c.charge(len(delta.Content)) {
+			acc.text.WriteString(delta.Content)
+		}
+	case delta.Refusal != "":
+		bearing = true
+		if acc := c.choiceAt(choice.Index); acc != nil && c.charge(len(delta.Refusal)) {
+			acc.text.WriteString(delta.Refusal)
+		}
+	case len(delta.Audio) > 0 && !bytes.Equal(bytes.TrimSpace(delta.Audio), []byte("null")):
+		bearing = true // audio bytes are media and never accumulate
+	}
+	if delta.FunctionCall != nil {
+		bearing = true
+		if acc := c.choiceAt(choice.Index); acc != nil {
+			acc.tool(0, delta.FunctionCall.Name, delta.FunctionCall.Arguments, c)
+		}
+	}
+	for _, tool := range delta.ToolCalls {
+		if tool.Function.Name == "" && tool.Function.Arguments == "" {
+			continue
+		}
+		bearing = true
+		if acc := c.choiceAt(choice.Index); acc != nil {
+			acc.tool(tool.Index, tool.Function.Name, tool.Function.Arguments, c)
+		}
+	}
+	return bearing
+}
+
+// tool accumulates one tool-call element by its wire index, keeping
+// parallel calls distinct. Hostile indices degrade to partial.
+func (a *choiceAccumulator) tool(index int, name, arguments string, c *call) {
 	if index < 0 || index >= maxChoices {
 		c.partial = true
 		return
 	}
-	if c.deltaBytes+len(text) > c.captureCap {
-		c.deltasOver = true
-		c.deltas = nil
+	if !c.charge(len(name) + len(arguments)) {
 		return
 	}
-	for len(c.deltas) <= index {
-		c.deltas = append(c.deltas, strings.Builder{})
+	if a.tools == nil {
+		a.tools = map[int]*toolAccumulator{}
 	}
-	c.deltas[index].WriteString(text)
-	c.deltaBytes += len(text)
+	accumulator, ok := a.tools[index]
+	if !ok {
+		accumulator = &toolAccumulator{}
+		a.tools[index] = accumulator
+		a.toolOrder = append(a.toolOrder, index)
+	}
+	if name != "" {
+		accumulator.name = name
+	}
+	accumulator.args.WriteString(arguments)
 }
 
-func (c *call) appendFinishReason(reason string) {
-	if len(c.finishReasons) < maxChoices {
-		c.finishReasons = append(c.finishReasons, reason)
+// render produces one choice's exported output: a plain string for
+// text-only choices, a structured object when tool calls are present.
+func (a *choiceAccumulator) render() any {
+	if len(a.toolOrder) == 0 {
+		return a.text.String()
 	}
+	calls := make([]any, 0, len(a.toolOrder))
+	for _, index := range a.toolOrder {
+		accumulator := a.tools[index]
+		calls = append(calls, map[string]any{
+			"name": accumulator.name, "arguments": accumulator.args.String(),
+		})
+	}
+	rendered := map[string]any{"tool_calls": calls}
+	if text := a.text.String(); text != "" {
+		rendered["content"] = text
+	}
+	return rendered
 }
 
 type streamChunk struct {
@@ -281,45 +395,12 @@ type streamDelta struct {
 		Arguments string `json:"arguments"`
 	} `json:"function_call"`
 	ToolCalls []struct {
+		Index    int `json:"index"`
 		Function struct {
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
 		} `json:"function"`
 	} `json:"tool_calls"`
-}
-
-// outputDelta reports whether a stream choice carried output-bearing
-// content (text, refusal, audio, legacy function_call, or tool-call
-// deltas) and the text to accumulate: every tool element's argument
-// delta is collected, so a name-only element cannot suppress later
-// arguments. Role-only and empty control chunks are not output.
-func (choice streamChoice) outputDelta() (text string, bearing bool) {
-	if choice.Text != "" {
-		return choice.Text, true
-	}
-	delta := choice.Delta
-	if delta == nil {
-		return "", false
-	}
-	switch {
-	case delta.Content != "":
-		return delta.Content, true
-	case delta.Refusal != "":
-		return delta.Refusal, true
-	case len(delta.Audio) > 0 && !bytes.Equal(bytes.TrimSpace(delta.Audio), []byte("null")):
-		return "", true
-	}
-	if delta.FunctionCall != nil {
-		return delta.FunctionCall.Arguments, true
-	}
-	var arguments strings.Builder
-	for _, tool := range delta.ToolCalls {
-		if tool.Function.Name != "" || tool.Function.Arguments != "" {
-			bearing = true
-			arguments.WriteString(tool.Function.Arguments)
-		}
-	}
-	return arguments.String(), bearing
 }
 
 // isRealError distinguishes an actual error object from an explicit

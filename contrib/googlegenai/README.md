@@ -91,5 +91,7 @@ duplicating model or usage; `ContextWithCall` attaches names, prompt
 links, and metadata; the core Mask/capture controls govern all content;
 media parts (`inlineData`, `fileData`) are replaced with placeholders
 during parsing; `generationConfig` exports through a numeric/boolean
-allowlist only. See the [OpenAI adapter README](../openai/README.md)
+allowlist only; retained structured parts are byte-accounted against
+the same capture cap as text, and oversized streaming events are
+discarded whole with `telemetry_partial`. See the [OpenAI adapter README](../openai/README.md)
 for the shared semantics and status vocabulary.

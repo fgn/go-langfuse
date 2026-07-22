@@ -69,15 +69,16 @@ type bodyWrapper struct {
 	call Call
 	mode streamMode
 
-	mu        sync.Mutex
-	finalized bool
-	frozen    bool // hard terminal seen; reads keep flowing untouched
-	framer    sseFramer
-	sniff     []byte // bounded undecided prefix awaiting SSE/JSON proof
-	unary     []byte
-	unaryOver bool
-	capBytes  int
-	status    int
+	mu         sync.Mutex
+	finalized  bool
+	frozen     bool // hard terminal seen; reads keep flowing untouched
+	parsePanic bool // a parser defect degraded telemetry
+	framer     sseFramer
+	sniff      []byte // bounded undecided prefix awaiting SSE/JSON proof
+	unary      []byte
+	unaryOver  bool
+	capBytes   int
+	status     int
 
 	completionStart time.Time
 	cancelObserved  *atomic.Bool
@@ -282,7 +283,7 @@ func (w *bodyWrapper) finalizeLocked(state FinalState) {
 	w.finalize(Outcome{
 		State:           state,
 		CancelObserved:  w.cancelObserved.Load() || w.ctxDone(),
-		CaptureDegraded: w.framer.discarded || w.unaryOver,
+		CaptureDegraded: w.framer.discarded || w.unaryOver || w.parsePanic,
 		End:             time.Now(),
 		CompletionStart: w.completionStart,
 	})
@@ -295,6 +296,7 @@ func (w *bodyWrapper) finalizeLocked(state FinalState) {
 func (w *bodyWrapper) recoverParse() {
 	if recovered := recover(); recovered != nil {
 		w.mode = modeIgnore
+		w.parsePanic = true
 	}
 }
 

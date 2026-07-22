@@ -39,10 +39,10 @@ func TestRecognizeRouteGrammar(t *testing.T) {
 			provider:  "google-genai",
 		},
 		{
-			url:       "https://eu-aiplatform.googleapis.com/v1beta1/projects/proj-1/locations/eu/publishers/google/models/gemini-3.6-pro:generateContent",
+			url:       "https://eu-aiplatform.googleapis.com/v1beta1/projects/proj-1/locations/eu/publishers/google/models/gemini-3.6-flash:generateContent",
 			wantOK:    true,
 			wantName:  "genai.generate_content",
-			wantModel: "gemini-3.6-pro",
+			wantModel: "gemini-3.6-flash",
 			wantType:  langfuse.TypeGeneration,
 			provider:  "google-vertex",
 		},
@@ -140,5 +140,27 @@ func TestRecognizeQualifiedResourceWithoutModel(t *testing.T) {
 	}
 	if route.Metadata["resource"] == "" {
 		t.Fatal("resource metadata missing")
+	}
+}
+
+// TestRecognizeRejectsArbitrarySameSuffixResources locks review round
+// 2 finding 19: a known method suffix alone must not cause body
+// inspection. Paths outside the enumerated productions pass through.
+func TestRecognizeRejectsArbitrarySameSuffixResources(t *testing.T) {
+	for _, raw := range []string{
+		"https://gw.example.com/tenant-secret:generateContent",
+		"https://gw.example.com/:generateContent",
+		"https://gw.example.com/models/x:generateContent",            // no API version
+		"https://gw.example.com/v2/models/x:generateContent",         // unsupported version
+		"https://gw.example.com/v1beta/corpora/c-1:generateContent",  // non-project resource
+		"https://gw.example.com/v1beta/projects/p/x:generateContent", // no locations production
+	} {
+		parsed, err := url.Parse(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := (protocol{}).Recognize(parsed); ok {
+			t.Fatalf("%s was recognized; arbitrary same-suffix resources must pass through", raw)
+		}
 	}
 }

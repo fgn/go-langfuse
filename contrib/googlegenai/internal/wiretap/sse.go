@@ -28,23 +28,42 @@ func (f *sseFramer) pending() bool {
 	return len(f.buf) > 0 || f.dropping
 }
 
+// delimiterSlack covers a maximal CRLF event delimiter beyond the
+// per-event cap, so an exactly-at-cap event still completes.
+const delimiterSlack = 4
+
+// feed consumes p in bounded chunks: the buffer never grows past
+// maxEvent plus delimiter slack no matter how large one application
+// Read is, so an oversized event costs bounded memory, never a full
+// duplicate copy.
 func (f *sseFramer) feed(p []byte, emit func(data []byte) bool) {
 	if f.stopped {
 		return
 	}
-	f.buf = append(f.buf, p...)
+	for len(p) > 0 {
+		room := max(f.maxEvent+delimiterSlack-len(f.buf), 1)
+		chunk := p
+		if len(chunk) > room {
+			chunk = p[:room]
+		}
+		p = p[len(chunk):]
+		f.buf = append(f.buf, chunk...)
+		if !f.drain(emit) {
+			return
+		}
+	}
+}
+
+// drain emits completed events and enforces the per-event bound. It
+// returns false permanently once a terminal was emitted.
+func (f *sseFramer) drain(emit func(data []byte) bool) bool {
 	for {
 		event, rest, ok := nextEvent(f.buf)
 		if !ok {
-			// No complete event. Bound memory: an over-cap partial
-			// event is discarded now; its eventual completion is
-			// detected by the dropping flag at the next boundary.
 			if len(f.buf) > f.maxEvent {
-				f.buf = f.buf[:0]
-				f.discarded = true
-				f.dropping = true
+				f.discardKeepingDelimiterState()
 			}
-			return
+			return true
 		}
 		f.buf = rest
 		if f.dropping {
@@ -54,9 +73,6 @@ func (f *sseFramer) feed(p []byte, emit func(data []byte) bool) {
 			continue
 		}
 		if len(event) > f.maxEvent {
-			// A complete oversized event delivered in one read is
-			// bounded exactly like a fragmented one: discarded before
-			// any copy or decode.
 			f.discarded = true
 			continue
 		}
@@ -67,9 +83,28 @@ func (f *sseFramer) feed(p []byte, emit func(data []byte) bool) {
 		if !emit(data) {
 			f.stopped = true
 			f.buf = nil
-			return
+			return false
 		}
 	}
+}
+
+// discardKeepingDelimiterState abandons an over-cap partial event
+// while preserving the trailing bytes that may already form part of
+// the event delimiter. Without this, a delimiter split across reads
+// ("...x\n" then "\ndata: [DONE]\n\n") would make the boundary
+// invisible and the NEXT valid event would be swallowed as the
+// dropped event's terminator.
+func (f *sseFramer) discardKeepingDelimiterState() {
+	keep := 0
+	switch {
+	case bytes.HasSuffix(f.buf, []byte("\n\r")):
+		keep = 2
+	case bytes.HasSuffix(f.buf, []byte("\n")):
+		keep = 1
+	}
+	f.buf = append(f.buf[:0], f.buf[len(f.buf)-keep:]...)
+	f.discarded = true
+	f.dropping = true
 }
 
 // nextEvent splits buf at the first blank line (LF LF, or CRLF CRLF, or

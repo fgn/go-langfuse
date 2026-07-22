@@ -233,6 +233,14 @@ func (c *call) consumeResponse(response *wireResponse, streaming bool) bool {
 			c.finishReasons = append(c.finishReasons, candidate.FinishReason)
 		}
 		for _, part := range candidate.Content.Parts {
+			if streaming && part.Thought && part.Text != "" {
+				// Thought parts are reasoning: retained marked in
+				// exported content (the documented contract) but never
+				// output-bearing, so they do not stamp
+				// time-to-first-token.
+				c.retainExtra(part.sanitized())
+				continue
+			}
 			if !part.outputBearing() {
 				continue
 			}
@@ -242,11 +250,11 @@ func (c *call) consumeResponse(response *wireResponse, streaming bool) bool {
 			}
 			if part.Text != "" {
 				c.appendDelta(index, part.Text)
-			} else if len(c.extraParts) < maxCandidates {
+			} else {
 				// Non-text output (function calls, executable code,
 				// media placeholders) is preserved sanitized so a
 				// tool-only stream still exports Output.
-				c.extraParts = append(c.extraParts, part.sanitized())
+				c.retainExtra(part.sanitized())
 			}
 		}
 	}
@@ -285,16 +293,44 @@ func (c *call) appendDelta(index int, text string) {
 		c.partial = true
 		return
 	}
-	if c.deltaBytes+len(text) > c.captureCap {
-		c.deltasOver = true
-		c.deltas = nil
+	if !c.charge(len(text)) {
 		return
 	}
 	for len(c.deltas) <= index {
 		c.deltas = append(c.deltas, strings.Builder{})
 	}
 	c.deltas[index].WriteString(text)
-	c.deltaBytes += len(text)
+}
+
+// retainExtra keeps a sanitized structured part, byte-accounted
+// against the same capture cap as text output: decoded provider
+// objects must not bypass the advertised response ceiling.
+func (c *call) retainExtra(part any) {
+	if c.deltasOver || len(c.extraParts) >= maxCandidates {
+		return
+	}
+	rendered, err := json.Marshal(part)
+	if err != nil {
+		c.partial = true
+		return
+	}
+	if !c.charge(len(rendered)) {
+		return
+	}
+	c.extraParts = append(c.extraParts, part)
+}
+
+// charge counts retained bytes against the capture cap; over the cap,
+// streamed output capture is dropped entirely (never truncated).
+func (c *call) charge(n int) bool {
+	if c.deltaBytes+n > c.captureCap {
+		c.deltasOver = true
+		c.deltas = nil
+		c.extraParts = nil
+		return false
+	}
+	c.deltaBytes += n
+	return true
 }
 
 type wireResponse struct {
