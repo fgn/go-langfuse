@@ -98,3 +98,18 @@ func TestNullErrorAndAudioFieldsAreNotErrors(t *testing.T) {
 		t.Fatal("null error produced an error category")
 	}
 }
+
+// TestSameEventFinishReasonCannotStarveOutput locks review round 4
+// finding 22: output in the same event charges before the finish
+// reason, so metadata can never spend the budget in-cap output needed.
+func TestSameEventFinishReasonCannotStarveOutput(t *testing.T) {
+	call := &call{route: chatRoute(), captureCap: 8}
+	call.FeedEvent([]byte(`{"choices":[{"index":0,"delta":{"content":"seven77"},"finish_reason":"stop"}]}`))
+	result := call.Result()
+	if result.Output != "seven77" {
+		t.Fatalf("same-event finish reason starved output: %v", result.Output)
+	}
+	if len(call.finishReasons) != 0 || !result.TelemetryPartial {
+		t.Fatalf("over-budget reason handling: %v partial=%v", call.finishReasons, result.TelemetryPartial)
+	}
+}

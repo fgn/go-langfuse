@@ -229,9 +229,8 @@ func (c *call) consumeResponse(response *wireResponse, streaming bool) bool {
 	}
 	output := false
 	for index, candidate := range response.Candidates {
-		if candidate.FinishReason != "" {
-			c.retainFinishReason(candidate.FinishReason)
-		}
+		// Output charges before finish metadata within one candidate
+		// (review round 4 finding 22).
 		for _, part := range candidate.Content.Parts {
 			if streaming && part.Thought && part.Text != "" {
 				// Thought parts are reasoning: retained marked in
@@ -256,6 +255,9 @@ func (c *call) consumeResponse(response *wireResponse, streaming bool) bool {
 				// tool-only stream still exports Output.
 				c.retainExtra(part.sanitized())
 			}
+		}
+		if candidate.FinishReason != "" {
+			c.retainFinishReason(candidate.FinishReason)
 		}
 	}
 	return output

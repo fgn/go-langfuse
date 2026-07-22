@@ -133,11 +133,14 @@ func (c *call) FeedEvent(data []byte) wiretap.EventVerdict {
 	}
 	output := false
 	for _, choice := range chunk.Choices {
-		if choice.FinishReason != "" {
-			c.appendFinishReason(choice.FinishReason)
-		}
+		// Output charges before finish metadata within one event, so a
+		// finish reason can never spend the budget that in-cap output
+		// needed (review round 4 finding 22).
 		if choice.consumeInto(c) {
 			output = true
+		}
+		if choice.FinishReason != "" {
+			c.appendFinishReason(choice.FinishReason)
 		}
 	}
 	return wiretap.EventVerdict{Output: output}

@@ -248,3 +248,18 @@ func TestFinishReasonBudgetFieldAware(t *testing.T) {
 		t.Fatalf("metadata overflow erased valid output: %v", result.Output)
 	}
 }
+
+// TestSameCandidateFinishReasonCannotStarveOutput locks review round 4
+// finding 22 for the established Gemini shape combining final text
+// with finishReason in one candidate.
+func TestSameCandidateFinishReasonCannotStarveOutput(t *testing.T) {
+	call := &call{route: generationRoute(), captureCap: 8}
+	call.FeedEvent([]byte(`{"candidates":[{"content":{"parts":[{"text":"seven77"}]},"finishReason":"STOP"}]}`))
+	result := call.Result()
+	if result.Output != "seven77" {
+		t.Fatalf("same-candidate finish reason starved output: %v", result.Output)
+	}
+	if len(call.finishReasons) != 0 || !result.TelemetryPartial {
+		t.Fatalf("over-budget reason handling: %v partial=%v", call.finishReasons, result.TelemetryPartial)
+	}
+}
