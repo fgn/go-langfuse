@@ -229,8 +229,8 @@ func (c *call) consumeResponse(response *wireResponse, streaming bool) bool {
 	}
 	output := false
 	for index, candidate := range response.Candidates {
-		if candidate.FinishReason != "" && len(c.finishReasons) < maxCandidates {
-			c.finishReasons = append(c.finishReasons, candidate.FinishReason)
+		if candidate.FinishReason != "" {
+			c.retainFinishReason(candidate.FinishReason)
 		}
 		for _, part := range candidate.Content.Parts {
 			if streaming && part.Thought && part.Text != "" {
@@ -318,6 +318,22 @@ func (c *call) retainExtra(part any) {
 		return
 	}
 	c.extraParts = append(c.extraParts, part)
+}
+
+// retainFinishReason retains a finish reason under the shared byte
+// ceiling with a field-aware failure: an over-budget reason drops only
+// the reason (marking partial telemetry) and never clears valid
+// accumulated output.
+func (c *call) retainFinishReason(reason string) {
+	if len(c.finishReasons) >= maxCandidates {
+		return
+	}
+	if c.deltaBytes+len(reason) > c.captureCap {
+		c.partial = true
+		return
+	}
+	c.deltaBytes += len(reason)
+	c.finishReasons = append(c.finishReasons, reason)
 }
 
 // charge counts retained bytes against the capture cap; over the cap,

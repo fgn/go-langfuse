@@ -2,6 +2,7 @@ package langfusegenai
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/fgn/go-langfuse"
@@ -154,6 +155,11 @@ func TestRecognizeRejectsArbitrarySameSuffixResources(t *testing.T) {
 		"https://gw.example.com/v2/models/x:generateContent",         // unsupported version
 		"https://gw.example.com/v1beta/corpora/c-1:generateContent",  // non-project resource
 		"https://gw.example.com/v1beta/projects/p/x:generateContent", // no locations production
+		// Empty or oversized required identifiers are not productions
+		// (review round 3 finding 21).
+		"https://gw.example.com/v1/projects//locations//publishers/google/models/gemini-3.6-flash:generateContent",
+		"https://gw.example.com/v1/projects//locations//tenant-secret:generateContent",
+		"https://gw.example.com/v1/projects/" + strings.Repeat("p", 300) + "/locations/eu/publishers/google/models/m:generateContent",
 	} {
 		parsed, err := url.Parse(raw)
 		if err != nil {

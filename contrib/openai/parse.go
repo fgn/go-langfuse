@@ -274,10 +274,20 @@ func (c *call) charge(n int) bool {
 	return true
 }
 
+// appendFinishReason retains a finish reason under the shared byte
+// ceiling with a field-aware failure: an over-budget reason drops only
+// the reason (marking partial telemetry) and never clears valid
+// accumulated output.
 func (c *call) appendFinishReason(reason string) {
-	if len(c.finishReasons) < maxChoices && c.charge(len(reason)) {
-		c.finishReasons = append(c.finishReasons, reason)
+	if len(c.finishReasons) >= maxChoices {
+		return
 	}
+	if c.deltaBytes+len(reason) > c.captureCap {
+		c.partial = true
+		return
+	}
+	c.deltaBytes += len(reason)
+	c.finishReasons = append(c.finishReasons, reason)
 }
 
 // consumeInto folds one stream choice into the call state and reports

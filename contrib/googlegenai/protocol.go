@@ -121,10 +121,19 @@ func parseModelResource(escapedPath string) (model, version, qualified string, m
 		}
 	case len(rest) == 8 && rest[0] == "projects" && rest[2] == "locations" &&
 		rest[4] == "publishers" && rest[6] == "models":
+		// Every variable segment must be nonempty, decodable, and
+		// bounded: an empty project, location, or publisher is not a
+		// production and must never cause body inspection.
+		if !validSegments(rest[1], rest[3], rest[5]) {
+			break
+		}
 		if decoded, ok := decodeSegment(rest[7]); ok {
 			return decoded, version, "", true
 		}
 	case len(rest) >= 5 && rest[0] == "projects" && rest[2] == "locations":
+		if !validSegments(rest[1], rest[3]) {
+			break
+		}
 		tail := rest
 		if len(tail) > 8 {
 			tail = tail[len(tail)-8:]
@@ -134,6 +143,17 @@ func parseModelResource(escapedPath string) (model, version, qualified string, m
 		}
 	}
 	return "", version, "", false
+}
+
+// validSegments reports whether every given path segment is a
+// nonempty, decodable, bounded identifier.
+func validSegments(segments ...string) bool {
+	for _, segment := range segments {
+		if _, ok := decodeSegment(segment); !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeSegment(segment string) (string, bool) {

@@ -67,16 +67,22 @@ func TestLegacyFunctionCallDeltas(t *testing.T) {
 	}
 }
 
-// TestFinishReasonBytesCharged locks that retained metadata strings
-// count against the capture cap.
+// TestFinishReasonBytesCharged locks the field-aware budget: an
+// over-cap finish reason is dropped and marked partial while valid
+// accumulated output is preserved, never erased by metadata overflow.
 func TestFinishReasonBytesCharged(t *testing.T) {
 	call := &call{route: chatRoute(), captureCap: 8}
+	call.FeedEvent([]byte(`{"choices":[{"index":0,"delta":{"content":"seven77"}}]}`))
 	call.FeedEvent([]byte(`{"choices":[{"index":0,"delta":{},"finish_reason":"this-reason-exceeds-the-cap"}]}`))
-	if !call.Result().TelemetryPartial {
+	result := call.Result()
+	if !result.TelemetryPartial {
 		t.Fatal("over-cap finish reason not reported as partial")
 	}
 	if len(call.finishReasons) != 0 {
 		t.Fatalf("over-cap finish reason retained: %v", call.finishReasons)
+	}
+	if result.Output != "seven77" {
+		t.Fatalf("metadata overflow erased valid output: %v", result.Output)
 	}
 }
 

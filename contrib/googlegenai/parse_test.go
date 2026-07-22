@@ -229,3 +229,22 @@ func TestToolUsePromptTokensJoinInclusiveInput(t *testing.T) {
 		t.Fatalf("tool-use usage mapping %+v", usage)
 	}
 }
+
+// TestFinishReasonBudgetFieldAware locks the Google counterpart of the
+// field-aware metadata budget: over-cap finish reasons are dropped and
+// marked partial without erasing accumulated output.
+func TestFinishReasonBudgetFieldAware(t *testing.T) {
+	call := &call{route: generationRoute(), captureCap: 8}
+	call.FeedEvent([]byte(`{"candidates":[{"content":{"parts":[{"text":"seven77"}]}}]}`))
+	call.FeedEvent([]byte(`{"candidates":[{"finishReason":"REASON_EXCEEDING_THE_CAP","content":{"parts":[]}}]}`))
+	result := call.Result()
+	if !result.TelemetryPartial {
+		t.Fatal("over-cap finish reason not reported as partial")
+	}
+	if len(call.finishReasons) != 0 {
+		t.Fatalf("over-cap finish reason retained: %v", call.finishReasons)
+	}
+	if result.Output != "seven77" {
+		t.Fatalf("metadata overflow erased valid output: %v", result.Output)
+	}
+}
