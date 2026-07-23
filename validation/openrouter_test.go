@@ -110,9 +110,13 @@ func TestOpenRouterUnary(t *testing.T) {
 	traceID, err := r.call(t, "openrouter-unary", func(ctx context.Context) error {
 		var callErr error
 		response, callErr = client.Chat.Completions.New(ctx, openaigo.ChatCompletionNewParams{
-			Model:               openaigo.ChatModel(env["OPENROUTER_MODEL"]),
-			Temperature:         openaigo.Float(0),
-			MaxCompletionTokens: openaigo.Int(16),
+			Model:       openaigo.ChatModel(env["OPENROUTER_MODEL"]),
+			Temperature: openaigo.Float(0),
+			// Reasoning models (the configured paid model routes to
+			// one) consume hidden reasoning tokens before any content;
+			// 16 would yield an empty, inconclusive response. Still
+			// sub-cent per call.
+			MaxCompletionTokens: openaigo.Int(256),
 			Messages: []openaigo.ChatCompletionMessageParamUnion{
 				// The unique marker also defeats response caching, which
 				// would zero the provider cost.
@@ -128,6 +132,14 @@ func TestOpenRouterUnary(t *testing.T) {
 		t.Fatal("inconclusive: the SDK response carries no comparable output")
 	}
 
+	// The wire message is ground truth, not the typed struct:
+	// OpenRouter attaches reasoning/reasoning_details fields the SDK
+	// type drops, and the adapter correctly captures them
+	// (Mask-governed like all content).
+	var wireMessage map[string]any
+	if err := json.Unmarshal([]byte(response.Choices[0].Message.RawJSON()), &wireMessage); err != nil {
+		t.Fatalf("decode wire message: %v", err)
+	}
 	got := r.observation(t, traceID, "openai.chat.completions", ingested)
 	checkObservation(t, got, expectedObservation{
 		Name: "openai.chat.completions",
@@ -138,11 +150,8 @@ func TestOpenRouterUnary(t *testing.T) {
 		RequestModel: env["OPENROUTER_MODEL"],
 		TraceID:      traceID,
 		Usage:        openRouterUsage(response.Usage),
-		Output: map[string]any{
-			"role":    "assistant",
-			"content": response.Choices[0].Message.Content,
-		},
-		InputMarker: r.marker,
+		Output:       wireMessage,
+		InputMarker:  r.marker,
 		Metadata: map[string]string{
 			"provider":      "openrouter",
 			"finish_reason": string(response.Choices[0].FinishReason),
@@ -161,9 +170,13 @@ func TestOpenRouterStreaming(t *testing.T) {
 	var lastUsage *openaigo.CompletionUsage
 	traceID, err := r.call(t, "openrouter-stream", func(ctx context.Context) error {
 		stream := client.Chat.Completions.NewStreaming(ctx, openaigo.ChatCompletionNewParams{
-			Model:               openaigo.ChatModel(env["OPENROUTER_MODEL"]),
-			Temperature:         openaigo.Float(0),
-			MaxCompletionTokens: openaigo.Int(16),
+			Model:       openaigo.ChatModel(env["OPENROUTER_MODEL"]),
+			Temperature: openaigo.Float(0),
+			// Reasoning models (the configured paid model routes to
+			// one) consume hidden reasoning tokens before any content;
+			// 16 would yield an empty, inconclusive response. Still
+			// sub-cent per call.
+			MaxCompletionTokens: openaigo.Int(256),
 			StreamOptions:       openaigo.ChatCompletionStreamOptionsParam{IncludeUsage: openaigo.Bool(true)},
 			Messages: []openaigo.ChatCompletionMessageParamUnion{
 				openaigo.UserMessage("Reply with one short word. Marker: " + r.marker),

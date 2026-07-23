@@ -15,7 +15,7 @@ boundary.)
 
 | Task | Needs | Cost |
 | --- | --- | --- |
-| `task validate` | Langfuse + any of the provider credential sets below | 6 inference calls (temperature 0, max 16 output tokens) + 3 token-free error probes; unset providers skip, listing the missing variables |
+| `task validate` | Langfuse + any of the provider credential sets below | 6 inference calls (temperature 0; max 16 output tokens on Azure/Vertex, 256 on OpenRouter to clear reasoning-model hidden tokens) + 3 token-free error probes; unset providers skip, listing the missing variables |
 | `task parity` | Langfuse + Azure credentials, committed golden | 1 inference call |
 | `task parity:regen` | above + `uv` | 1 Python + 1 Go inference call; `ACCEPT=accept` replaces the golden |
 | `task matrix` | nothing (credential-free) | 0 provider calls; runs the synthetic suite per SDK version |
