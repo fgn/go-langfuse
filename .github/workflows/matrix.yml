@@ -23,12 +23,18 @@ jobs:
         with:
           go-version: "1.25.12"
           cache: true
+
       - name: Run matrix
         id: matrix
         continue-on-error: true
         run: |
           set -o pipefail
           cd validation && GOWORK=off go run -tags=validation ./cmd/matrix -out "$RUNNER_TEMP/support-matrix.md" 2>&1 | tee "$RUNNER_TEMP/matrix.log"
+
+      - name: Publish summary
+        if: always()
+        run: cat "$RUNNER_TEMP/support-matrix.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
       - name: Classify outcome
         id: classify
         run: |
@@ -38,30 +44,35 @@ jobs:
           elif grep -q "matrix has failing cells" "$RUNNER_TEMP/matrix.log"; then
             echo "kind=compatibility" >> "$GITHUB_OUTPUT"
           else
-            # Discovery/infrastructure failure: fail the run but leave
-            # the compatibility alert untouched.
             echo "kind=infrastructure" >> "$GITHUB_OUTPUT"
           fi
-      - name: Publish summary
-        if: always()
-        run: cat "$RUNNER_TEMP/support-matrix.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+
       - name: Maintain compatibility issue
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
           TITLE: "Provider-SDK compatibility matrix failing"
+          KIND: ${{ steps.classify.outputs.kind }}
         run: |
           set -euo pipefail
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          # One durable issue, resolved by exact title across open AND
-          # closed states, so regressions reopen rather than duplicate.
           gh label create compatibility --force --description "automated compatibility alerts" --color D93F0B 2>/dev/null || true
-          number=$(gh issue list --label compatibility --state all --search ""$TITLE" in:title" --json number,title --jq "[.[] | select(.title == "$TITLE")][0].number // empty")
-          case "${{ steps.matrix.outcome }}" in
-            failure)
+          # One durable issue resolved by exact title match across all
+          # states, independent of label membership; the title is
+          # passed only through jq --arg, never interpolated into a
+          # program string.
+          number=$(gh issue list --state all --limit 500 --json number,title |
+            jq -r --arg title "$TITLE" '[.[] | select(.title == $title)][0].number // empty')
+          case "$KIND" in
+            compatibility)
               body="The weekly compatibility matrix has failing cells. Run: $run_url"
               if [ -n "$number" ]; then
-                gh issue reopen "$number" 2>/dev/null || true
+                gh issue reopen "$number" || true
+                state=$(gh issue view "$number" --json state --jq .state)
+                if [ "$state" != "OPEN" ]; then
+                  echo "failed to reopen compatibility issue #$number" >&2
+                  exit 1
+                fi
                 gh issue comment "$number" --body "$body"
               else
                 gh issue create --title "$TITLE" --label compatibility --body "$body"
@@ -75,8 +86,19 @@ jobs:
                 fi
               fi
               ;;
-            *)
-              # Skipped/cancelled/infrastructure outcomes leave the
-              # alert untouched.
+            infrastructure)
+              # Discovery or runner failures leave the durable alert
+              # untouched; the propagation step still fails the run.
               ;;
           esac
+
+      - name: Propagate failure
+        if: always()
+        env:
+          KIND: ${{ steps.classify.outputs.kind }}
+        run: |
+          set -euo pipefail
+          if [ "$KIND" != "success" ]; then
+            echo "matrix outcome: $KIND" >&2
+            exit 1
+          fi

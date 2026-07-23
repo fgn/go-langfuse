@@ -353,7 +353,7 @@ func goParityObservation(t *testing.T) observation {
 	if err != nil {
 		t.Fatalf("parity Go call: %v", err)
 	}
-	return r.observation(t, traceID, "openai.chat.completions")
+	return r.observation(t, traceID, "openai.chat.completions", ingested)
 }
 
 // TestParityRegen is the regeneration flow: PARITY_PYTHON_TRACE names
@@ -369,7 +369,7 @@ func TestParityRegen(t *testing.T) {
 		t.Fatalf("PARITY_PYTHON_TRACE %q is not a lowercase 32-hex trace ID; the Python oracle failed to report its trace", pythonTrace)
 	}
 	r := newRun(t)
-	pythonObs := r.observation(t, pythonTrace, "OpenAI-generation")
+	pythonObs := r.observation(t, pythonTrace, "OpenAI-generation", ingested)
 	pythonCanonical, err := canonicalize(pythonObs, false)
 	if err != nil {
 		t.Fatalf("canonicalize Python observation: %v", err)
