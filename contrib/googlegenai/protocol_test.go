@@ -40,7 +40,8 @@ func TestRecognizeRouteGrammar(t *testing.T) {
 			provider:  "google-genai",
 		},
 		{
-			url:       "https://eu-aiplatform.googleapis.com/v1beta1/projects/proj-1/locations/eu/publishers/google/models/gemini-3.6-flash:generateContent",
+			// Multi-regional endpoint host (genai uses this for "eu").
+			url:       "https://aiplatform.eu.rep.googleapis.com/v1beta1/projects/proj-1/locations/eu/publishers/google/models/gemini-3.6-flash:generateContent",
 			wantOK:    true,
 			wantName:  "genai.generate_content",
 			wantModel: "gemini-3.6-flash",
