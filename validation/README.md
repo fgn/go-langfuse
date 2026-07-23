@@ -5,15 +5,17 @@ real provider behavior correctly, judged by reading traces back
 through the Langfuse public API with each provider SDK's own response
 as ground truth. No provider mocks in the smoke and parity tests. This
 module is excluded from the released Go modules, absent from go.work,
-and never runs in `task ci`; every file carries the `validation` build
-tag (parity additionally `parity`), so nothing here executes by
-accident.
+and none of its packages are loaded or executed by `task ci`; every
+file carries the `validation` build tag (parity additionally
+`parity`), so nothing here executes by accident. (Repository-wide
+source-format checks still inspect these files; that is the precise
+boundary.)
 
 ## Tasks
 
 | Task | Needs | Cost |
 | --- | --- | --- |
-| `task validate` | Langfuse + any of the provider credential sets below | 6 inference calls (temperature 0, max ~24 tokens) + 3 token-free error probes; unset providers skip, listing the missing variables |
+| `task validate` | Langfuse + any of the provider credential sets below | 6 inference calls (temperature 0, max 16 output tokens) + 3 token-free error probes; unset providers skip, listing the missing variables |
 | `task parity` | Langfuse + Azure credentials, committed golden | 1 inference call |
 | `task parity:regen` | above + `uv` | 1 Python + 1 Go inference call; `ACCEPT=accept` replaces the golden |
 | `task matrix` | nothing (credential-free) | 0 provider calls; runs the synthetic suite per SDK version |

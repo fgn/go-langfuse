@@ -72,7 +72,7 @@ func vertexClient(t *testing.T, r *run, env map[string]string) *genai.Client {
 func noThinking() *genai.GenerateContentConfig {
 	return &genai.GenerateContentConfig{
 		Temperature:     genai.Ptr[float32](0),
-		MaxOutputTokens: 32,
+		MaxOutputTokens: 16,
 		CandidateCount:  1,
 		ThinkingConfig:  &genai.ThinkingConfig{ThinkingBudget: genai.Ptr[int32](0)},
 	}
@@ -103,10 +103,15 @@ func vertexUsage(usage *genai.GenerateContentResponseUsageMetadata) map[string]i
 	return buckets
 }
 
-// vertexModelExpectation applies the adapter contract: a response
-// modelVersion is the recorded model; without one the model field is
-// absent and the URL model remains provenance metadata.
+// vertexModelExpectation applies the adapter contract confirmed by
+// real-provider runs: the URL-derived model is recorded at start
+// (trusted, caller-controlled), a response modelVersion overrides it,
+// and request_model metadata appears only when the two differ.
 func vertexModelExpectation(want *expectedObservation, modelVersion, urlModel string) {
+	if modelVersion == "" {
+		want.Model = urlModel
+		return
+	}
 	want.Model = modelVersion
 	want.RequestModel = urlModel
 }
@@ -140,10 +145,11 @@ func TestVertexUnary(t *testing.T) {
 		}
 	}
 	want := expectedObservation{
-		Name:  "genai.generate_content",
-		Type:  "GENERATION",
-		Usage: vertexUsage(response.UsageMetadata),
-		OutputFields: map[string]any{
+		Name:    "genai.generate_content",
+		Type:    "GENERATION",
+		TraceID: traceID,
+		Usage:   vertexUsage(response.UsageMetadata),
+		Output: map[string]any{
 			"role":  response.Candidates[0].Content.Role,
 			"parts": parts,
 		},
@@ -155,7 +161,7 @@ func TestVertexUnary(t *testing.T) {
 	}
 	vertexModelExpectation(&want, response.ModelVersion, env["VERTEX_MODEL"])
 
-	got := r.observation(t, traceID, "genai.generate_content")
+	got := r.observation(t, traceID, "genai.generate_content", ingested)
 	checkObservation(t, got, want)
 }
 
@@ -205,6 +211,7 @@ func TestVertexStreaming(t *testing.T) {
 	want := expectedObservation{
 		Name:        "genai.generate_content_stream",
 		Type:        "GENERATION",
+		TraceID:     traceID,
 		Usage:       vertexUsage(lastUsage),
 		Output:      aggregated.String(),
 		InputMarker: r.marker,
@@ -216,7 +223,7 @@ func TestVertexStreaming(t *testing.T) {
 	}
 	vertexModelExpectation(&want, lastModelVersion, env["VERTEX_MODEL"])
 
-	got := r.observation(t, traceID, "genai.generate_content_stream")
+	got := r.observation(t, traceID, "genai.generate_content_stream", ingested)
 	checkObservation(t, got, want)
 }
 
@@ -244,10 +251,12 @@ func TestVertexError(t *testing.T) {
 
 	got := r.observation(t, traceID, "genai.generate_content")
 	checkObservation(t, got, expectedObservation{
-		Name:         "genai.generate_content",
-		Type:         "GENERATION",
-		RequestModel: invalid,
-		Status:       fmt.Sprintf("http %d", apiErr.Code),
-		Metadata:     map[string]string{"provider": "google-vertex"},
+		Name:        "genai.generate_content",
+		Type:        "GENERATION",
+		Model:       invalid, // the URL model is recorded even for failures
+		TraceID:     traceID,
+		InputMarker: r.marker,
+		Status:      fmt.Sprintf("http %d", apiErr.Code),
+		Metadata:    map[string]string{"provider": "google-vertex"},
 	})
 }

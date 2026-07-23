@@ -3,12 +3,14 @@
 package validation
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -53,8 +55,9 @@ type provenance struct {
 type shape struct {
 	Kind string           `json:"kind"` // object, array, string, number, bool, null, absent
 	Keys map[string]shape `json:"keys,omitempty"`
-	Elem *shape           `json:"elem,omitempty"`
-	Len  int              `json:"len,omitempty"` // arrays: length is semantic
+	// Elems is the ordered per-element projection: array length and
+	// element order are semantic.
+	Elems []shape `json:"elems,omitempty"`
 }
 
 func shapeOf(value any) shape {
@@ -68,10 +71,9 @@ func shapeOf(value any) shape {
 	case string:
 		return shape{Kind: "string"}
 	case []any:
-		s := shape{Kind: "array", Len: len(value)}
-		if len(value) > 0 {
-			elem := shapeOf(value[0])
-			s.Elem = &elem
+		s := shape{Kind: "array", Elems: make([]shape, 0, len(value))}
+		for _, item := range value {
+			s.Elems = append(s.Elems, shapeOf(item))
 		}
 		return s
 	case map[string]any:
@@ -135,16 +137,24 @@ func canonicalize(obs observation, stream bool) (canonical, error) {
 	if stream {
 		mode = "stream"
 	}
-	var input, output any
-	if len(obs.Input) > 0 {
-		if err := json.Unmarshal(obs.Input, &input); err != nil {
-			return canonical{}, fmt.Errorf("input decode: %w", err)
+	// Absent fields and explicit JSON null are distinct facts.
+	fieldShape := func(raw json.RawMessage) (shape, error) {
+		if len(raw) == 0 {
+			return shape{Kind: "absent"}, nil
 		}
+		var value any
+		if err := json.Unmarshal(raw, &value); err != nil {
+			return shape{}, err
+		}
+		return shapeOf(value), nil
 	}
-	if len(obs.Output) > 0 {
-		if err := json.Unmarshal(obs.Output, &output); err != nil {
-			return canonical{}, fmt.Errorf("output decode: %w", err)
-		}
+	inputShape, err := fieldShape(obs.Input)
+	if err != nil {
+		return canonical{}, fmt.Errorf("input decode: %w", err)
+	}
+	outputShape, err := fieldShape(obs.Output)
+	if err != nil {
+		return canonical{}, fmt.Errorf("output decode: %w", err)
 	}
 	return canonical{
 		SchemaVersion: canonicalSchemaVersion,
@@ -153,9 +163,102 @@ func canonicalize(obs observation, stream bool) (canonical, error) {
 		Operation:     operation,
 		Mode:          mode,
 		UsageBuckets:  buckets,
-		InputShape:    shapeOf(input),
-		OutputShape:   shapeOf(output),
+		InputShape:    inputShape,
+		OutputShape:   outputShape,
 	}, nil
+}
+
+// decodeGolden strictly decodes and validates a golden: unknown JSON
+// fields, invalid enums, unknown shape kinds, duplicate usage
+// buckets, and arbitrary provenance strings are all rejected, so a
+// golden cannot smuggle unapproved content past the sealed schema.
+func decodeGolden(raw []byte) (canonical, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var golden canonical
+	if err := decoder.Decode(&golden); err != nil {
+		return canonical{}, err
+	}
+	if decoder.More() {
+		return canonical{}, fmt.Errorf("trailing content after golden document")
+	}
+	if err := validateCanonical(golden); err != nil {
+		return canonical{}, err
+	}
+	return golden, nil
+}
+
+var provenanceShape = regexp.MustCompile(`^[A-Za-z0-9 .,:;/()_-]{0,120}$`)
+
+func validateCanonical(c canonical) error {
+	if c.SchemaVersion != canonicalSchemaVersion {
+		return fmt.Errorf("schema v%d, canonicalizer v%d; regenerate", c.SchemaVersion, canonicalSchemaVersion)
+	}
+	if c.Kind != "generation" {
+		return fmt.Errorf("kind %q outside enum", c.Kind)
+	}
+	if !enumLevels[c.Level] {
+		return fmt.Errorf("level %q outside enum", c.Level)
+	}
+	if c.Operation != "chat.completion" {
+		return fmt.Errorf("operation %q outside enum", c.Operation)
+	}
+	if c.Mode != "unary" && c.Mode != "stream" {
+		return fmt.Errorf("mode %q outside enum", c.Mode)
+	}
+	seen := map[string]bool{}
+	for _, bucket := range c.UsageBuckets {
+		canonicalName := false
+		for _, mapped := range usageAliases {
+			if bucket == mapped {
+				canonicalName = true
+			}
+		}
+		if !canonicalName {
+			return fmt.Errorf("usage bucket %q outside canonical set", bucket)
+		}
+		if seen[bucket] {
+			return fmt.Errorf("duplicate usage bucket %q", bucket)
+		}
+		seen[bucket] = true
+	}
+	for _, field := range []string{
+		c.Provenance.Note, c.Provenance.LangfuseServer,
+		c.Provenance.PythonLangfuse, c.Provenance.PythonOpenAI, c.Provenance.AzureAPIVersion,
+	} {
+		if !provenanceShape.MatchString(field) {
+			return fmt.Errorf("provenance value outside the constrained format")
+		}
+	}
+	if err := validateShape(c.InputShape); err != nil {
+		return fmt.Errorf("input shape: %w", err)
+	}
+	if err := validateShape(c.OutputShape); err != nil {
+		return fmt.Errorf("output shape: %w", err)
+	}
+	return nil
+}
+
+var shapeKinds = map[string]bool{
+	"object": true, "array": true, "string": true,
+	"number": true, "bool": true, "null": true, "absent": true,
+}
+
+func validateShape(s shape) error {
+	if !shapeKinds[s.Kind] {
+		return fmt.Errorf("shape kind %q outside enum", s.Kind)
+	}
+	for _, child := range s.Keys {
+		if err := validateShape(child); err != nil {
+			return err
+		}
+	}
+	for _, child := range s.Elems {
+		if err := validateShape(child); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // diffCanonical reports every divergence in both directions.
@@ -175,19 +278,19 @@ func diffCanonical(t *testing.T, got, want canonical) {
 // normalized Python snapshot. Python-side drift is detected only by
 // regeneration, which actually executes the pinned oracle.
 func TestParityAzure(t *testing.T) {
+	// A missing golden is fatal, not a skip: the feature is absent
+	// without it. Only missing live credentials may skip (in newRun
+	// and azureEnv).
 	golden, err := os.ReadFile(goldenPath)
 	if os.IsNotExist(err) {
-		t.Skipf("no golden at %s yet; run `task parity:regen` with Azure and Langfuse credentials", goldenPath)
+		t.Fatalf("no golden at %s; run `task parity:regen` with Azure and Langfuse credentials before shipping parity", goldenPath)
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	var want canonical
-	if err := json.Unmarshal(golden, &want); err != nil {
-		t.Fatalf("golden decode: %v", err)
-	}
-	if want.SchemaVersion != canonicalSchemaVersion {
-		t.Fatalf("golden schema v%d, canonicalizer v%d; regenerate the golden", want.SchemaVersion, canonicalSchemaVersion)
+	want, err := decodeGolden(golden)
+	if err != nil {
+		t.Fatalf("golden rejected: %v", err)
 	}
 
 	got := goParityObservation(t)
@@ -234,8 +337,11 @@ func goParityObservation(t *testing.T) observation {
 // golden is replaced only with PARITY_REGEN=accept.
 func TestParityRegen(t *testing.T) {
 	pythonTrace := os.Getenv("PARITY_PYTHON_TRACE")
-	if pythonTrace == "" {
+	if os.Getenv("PARITY_REGEN") == "" {
 		t.Skip("regeneration only; run via `task parity:regen`")
+	}
+	if len(pythonTrace) != 32 {
+		t.Fatalf("PARITY_PYTHON_TRACE %q is not a 32-hex trace ID; the Python oracle failed to report its trace", pythonTrace)
 	}
 	r := newRun(t)
 	pythonObs := r.observation(t, pythonTrace, "OpenAI-generation")
@@ -264,20 +370,37 @@ func TestParityRegen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmp := filepath.Join(t.TempDir(), "azure.golden.json")
-	if err := os.WriteFile(tmp, candidate, 0o644); err != nil {
+	// The candidate must survive its own sealed-schema validation
+	// before it can ever become a golden.
+	if _, err := decodeGolden(candidate); err != nil {
+		t.Fatalf("candidate rejected by the sealed schema: %v", err)
+	}
+	// Persist outside test-owned cleanup so a rejected candidate can be
+	// inspected; the path is gitignored.
+	candidatePath := goldenPath + ".candidate"
+	if err := os.MkdirAll(filepath.Dir(candidatePath), 0o755); err != nil {
 		t.Fatal(err)
+	}
+	if err := os.WriteFile(candidatePath, candidate, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if previous, err := os.ReadFile(goldenPath); err == nil {
+		if old, err := decodeGolden(previous); err == nil {
+			t.Logf("old-vs-candidate diff follows (empty when identical)")
+			diffCanonical(t, old, pythonCanonical)
+		}
 	}
 	t.Logf("candidate golden:\n%s", candidate)
 
 	if os.Getenv("PARITY_REGEN") != "accept" {
-		t.Logf("candidate written to %s; rerun with PARITY_REGEN=accept to replace %s", tmp, goldenPath)
+		t.Logf("candidate at %s; rerun with ACCEPT=accept to replace %s", candidatePath, goldenPath)
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(goldenPath), 0o755); err != nil {
+	replacement := goldenPath + ".tmp"
+	if err := os.WriteFile(replacement, candidate, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(goldenPath, candidate, 0o644); err != nil {
+	if err := os.Rename(replacement, goldenPath); err != nil {
 		t.Fatal(err)
 	}
 	t.Logf("golden replaced: %s", goldenPath)
@@ -302,8 +425,8 @@ func TestCanonicalizerFixtures(t *testing.T) {
 	if got.Operation != "chat.completion" || got.Mode != "unary" {
 		t.Fatalf("projection %+v", got)
 	}
-	if got.InputShape.Kind != "array" || got.InputShape.Len != 1 ||
-		got.InputShape.Elem.Keys["content"].Kind != "string" {
+	if got.InputShape.Kind != "array" || len(got.InputShape.Elems) != 1 ||
+		got.InputShape.Elems[0].Keys["content"].Kind != "string" {
 		t.Fatalf("input shape %+v", got.InputShape)
 	}
 	if !reflect.DeepEqual(got.UsageBuckets, []string{"input", "output", "total"}) {

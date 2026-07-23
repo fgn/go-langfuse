@@ -9,6 +9,10 @@ permissions:
   contents: read
   issues: write
 
+concurrency:
+  group: compatibility-matrix
+  cancel-in-progress: false
+
 jobs:
   matrix:
     runs-on: ubuntu-latest
@@ -31,16 +35,34 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          TITLE: "Provider-SDK compatibility matrix failing"
         run: |
           set -euo pipefail
-          existing=$(gh issue list --label compatibility --state open --json number --jq '.[0].number // empty')
-          if [ "${{ steps.matrix.outcome }}" = "failure" ]; then
-            body="The weekly compatibility matrix has failing cells. See the run summary: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-            if [ -n "$existing" ]; then
-              gh issue comment "$existing" --body "$body"
-            else
-              gh issue create --title "Provider-SDK compatibility matrix failing" --label compatibility --body "$body"
-            fi
-          elif [ -n "$existing" ]; then
-            gh issue close "$existing" --comment "Matrix recovered: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          fi
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          # One durable issue, resolved by exact title across open AND
+          # closed states, so regressions reopen rather than duplicate.
+          gh label create compatibility --force --description "automated compatibility alerts" --color D93F0B 2>/dev/null || true
+          number=$(gh issue list --label compatibility --state all --search ""$TITLE" in:title" --json number,title --jq "[.[] | select(.title == "$TITLE")][0].number // empty")
+          case "${{ steps.matrix.outcome }}" in
+            failure)
+              body="The weekly compatibility matrix has failing cells. Run: $run_url"
+              if [ -n "$number" ]; then
+                gh issue reopen "$number" 2>/dev/null || true
+                gh issue comment "$number" --body "$body"
+              else
+                gh issue create --title "$TITLE" --label compatibility --body "$body"
+              fi
+              ;;
+            success)
+              if [ -n "$number" ]; then
+                state=$(gh issue view "$number" --json state --jq .state)
+                if [ "$state" = "OPEN" ]; then
+                  gh issue close "$number" --comment "Matrix recovered: $run_url"
+                fi
+              fi
+              ;;
+            *)
+              # Skipped/cancelled/infrastructure outcomes leave the
+              # alert untouched.
+              ;;
+          esac

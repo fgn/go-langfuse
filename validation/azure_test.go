@@ -60,6 +60,10 @@ func azureUsage(usage gopenai.Usage) map[string]int64 {
 	return buckets
 }
 
+func ingested(obs observation) bool {
+	return len(obs.UsageDetails) > 0 && len(obs.Output) > 0
+}
+
 func TestAzureUnary(t *testing.T) {
 	r := newRun(t)
 	env := azureEnv(t)
@@ -71,7 +75,7 @@ func TestAzureUnary(t *testing.T) {
 		response, callErr = client.CreateChatCompletion(ctx, gopenai.ChatCompletionRequest{
 			Model:       "azure-mapped", // replaced by the explicit mapper
 			Temperature: 0,
-			MaxTokens:   24,
+			MaxTokens:   16,
 			Messages: []gopenai.ChatCompletionMessage{
 				{
 					Role:    gopenai.ChatMessageRoleUser,
@@ -88,14 +92,15 @@ func TestAzureUnary(t *testing.T) {
 		t.Fatal("inconclusive: the SDK response carries no comparable output")
 	}
 
-	got := r.observation(t, traceID, "openai.chat.completions")
+	got := r.observation(t, traceID, "openai.chat.completions", ingested)
 	checkObservation(t, got, expectedObservation{
 		Name:         "openai.chat.completions",
 		Type:         "GENERATION",
 		Model:        response.Model,
 		RequestModel: "azure-mapped",
+		TraceID:      traceID,
 		Usage:        azureUsage(response.Usage),
-		OutputFields: map[string]any{
+		Output: map[string]any{
 			"role":    "assistant",
 			"content": response.Choices[0].Message.Content,
 		},
@@ -121,7 +126,7 @@ func TestAzureStreaming(t *testing.T) {
 		stream, callErr := client.CreateChatCompletionStream(ctx, gopenai.ChatCompletionRequest{
 			Model:         "azure-mapped",
 			Temperature:   0,
-			MaxTokens:     24,
+			MaxTokens:     16,
 			Stream:        true,
 			StreamOptions: &gopenai.StreamOptions{IncludeUsage: true},
 			Messages: []gopenai.ChatCompletionMessage{
@@ -167,12 +172,13 @@ func TestAzureStreaming(t *testing.T) {
 		t.Fatal("inconclusive: no usage-bearing chunk despite include_usage")
 	}
 
-	got := r.observation(t, traceID, "openai.chat.completions")
+	got := r.observation(t, traceID, "openai.chat.completions", ingested)
 	checkObservation(t, got, expectedObservation{
 		Name:         "openai.chat.completions",
 		Type:         "GENERATION",
 		Model:        lastModel,
 		RequestModel: "azure-mapped",
+		TraceID:      traceID,
 		Usage:        azureUsage(*lastUsage),
 		Output:       aggregated.String(),
 		InputMarker:  r.marker,
@@ -180,6 +186,7 @@ func TestAzureStreaming(t *testing.T) {
 		Metadata: map[string]string{
 			"provider":         "azure-openai",
 			"azure.deployment": env["AZURE_OPENAI_DEPLOYMENT"],
+			"api_version":      env["AZURE_OPENAI_API_VERSION"],
 			"finish_reason":    finishReason,
 		},
 	})
@@ -214,12 +221,16 @@ func TestAzureError(t *testing.T) {
 
 	got := r.observation(t, traceID, "openai.chat.completions")
 	checkObservation(t, got, expectedObservation{
-		Name:   "openai.chat.completions",
-		Type:   "GENERATION",
-		Status: fmt.Sprintf("http %d", apiErr.HTTPStatusCode),
+		Name:         "openai.chat.completions",
+		Type:         "GENERATION",
+		RequestModel: "azure-mapped",
+		TraceID:      traceID,
+		InputMarker:  r.marker,
+		Status:       fmt.Sprintf("http %d", apiErr.HTTPStatusCode),
 		Metadata: map[string]string{
 			"provider":         "azure-openai",
 			"azure.deployment": invalid,
+			"api_version":      env["AZURE_OPENAI_API_VERSION"],
 		},
 	})
 }

@@ -388,3 +388,38 @@ func TestBodyAbandonedWithoutCloseFinalizesViaSafetyNet(t *testing.T) {
 		}
 	}
 }
+
+// TestBodyUnaryDecoderCloseWithoutEOF locks the real-wire pattern that
+// synthetic servers hide: a JSON decoder reads exactly the document
+// bytes, never sees io.EOF on a keep-alive connection, and closes. A
+// complete captured document makes Close completion, not
+// closed_early; an incomplete prefix stays closed_early.
+func TestBodyUnaryDecoderCloseWithoutEOF(t *testing.T) {
+	call := &scriptedCall{}
+	body := `{"ok":true,"content":"hello"}`
+	reader := &errReader{data: []byte(body), err: nil} // (n, nil); EOF never returned
+	got, wrapper := drive(t, t.Context(), io.NopCloser(reader), call, modeUnary, nil)
+	buf := make([]byte, len(body))
+	if _, err := wrapper.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+	if err := wrapper.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got.outcome.State != StateComplete {
+		t.Fatalf("decoder-style close: %+v, want StateComplete", got.outcome)
+	}
+	if string(call.unary) != body {
+		t.Fatalf("FinishUnary body %q", call.unary)
+	}
+
+	partial := &scriptedCall{}
+	reader = &errReader{data: []byte(`{"truncated":`), err: nil}
+	got, wrapper = drive(t, t.Context(), io.NopCloser(reader), partial, modeUnary, nil)
+	buf = make([]byte, 16)
+	_, _ = wrapper.Read(buf)
+	_ = wrapper.Close()
+	if got.outcome.State != StateClosedEarly {
+		t.Fatalf("incomplete document close: %+v, want StateClosedEarly", got.outcome)
+	}
+}

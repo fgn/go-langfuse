@@ -27,20 +27,18 @@ client = AzureOpenAI(
     api_key=os.environ["AZURE_OPENAI_API_KEY"],
     api_version=os.environ["AZURE_OPENAI_API_VERSION"],
 )
-kwargs = dict(
+# The wrapper's integration keyword is trace_id (verified against the
+# pinned 4.14.1 OpenAiArgsExtractor). The oracle is exact-pinned, so
+# signature drift must fail loudly, never fall back.
+completion = client.chat.completions.create(
+    trace_id=trace_id,
     model=os.environ["AZURE_OPENAI_DEPLOYMENT"],
     temperature=0,
-    max_tokens=24,
+    max_tokens=16,
     messages=[{"role": "user", "content": f"Reply with one short word. Marker: {marker}"}],
 )
-try:
-    completion = client.chat.completions.create(langfuse_trace_id=trace_id, **kwargs)
-except TypeError:
-    # Wrapper signature drift: fall back to the wrapper's own trace and
-    # report it instead.
-    completion = client.chat.completions.create(**kwargs)
-    trace_id = langfuse.get_current_trace_id() or ""
 
 assert completion.choices[0].message.content
 langfuse.flush()
+assert len(trace_id) == 32 and all(c in "0123456789abcdef" for c in trace_id), trace_id
 print(trace_id)

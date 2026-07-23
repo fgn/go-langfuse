@@ -3,6 +3,7 @@ package wiretap
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"runtime"
@@ -267,14 +268,31 @@ func (w *bodyWrapper) terminalRead(err error) {
 	w.finalizeLocked(StateFailed)
 }
 
-// closeTelemetry handles Close before any terminal event: the
-// observable fact is closed_early; cancellation is asserted only with
-// causal evidence recorded separately as metadata by the transport.
+// closeTelemetry handles Close before a transport-terminal event.
+// Unary JSON consumers routinely decode exactly one value and close
+// without ever reading EOF (json.Decoder does precisely this; real
+// keep-alive connections then never surface io.EOF, unlike httptest
+// servers that deliver it with the final bytes). When the captured
+// unary bytes already form a complete JSON document, the protocol
+// finished and Close is completion. Anything else remains the
+// observable closed_early fact.
 func (w *bodyWrapper) closeTelemetry() {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.finalized {
 		return
+	}
+	if w.mode == modeUnary || w.mode == modeUndecided {
+		body := w.unary
+		if w.mode == modeUndecided {
+			body = w.sniff
+		}
+		if !w.unaryOver && len(body) > 0 && json.Valid(body) {
+			defer w.recoverParse()
+			w.call.FinishUnary(body, w.status)
+			w.finalizeLocked(StateComplete)
+			return
+		}
 	}
 	w.finalizeLocked(StateClosedEarly)
 }

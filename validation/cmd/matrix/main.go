@@ -12,6 +12,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -65,16 +66,26 @@ func run(outPath string) error {
 	}
 	defer os.RemoveAll(tree)
 
+	goVersion, _ := cellCmd(".", "go", "version")
+
 	var results []cellResult
 	failed := false
+	cellIndex := 0
 	for _, sdk := range m.SDKs {
 		versions := append([]string(nil), sdk.Supported...)
-		if candidate := newestStableAbove(sdk.Module, maxVersion(sdk.Supported)); candidate != "" {
+		candidate, err := newestStableAbove(sdk.Module, maxVersion(sdk.Supported))
+		if err != nil {
+			// A discovery failure must never masquerade as "no new
+			// versions": that would green a run that probed nothing.
+			return fmt.Errorf("version discovery for %s failed: %w", sdk.Module, err)
+		}
+		if candidate != "" {
 			versions = append(versions, candidate)
 		}
 		for _, version := range versions {
+			cellIndex++
 			candidate := !contains(sdk.Supported, version)
-			result := runCell(tree, sdk.Module, version, candidate)
+			result := runCell(tree, cellIndex, sdk.Module, version, candidate)
 			results = append(results, result)
 			status := "ok"
 			if !result.pass {
@@ -85,7 +96,7 @@ func run(outPath string) error {
 		}
 	}
 
-	if err := writeMarkdown(outPath, results); err != nil {
+	if err := writeMarkdown(outPath, results, strings.TrimSpace(goVersion)); err != nil {
 		return err
 	}
 	if failed {
@@ -139,9 +150,17 @@ func buildTree(repoRoot string) (string, error) {
 	return tree, nil
 }
 
-func runCell(tree, module, version string, candidate bool) cellResult {
+// runCell clones the pristine integrationtest module into a fresh
+// per-cell directory before any edit: cells never share mutated
+// go.mod/go.sum state, so one SDK choice cannot leak into the next.
+func runCell(tree string, index int, module, version string, candidate bool) cellResult {
 	result := cellResult{module: module, version: version, candidate: candidate}
-	cell := filepath.Join(tree, "contrib/integrationtest")
+	pristine := filepath.Join(tree, "contrib/integrationtest")
+	cell := filepath.Join(tree, "contrib", fmt.Sprintf("integrationtest-cell%d", index))
+	if err := copyPath(pristine, cell); err != nil {
+		result.phase, result.detail = "setup", err.Error()
+		return result
+	}
 
 	steps := [][]string{
 		{"go", "mod", "edit", "-require", module + "@" + version},
@@ -161,53 +180,58 @@ func runCell(tree, module, version string, candidate bool) cellResult {
 	}
 	if out, err := cellCmd(cell, "go", "test", "-mod=readonly", "-count=1", "./..."); err != nil {
 		result.phase, result.detail = "test", firstLine(out)
+		if graph, graphErr := cellCmd(cell, "go", "list", "-m", "all"); graphErr == nil {
+			// Attribution: the resolved graph accompanies every failure.
+			fmt.Printf("resolved graph for failing cell %s@%s:\n%s\n", module, version, graph)
+		}
 		return result
 	}
 	result.pass = true
 	return result
 }
 
-// cellCmd runs one command with the allowlisted hermetic environment:
-// workspace off, local toolchain, explicit proxy and sumdb, ambient
-// GOFLAGS/GOENV neutralized; module and build caches are shared
-// deliberately (checksum-verified and content-addressed).
+// cellCmd runs one command with the allowlisted hermetic environment
+// and a hard per-command deadline: workspace off, local toolchain,
+// FIXED proxy and sumdb (never ambient overrides), GOFLAGS/GOENV
+// neutralized; module and build caches are shared deliberately
+// (checksum-verified and content-addressed).
 func cellCmd(dir, name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.Env = append(hermeticEnv(),
 		"HOME="+os.Getenv("HOME"),
 		"PATH="+os.Getenv("PATH"),
 	)
 	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return string(out), fmt.Errorf("timed out after 10m: %w", ctx.Err())
+	}
 	return string(out), err
 }
 
 func hermeticEnv() []string {
+	home := os.Getenv("HOME")
 	return []string{
 		"GOWORK=off",
 		"GOTOOLCHAIN=local",
 		"GOFLAGS=",
 		"GOENV=off",
-		"GOPROXY=" + envOr("GOPROXY", "https://proxy.golang.org,direct"),
-		"GOSUMDB=" + envOr("GOSUMDB", "sum.golang.org"),
-		"GOMODCACHE=" + envOr("GOMODCACHE", filepath.Join(os.Getenv("HOME"), "go", "pkg", "mod")),
-		"GOPATH=" + envOr("GOPATH", filepath.Join(os.Getenv("HOME"), "go")),
+		"GOPROXY=https://proxy.golang.org,direct",
+		"GOSUMDB=sum.golang.org",
+		"GOMODCACHE=" + filepath.Join(home, "go", "pkg", "mod"),
+		"GOPATH=" + filepath.Join(home, "go"),
 	}
-}
-
-func envOr(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
-	}
-	return fallback
 }
 
 // newestStableAbove returns the newest stable (non-prerelease) version
-// of the module above the floor, or "" when none exists.
-func newestStableAbove(module, floor string) string {
+// of the module above the floor, "" when none exists, and an error
+// when discovery itself failed (which must fail the run).
+func newestStableAbove(module, floor string) (string, error) {
 	out, err := cellCmd(".", "go", "list", "-m", "-versions", module+"@latest")
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("go list -m -versions: %s", firstLine(out))
 	}
 	fields := strings.Fields(out)
 	newest := ""
@@ -218,9 +242,9 @@ func newestStableAbove(module, floor string) string {
 		newest = field // `go list -m -versions` sorts ascending
 	}
 	if newest == "" || newest == floor || semverLE(newest, floor) {
-		return ""
+		return "", nil
 	}
-	return newest
+	return newest, nil
 }
 
 func maxVersion(versions []string) string {
@@ -297,10 +321,11 @@ func copyPath(src, dst string) error {
 	return os.WriteFile(dst, data, 0o644)
 }
 
-func writeMarkdown(path string, results []cellResult) error {
+func writeMarkdown(path string, results []cellResult, goVersion string) error {
 	var b strings.Builder
 	b.WriteString("# Tested provider-SDK transport compatibility\n\n")
-	b.WriteString("Generated by `task matrix` on " + time.Now().UTC().Format("2006-01-02") + ". ")
+	b.WriteString("Generated by `task matrix` on " + time.Now().UTC().Format("2006-01-02") +
+		" with `" + goVersion + "`. ")
 	b.WriteString("A checkmark means the canonical integration program compiled against\n")
 	b.WriteString("that SDK version and its calls flowed through the adapters with the\n")
 	b.WriteString("synthetic-wire suite's assertions passing on the repository's Go\n")

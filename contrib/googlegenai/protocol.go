@@ -79,6 +79,11 @@ func classifyProvider(host string) string {
 		return "google-genai"
 	case strings.HasSuffix(host, "aiplatform.googleapis.com"):
 		return "google-vertex"
+	case strings.HasPrefix(host, "aiplatform.") && strings.HasSuffix(host, ".rep.googleapis.com"):
+		// Multi-regional locations use regional endpoints shaped
+		// aiplatform.{location}.rep.googleapis.com (genai does this
+		// for "eu"; discovered by real-provider validation).
+		return "google-vertex"
 	default:
 		return "google-genai-compatible"
 	}
