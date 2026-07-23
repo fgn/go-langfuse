@@ -71,7 +71,7 @@ func handleRequest(ctx context.Context, provider *sdktrace.TracerProvider, lf *l
 		"generate-answer",
 		langfuse.TypeGeneration,
 		langfuse.ObservationAttributes{
-			Model: "gemini-2.5-flash",
+			Model: "gemini-3.6-flash",
 			Input: "Explain borrowed tracer providers.",
 		},
 	)

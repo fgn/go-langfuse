@@ -50,7 +50,7 @@ func run(ctx context.Context) error {
 		"generate-answer",
 		langfuse.TypeGeneration,
 		langfuse.ObservationAttributes{
-			Model: "gemini-2.5-flash",
+			Model: "gemini-3.6-flash",
 			Input: messages,
 		},
 	)

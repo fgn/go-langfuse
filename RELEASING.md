@@ -70,3 +70,18 @@ authority instead comes from the protected `main` branch, the auditable manual
 inputs, the protected `release` environment, and the workflow's scoped
 `contents: write` token. Configure those repository protections before the
 first release.
+
+## Contrib module releases
+
+The adapter modules (`contrib/openai`, `contrib/googlegenai`) version
+independently with slash tags (`contrib/openai/v0.1.0`). Use the same
+release workflow with the `module` input set to the module path; the
+tag is derived as `<module>/<version>`. Order matters: when a contrib
+release requires new core API, tag and publish the core release first,
+update the contrib `go.mod` to that released core version, and only
+then release the contrib module (the workflow verifies the declared
+core version is downloadable without the workspace). Each contrib
+module keeps its own `CHANGELOG.md`, which must contain the released
+version heading. After tagging, verify proxy installability from a
+clean directory: `GOMODCACHE=$(mktemp -d) go mod download
+github.com/fgn/go-langfuse/<module>@<version>`.

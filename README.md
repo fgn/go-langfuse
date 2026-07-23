@@ -95,7 +95,7 @@ func run(ctx context.Context) error {
 	messages := []string{question}
 	generationCtx, generation := lf.StartObservation(rootCtx, "generate-answer",
 		langfuse.TypeGeneration, langfuse.ObservationAttributes{
-			Model: "gemini-2.5-flash", Input: messages,
+			Model: "gemini-3.6-flash", Input: messages,
 		})
 	defer generation.End()
 
@@ -301,6 +301,36 @@ lf, err := langfuse.New(ctx, cfg)
 Neither mode ever changes the global OpenTelemetry provider. Borrowed-mode
 lifecycle and the one-client-per-provider rule are covered in the
 [existing OpenTelemetry guide](docs/existing-opentelemetry.md).
+
+## Provider instrumentation
+
+The core module has **no OpenAI and no Google dependencies**. Optional
+adapter modules instrument provider HTTP calls at the transport, so
+native clients (`sashabaranov/go-openai`, the official `openai-go`,
+`google.golang.org/genai`) stay exactly as they are. Install an
+adapter only when you want it, each versioned independently:
+
+```sh
+go get github.com/fgn/go-langfuse/contrib/openai       # OpenAI wire: OpenAI, Azure, compatibles
+go get github.com/fgn/go-langfuse/contrib/googlegenai  # Gemini wire: Developer API, Vertex AI
+```
+
+Attach at client construction; call sites do not change:
+
+```go
+cfg.HTTPClient = &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
+```
+
+Each recognized call records a generation or embedding observation
+under whatever observation is in the request context, with model,
+content, token usage, time-to-first-token for streams, and status. The
+adapters parse the wire format, not SDK types, so they carry no
+provider SDK dependencies; everything they record flows through this
+client's masking, capture, sampling, and limit controls. Scope,
+retry/metric semantics, the Vertex credentials composition, and the
+privacy boundary are documented in the
+[OpenAI adapter README](contrib/openai/README.md) and the
+[Google GenAI adapter README](contrib/googlegenai/README.md).
 
 ## Content and sensitive data
 

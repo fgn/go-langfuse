@@ -5,6 +5,20 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+- Add opt-in provider instrumentation as independent contrib modules:
+  `contrib/openai` (package `langfuseopenai`) records OpenAI-wire chat
+  completion, completion, and embedding calls, and `contrib/googlegenai`
+  (package `langfusegenai`) records Gemini generate, stream, and
+  embedding calls on both the Developer API and Vertex AI. The adapters
+  attach as an `http.RoundTripper` at client construction, parse the
+  provider wire format (no provider SDK dependencies; the core module
+  gains no dependencies), record one generation or embedding
+  observation per HTTP attempt with model, content, usage,
+  time-to-first-token, and wire-provable status, and route everything
+  through the core masking, capture, sampling, and limit controls. A
+  never-released `contrib/integrationtest` module exercises the real
+  provider SDKs, including the documented Vertex credentials
+  composition; `task ci` gains contrib sync, test, and purity gates.
 - Add runnable examples for prompt management (`examples/prompts`), scores
   (`examples/scores`), and deterministic trace sampling with a correlated
   LLM-judge gate (`examples/sampling`), and link them from the README

@@ -76,6 +76,38 @@ tasks:
       - test "$(go mod edit -json | jq -r .Go)" = "1.25.0"
       - test "$(go mod edit -json | jq -r .Toolchain)" = "go1.25.12"
 
+  contrib:sync:
+    desc: Mirror the wiretap package from contrib/openai into contrib/googlegenai
+    cmds:
+      - cp contrib/openai/internal/wiretap/*.go contrib/googlegenai/internal/wiretap/
+
+  contrib:sync:check:
+    desc: Verify the mirrored wiretap copies and their shared dependency versions are identical
+    cmds:
+      - diff -r contrib/openai/internal/wiretap contrib/googlegenai/internal/wiretap
+      - bash -c "diff <(grep -oE '(github.com/fgn/go-langfuse|go.opentelemetry.io/otel|go.opentelemetry.io/otel/trace) v[0-9.]+' contrib/openai/go.mod | sort) <(grep -oE '(github.com/fgn/go-langfuse|go.opentelemetry.io/otel|go.opentelemetry.io/otel/trace) v[0-9.]+' contrib/googlegenai/go.mod | sort)"
+
+  contrib:test:
+    desc: Lint and test the contrib and integration-test modules
+    deps: [install:golangci-lint]
+    cmds:
+      - cd contrib/openai && ../../bin/golangci-lint run --timeout 2m && go vet ./... && go test -race ./...
+      - cd contrib/googlegenai && ../../bin/golangci-lint run --timeout 2m && go vet ./... && go test -race ./...
+      - cd contrib/openai && go test ./internal/wiretap -run='^$' -fuzz=FuzzSSEFramer -fuzztime=2s
+      - cd contrib/googlegenai && go test ./internal/wiretap -run='^$' -fuzz=FuzzSSEFramer -fuzztime=2s
+      - cd contrib/integrationtest && go vet ./... && go test -race ./...
+
+  contrib:purity:check:
+    desc: Verify contrib modules against the released core without the workspace and without provider SDKs
+    vars:
+      PROVIDER_SDKS: sashabaranov|github.com/openai/|google.golang.org/genai|cloud.google.com
+    cmds:
+      - cd contrib/openai && GOWORK=off go mod tidy -diff && GOWORK=off go test -count=1 -mod=readonly ./...
+      - cd contrib/googlegenai && GOWORK=off go mod tidy -diff && GOWORK=off go test -count=1 -mod=readonly ./...
+      - "! grep -E '{{.PROVIDER_SDKS}}' contrib/openai/go.mod contrib/openai/go.sum contrib/googlegenai/go.mod contrib/googlegenai/go.sum"
+      - cd contrib/openai && GOWORK=off go list -deps ./... | (! grep -E '{{.PROVIDER_SDKS}}')
+      - cd contrib/googlegenai && GOWORK=off go list -deps ./... | (! grep -E '{{.PROVIDER_SDKS}}')
+
   ci:
     desc: Run all continuous-integration checks
     cmds:
@@ -87,6 +119,9 @@ tasks:
       - task: test
       - go vet -mod=readonly ./...
       - task: fuzz:check
+      - task: contrib:sync:check
+      - task: contrib:test
+      - task: contrib:purity:check
       - task: vuln:check
       - task: policy:check
 

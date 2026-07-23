@@ -101,7 +101,7 @@ func ExampleClient_StartObservation() {
 	// generation only after a stream is fully consumed.
 	generationCtx, generation := lf.StartObservation(ctx, "generate-answer",
 		langfuse.TypeGeneration, langfuse.ObservationAttributes{
-			Model: "gemini-2.5-flash",
+			Model: "gemini-3.6-flash",
 			Input: "What is context in Go?",
 		})
 	defer generation.End()
