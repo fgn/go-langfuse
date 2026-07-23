@@ -321,15 +321,25 @@ Attach at client construction; call sites do not change:
 cfg.HTTPClient = &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
 ```
 
-Each recognized call records a generation or embedding observation
-under whatever observation is in the request context, with model,
-content, token usage, time-to-first-token for streams, and status. The
-adapters parse the wire format, not SDK types, so they carry no
-provider SDK dependencies; everything they record flows through this
-client's masking, capture, sampling, and limit controls. Scope,
-retry/metric semantics, the Vertex credentials composition, and the
-privacy boundary are documented in the
-[OpenAI adapter README](contrib/openai/README.md) and the
+That single line replaces the instrumentation you would otherwise
+write and maintain per provider and per call site: every recognized
+call records a generation or embedding observation under whatever
+observation is in the request context, carrying the validated response
+model, exact token usage (cached and reasoning detail included, and
+stream usage that arrives after the finish chunk), sanitized input and
+output (media as placeholders, parallel tool calls as distinct
+structured calls), time-to-first-token for streams, and a
+wire-provable status. The adapters parse the wire format, not SDK
+types, so they carry no provider SDK dependencies and one adapter
+covers every client speaking that protocol; everything they record
+flows through this client's masking, capture, sampling, and limit
+controls.
+
+Runnable end-to-end examples that work without provider credentials:
+[go-openai streaming chat](contrib/integrationtest/examples/openaichat/main.go)
+and [Vertex AI with the credentials composition](contrib/integrationtest/examples/vertexgenai/main.go).
+Scope, retry/metric semantics, and the privacy boundary are documented
+in the [OpenAI adapter README](contrib/openai/README.md) and the
 [Google GenAI adapter README](contrib/googlegenai/README.md).
 
 ## Content and sensitive data

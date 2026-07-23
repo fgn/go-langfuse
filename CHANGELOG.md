@@ -19,6 +19,8 @@ Versioning once the first release is tagged.
   never-released `contrib/integrationtest` module exercises the real
   provider SDKs, including the documented Vertex credentials
   composition; `task ci` gains contrib sync, test, and purity gates.
+  Runnable end-to-end adapter examples that need no provider
+  credentials live in `contrib/integrationtest/examples/`.
 - Add runnable examples for prompt management (`examples/prompts`), scores
   (`examples/scores`), and deterministic trace sampling with a correlated
   LLM-judge gate (`examples/sampling`), and link them from the README

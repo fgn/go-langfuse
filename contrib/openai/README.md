@@ -31,8 +31,22 @@ client := openaisdk.NewClient(option.WithHTTPClient(httpClient))
 
 Every recognized call now records a generation or embedding
 observation, parented by whatever observation is in the request
-context, with model, content, token usage, time-to-first-token for
-streams, and status.
+context. Without the adapter, each of these fields is code you write
+and maintain by hand for every provider call site:
+
+| Field | Source |
+| --- | --- |
+| Observation name and type | route (`openai.chat.completions` -> generation) |
+| Model | response `model` (validated); request model as metadata |
+| Token usage | `usage`, including cached and reasoning token detail, and the usage chunk OpenAI sends after the finish chunk |
+| Input / output | request messages and response content, media replaced by placeholders, tool calls as distinct structured calls |
+| Time-to-first-token | first semantic output delta of a stream |
+| Status | wire-provable only: `http <code>`, `incomplete`, `canceled`, `closed_early`, `telemetry_partial` |
+| Metadata | provider, route, API version, finish reason, HTTP status, `azure.deployment` |
+
+A runnable end-to-end example (works without OpenAI credentials via a
+built-in synthetic server) lives at
+[`contrib/integrationtest/examples/openaichat`](../integrationtest/examples/openaichat/main.go).
 
 ## Scope (v0.1)
 
