@@ -15,6 +15,18 @@ standard library. There is no Google SDK dependency either: it observes
 the documented wire format at the HTTP transport, so
 `google.golang.org/genai` client code stays exactly as it is.
 
+## What gets recorded
+
+Every recognized call records a generation or embedding observation
+with the URL-derived model (overridden by the response
+`modelVersion`), prompt/candidate/thought token usage (inclusive
+semantics, `toolUsePromptTokenCount` included), sanitized output parts
+(text, function calls, executable code; media as placeholders; thought
+parts retained marked), finish reasons, and wire-provable status. A
+runnable end-to-end example, including the complete Vertex credentials
+composition, lives at
+[`contrib/integrationtest/examples/vertexgenai`](../integrationtest/examples/vertexgenai/main.go).
+
 ## Wiring: Developer API
 
 ```go
