@@ -5,6 +5,8 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-23
+
 - Add the opt-in `validation/` module (never released, excluded from
   go.work and `task ci`): real-provider round-trip smokes for Azure
   OpenAI, Vertex AI, and OpenRouter that assert the Langfuse readback
