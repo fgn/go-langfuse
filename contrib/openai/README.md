@@ -21,12 +21,16 @@ code stays exactly as it is.
 ```go
 httpClient := &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
 
-// sashabaranov/go-openai
-cfg := openai.DefaultConfig(token)
-cfg.HTTPClient = httpClient
-
 // official openai-go
-client := openaisdk.NewClient(option.WithHTTPClient(httpClient))
+client := openai.NewClient(
+	option.WithAPIKey(key),
+	option.WithHTTPClient(httpClient),
+	option.WithMaxRetries(0), // optional: one observation per logical call
+)
+
+// sashabaranov/go-openai
+cfg := gopenai.DefaultConfig(token)
+cfg.HTTPClient = httpClient
 ```
 
 Every recognized call now records a generation or embedding
@@ -44,9 +48,10 @@ and maintain by hand for every provider call site:
 | Status | wire-provable only: `http <code>`, `incomplete`, `canceled`, `closed_early`, `telemetry_partial` |
 | Metadata | provider, route, API version, finish reason, HTTP status, `azure.deployment` |
 
-A runnable end-to-end example (works without OpenAI credentials via a
-built-in synthetic server) lives at
-[`contrib/integrationtest/examples/openaichat`](../integrationtest/examples/openaichat/main.go).
+Runnable end-to-end examples (working without OpenAI credentials via
+built-in synthetic servers):
+[official `openai-go` streaming chat](../integrationtest/examples/openaichat/main.go)
+and [`sashabaranov/go-openai` streaming chat](../integrationtest/examples/sashabaranovchat/main.go).
 
 ## Scope (v0.1)
 
@@ -80,7 +85,11 @@ err := lf.Observe(ctx, "answer-question", langfuse.TypeSpan,
 ```
 
 Clients that retry internally (official `openai-go`) can be pinned to
-one attempt per call with `option.WithMaxRetries(0)`.
+one attempt per call with `option.WithMaxRetries(0)`. With retries
+enabled, note that openai-go abandons a failed attempt's response body
+without closing it; the adapter's safety net still finalizes and
+exports that failed attempt (with its `http <code>` status) at the
+next garbage collection, and closes the leaked body.
 
 Per-call attributes, including prompt links, come from the context:
 

@@ -1,7 +1,7 @@
 // Package langfuseopenai records Langfuse observations for OpenAI-wire
 // API calls (OpenAI, Azure OpenAI, and OpenAI-compatible endpoints)
-// made through any HTTP-based client, including sashabaranov/go-openai
-// and the official openai-go, without wrapping or modifying those
+// made through any HTTP-based client, including the official openai-go
+// and sashabaranov/go-openai, without wrapping or modifying those
 // clients.
 //
 // Attach the transport where the application constructs its HTTP

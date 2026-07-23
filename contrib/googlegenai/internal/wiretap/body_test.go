@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -354,5 +355,36 @@ func TestBodyTruncatedFinalFrameIsIncomplete(t *testing.T) {
 	_, _ = io.ReadAll(wrapper)
 	if got.outcome.State != StateIncomplete {
 		t.Fatalf("truncated final frame: %+v, want StateIncomplete", got.outcome)
+	}
+}
+
+// TestBodyAbandonedWithoutCloseFinalizesViaSafetyNet locks the GC
+// safety net for SDK retry loops that drop failed response bodies
+// without reading or closing them (the official openai-go does): the
+// attempt must still finalize instead of silently vanishing.
+func TestBodyAbandonedWithoutCloseFinalizesViaSafetyNet(t *testing.T) {
+	call := &scriptedCall{sentinel: "[DONE]"}
+	outcomes := make(chan Outcome, 1)
+	func() {
+		wrapper := newBodyWrapper(t.Context(), io.NopCloser(strings.NewReader("data: x\n\n")),
+			call, modeSSE, 1<<16, 500, 1<<16, &atomic.Bool{},
+			func(outcome Outcome) { outcomes <- outcome })
+		buf := make([]byte, 4)
+		_, _ = wrapper.Read(buf)
+		// The wrapper goes out of scope without Close or EOF.
+	}()
+	deadline := time.After(10 * time.Second)
+	for {
+		runtime.GC()
+		select {
+		case outcome := <-outcomes:
+			if outcome.State != StateClosedEarly {
+				t.Fatalf("abandoned body outcome %+v, want StateClosedEarly", outcome)
+			}
+			return
+		case <-deadline:
+			t.Fatal("abandoned body never finalized by the safety net")
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 }

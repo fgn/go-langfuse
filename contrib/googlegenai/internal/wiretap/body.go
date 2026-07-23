@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -113,7 +114,32 @@ func newBodyWrapper(
 		finalize:       finalize,
 	}
 	w.framer.maxEvent = maxEvent
+	// Some SDK retry loops abandon a failed attempt's response body
+	// without reading or closing it (the official openai-go does).
+	// Without a safety net that attempt's observation would never end
+	// and the failure would silently vanish from telemetry. The
+	// finalizer closes the leaked body and finalizes as closed_early;
+	// it is cleared on every normal finalization path, so it only ever
+	// fires for genuinely abandoned bodies, at GC time.
+	runtime.SetFinalizer(w, (*bodyWrapper).abandon)
 	return w
+}
+
+// abandon is the GC safety net for response bodies dropped without
+// Close. It closes the leaked underlying body (releasing the
+// connection) and finalizes the attempt with the observable
+// closed_early state; the non-2xx precedence rule then reports the
+// wire status for abandoned failed attempts.
+func (w *bodyWrapper) abandon() {
+	w.mu.Lock()
+	finalized := w.finalized
+	w.mu.Unlock()
+	if finalized {
+		return
+	}
+	diagnose("response body abandoned without Close; attempt finalized by safety net")
+	_ = w.rc.Close()
+	w.closeTelemetry()
 }
 
 func (w *bodyWrapper) Read(p []byte) (int, error) {
@@ -280,6 +306,7 @@ func (w *bodyWrapper) finalizeLocked(state FinalState) {
 		w.frozen = true
 	}
 	w.finalized = true
+	runtime.SetFinalizer(w, nil)
 	w.finalize(Outcome{
 		State:           state,
 		CancelObserved:  w.cancelObserved.Load() || w.ctxDone(),

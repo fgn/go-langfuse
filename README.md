@@ -306,7 +306,7 @@ lifecycle and the one-client-per-provider rule are covered in the
 
 The core module has **no OpenAI and no Google dependencies**. Optional
 adapter modules instrument provider HTTP calls at the transport, so
-native clients (`sashabaranov/go-openai`, the official `openai-go`,
+native clients (the official `openai-go`, `sashabaranov/go-openai`,
 `google.golang.org/genai`) stay exactly as they are. Install an
 adapter only when you want it, each versioned independently:
 
@@ -336,7 +336,8 @@ flows through this client's masking, capture, sampling, and limit
 controls.
 
 Runnable end-to-end examples that work without provider credentials:
-[go-openai streaming chat](contrib/integrationtest/examples/openaichat/main.go)
+[official openai-go streaming chat](contrib/integrationtest/examples/openaichat/main.go),
+[sashabaranov/go-openai streaming chat](contrib/integrationtest/examples/sashabaranovchat/main.go),
 and [Vertex AI with the credentials composition](contrib/integrationtest/examples/vertexgenai/main.go).
 Scope, retry/metric semantics, and the privacy boundary are documented
 in the [OpenAI adapter README](contrib/openai/README.md) and the

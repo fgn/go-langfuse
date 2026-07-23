@@ -20,7 +20,12 @@ Versioning once the first release is tagged.
   provider SDKs, including the documented Vertex credentials
   composition; `task ci` gains contrib sync, test, and purity gates.
   Runnable end-to-end adapter examples that need no provider
-  credentials live in `contrib/integrationtest/examples/`.
+  credentials live in `contrib/integrationtest/examples/`, covering the
+  official `openai-go` (primary), `sashabaranov/go-openai`, and Vertex
+  AI via `google.golang.org/genai`. Response bodies abandoned without
+  Close by SDK retry loops (the official `openai-go` does this for
+  failed attempts) are finalized and exported by a garbage-collection
+  safety net instead of silently vanishing.
 - Add runnable examples for prompt management (`examples/prompts`), scores
   (`examples/scores`), and deterministic trace sampling with a correlated
   LLM-judge gate (`examples/sampling`), and link them from the README

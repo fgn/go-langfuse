@@ -1,8 +1,9 @@
-// This example shows what the langfuseopenai adapter buys: a completely
-// ordinary sashabaranov/go-openai streaming chat call whose model,
-// token usage, output, time-to-first-token, and status land in Langfuse
-// automatically, nested under the application's logical span, with no
-// call-site changes and no hand-rolled attribute assembly.
+// This example shows what the langfuseopenai adapter buys with the
+// official OpenAI Go SDK (github.com/openai/openai-go): a completely
+// ordinary streaming chat call whose model, token usage, output,
+// time-to-first-token, and status land in Langfuse automatically,
+// nested under the application's logical span, with no call-site
+// changes and no hand-rolled attribute assembly.
 //
 // It runs out of the box: without OPENAI_BASE_URL it starts a synthetic
 // OpenAI-wire server, so only Langfuse credentials are needed:
@@ -12,12 +13,11 @@
 //	go run ./examples/openaichat
 //
 // Set OPENAI_BASE_URL and OPENAI_API_KEY to run against a real
-// OpenAI-compatible endpoint instead.
+// endpoint instead.
 package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -26,7 +26,8 @@ import (
 	"os"
 	"time"
 
-	openai "github.com/sashabaranov/go-openai"
+	openai "github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
 
 	"github.com/fgn/go-langfuse"
 	langfuseopenai "github.com/fgn/go-langfuse/contrib/openai"
@@ -58,12 +59,16 @@ func run(ctx context.Context) error {
 		baseURL, apiKey = server.URL+"/v1", "synthetic-key"
 	}
 
-	// The complete integration: one line at client construction. Every
-	// call site below is plain go-openai.
-	cfg := openai.DefaultConfig(apiKey)
-	cfg.BaseURL = baseURL
-	cfg.HTTPClient = &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
-	client := openai.NewClientWithConfig(cfg)
+	// The complete integration: hand the SDK an instrumented HTTP
+	// client. WithMaxRetries(0) keeps one observation per logical call;
+	// with the SDK's default retries each HTTP attempt records its own
+	// observation instead (both are documented, honest shapes).
+	client := openai.NewClient(
+		option.WithAPIKey(apiKey),
+		option.WithBaseURL(baseURL),
+		option.WithHTTPClient(&http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}),
+		option.WithMaxRetries(0),
+	)
 
 	ctx = lf.WithTraceAttributes(ctx, langfuse.TraceAttributes{
 		Name: "answer-question", UserID: "user-123", SessionID: "conversation-456",
@@ -73,48 +78,40 @@ func run(ctx context.Context) error {
 	// attempt carries the model and usage, so metrics are not double
 	// counted). The adapter's generation nests under it automatically
 	// because the context flows through the SDK into the HTTP request.
-	var answer string
-	err = lf.Observe(ctx, "answer-question", langfuse.TypeSpan,
+	return lf.Observe(ctx, "answer-question", langfuse.TypeSpan,
 		langfuse.ObservationAttributes{},
 		func(ctx context.Context, root *langfuse.Observation) error {
-			stream, err := client.CreateChatCompletionStream(ctx, openai.ChatCompletionRequest{
-				Model:         "gpt-test",
-				Stream:        true,
-				StreamOptions: &openai.StreamOptions{IncludeUsage: true},
-				Messages: []openai.ChatCompletionMessage{
-					{Role: openai.ChatMessageRoleUser, Content: "What does the adapter record?"},
+			stream := client.Chat.Completions.NewStreaming(ctx, openai.ChatCompletionNewParams{
+				Model: openai.ChatModel("gpt-test"),
+				Messages: []openai.ChatCompletionMessageParamUnion{
+					openai.UserMessage("What does the adapter record?"),
+				},
+				StreamOptions: openai.ChatCompletionStreamOptionsParam{
+					IncludeUsage: openai.Bool(true),
 				},
 			})
-			if err != nil {
+			accumulator := openai.ChatCompletionAccumulator{}
+			for stream.Next() {
+				accumulator.AddChunk(stream.Current())
+			}
+			if err := stream.Err(); err != nil {
 				return err
 			}
-			defer stream.Close()
-			for {
-				chunk, err := stream.Recv()
-				if errors.Is(err, io.EOF) {
-					break
-				}
-				if err != nil {
-					return err
-				}
-				if len(chunk.Choices) > 0 {
-					answer += chunk.Choices[0].Delta.Content
-				}
+			if err := stream.Close(); err != nil {
+				return err
 			}
-			fmt.Println("model answered:", answer)
+
+			if len(accumulator.Choices) > 0 {
+				fmt.Println("model answered:", accumulator.Choices[0].Message.Content)
+			}
 			fmt.Println("trace:", root.TraceID())
+			fmt.Println("Open the trace in Langfuse: the generation attempt carries the")
+			fmt.Println("response model, exact token usage (including the usage chunk that")
+			fmt.Println("arrives after finish), streamed output, time-to-first-token, and")
+			fmt.Println("provider metadata; the logical span groups it without duplicating")
+			fmt.Println("usage. Nothing in the openai-go call sites changed.")
 			return nil
 		})
-	if err != nil {
-		return err
-	}
-
-	fmt.Println("Open the trace in Langfuse: the generation attempt carries the")
-	fmt.Println("response model, exact token usage (including the usage chunk that")
-	fmt.Println("arrives after finish), streamed output, time-to-first-token, and")
-	fmt.Println("provider metadata; the logical span groups it without duplicating")
-	fmt.Println("usage. Nothing in the go-openai call sites changed.")
-	return nil
 }
 
 // syntheticProvider speaks just enough OpenAI wire format for the
@@ -124,11 +121,11 @@ func syntheticProvider() *httptest.Server {
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher := w.(http.Flusher)
 		for _, chunk := range []string{
-			`data: {"choices":[{"index":0,"delta":{"role":"assistant"}}],"model":"gpt-test-2024"}`,
-			`data: {"choices":[{"index":0,"delta":{"content":"Model, usage, output, "}}]}`,
-			`data: {"choices":[{"index":0,"delta":{"content":"timing, and status."}}]}`,
-			`data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
-			`data: {"choices":[],"usage":{"prompt_tokens":9,"completion_tokens":7}}`,
+			`data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant"}}],"model":"gpt-test-2024"}`,
+			`data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"Model, usage, output, "}}]}`,
+			`data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"timing, and status."}}]}`,
+			`data: {"id":"c1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: {"id":"c1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":9,"completion_tokens":7}}`,
 			`data: [DONE]`,
 		} {
 			_, _ = io.WriteString(w, chunk+"\n\n")
