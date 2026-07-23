@@ -1,0 +1,11 @@
+# The exact-pinned Python oracle for cross-SDK parity. Regeneration
+# runs it only via `uv run --locked`; bumping these pins is an explicit
+# golden-regeneration event, never a side effect.
+[project]
+name = "go-langfuse-parity"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "langfuse==4.14.1",
+    "openai==2.47.0",
+]

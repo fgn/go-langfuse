@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "kind": "generation",
+  "level": "DEFAULT",
+  "operation": "chat.completion",
+  "mode": "unary",
+  "usageBuckets": [
+    "input",
+    "output",
+    "total"
+  ],
+  "inputShape": {
+    "kind": "array",
+    "elems": [
+      {
+        "kind": "object",
+        "keys": {
+          "content": {
+            "kind": "string"
+          },
+          "role": {
+            "kind": "string"
+          }
+        }
+      }
+    ]
+  },
+  "outputShape": {
+    "kind": "object",
+    "keys": {
+      "content": {
+        "kind": "string"
+      },
+      "role": {
+        "kind": "string"
+      }
+    }
+  },
+  "provenance": {
+    "note": "normalized Python langfuse.openai trace; regenerate via task parity:regen",
+    "pythonLangfuse": "4.14.1",
+    "pythonOpenAI": "2.47.0",
+    "azureApiVersion": "2024-12-01-preview"
+  }
+}

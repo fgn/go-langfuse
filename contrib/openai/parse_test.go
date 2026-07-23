@@ -113,3 +113,15 @@ func TestSameEventFinishReasonCannotStarveOutput(t *testing.T) {
 		t.Fatalf("over-budget reason handling: %v partial=%v", call.finishReasons, result.TelemetryPartial)
 	}
 }
+
+// TestDuplicateFinishReasonsDedupe locks the gateway pattern OpenRouter
+// exhibits on real wire: the identical finish reason on the final
+// delta chunk and again on the usage chunk collapses to one value.
+func TestDuplicateFinishReasonsDedupe(t *testing.T) {
+	call := &call{route: chatRoute(), captureCap: 1 << 16}
+	call.FeedEvent([]byte(`{"choices":[{"index":0,"delta":{"content":"x"},"finish_reason":"stop"}]}`))
+	call.FeedEvent([]byte(`{"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`))
+	if got := call.Result().Metadata["finish_reason"]; got != "stop" {
+		t.Fatalf("finish reason %v, want deduplicated \"stop\"", got)
+	}
+}

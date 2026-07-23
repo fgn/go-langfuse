@@ -285,6 +285,12 @@ func (c *call) appendFinishReason(reason string) {
 	if len(c.finishReasons) >= maxChoices {
 		return
 	}
+	// Some gateways repeat the identical finish reason on multiple
+	// chunks (OpenRouter emits it on the final delta and again on the
+	// usage chunk); consecutive duplicates carry no information.
+	if len(c.finishReasons) > 0 && c.finishReasons[len(c.finishReasons)-1] == reason {
+		return
+	}
 	if c.deltaBytes+len(reason) > c.captureCap {
 		c.partial = true
 		return
