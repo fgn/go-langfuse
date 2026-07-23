@@ -5,6 +5,19 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+- Add the opt-in `validation/` module (never released, excluded from
+  go.work and `task ci`): real-provider round-trip smokes for Azure
+  OpenAI, Vertex AI, and OpenRouter that assert the Langfuse readback
+  against each SDK's own response (usage buckets, model identity,
+  exact stream output, timing order, error statuses, and hard
+  OpenRouter cost attribution), a harness self-check, an Azure
+  cross-SDK parity test against a committed normalized snapshot of
+  the pinned Python `langfuse.openai` oracle, and a credential-free
+  provider-SDK transport compatibility matrix (`task matrix`,
+  `docs/support-matrix.md`, weekly workflow maintaining one
+  compatibility issue). New tasks: `validate`, `parity`,
+  `parity:regen`, `matrix`.
+
 - Add opt-in provider instrumentation as independent contrib modules:
   `contrib/openai` (package `langfuseopenai`) records OpenAI-wire chat
   completion, completion, and embedding calls, and `contrib/googlegenai`

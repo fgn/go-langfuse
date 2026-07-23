@@ -1,0 +1,46 @@
+name: Compatibility matrix
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # weekly, Monday 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.12"
+          cache: true
+      - name: Run matrix
+        id: matrix
+        run: |
+          set -o pipefail
+          cd validation && GOWORK=off go run -tags=validation ./cmd/matrix -out "$RUNNER_TEMP/support-matrix.md" | tee "$RUNNER_TEMP/matrix.log"
+      - name: Publish summary
+        if: always()
+        run: cat "$RUNNER_TEMP/support-matrix.md" >> "$GITHUB_STEP_SUMMARY" 2>/dev/null || true
+      - name: Maintain compatibility issue
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --label compatibility --state open --json number --jq '.[0].number // empty')
+          if [ "${{ steps.matrix.outcome }}" = "failure" ]; then
+            body="The weekly compatibility matrix has failing cells. See the run summary: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "$body"
+            else
+              gh issue create --title "Provider-SDK compatibility matrix failing" --label compatibility --body "$body"
+            fi
+          elif [ -n "$existing" ]; then
+            gh issue close "$existing" --comment "Matrix recovered: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi

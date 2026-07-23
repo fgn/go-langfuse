@@ -1,0 +1,7 @@
+# Credentials must never live in the checkout; paths configured via
+# environment variables are rejected if they resolve inside the repo.
+.env
+.env.*
+*credentials*.json
+*service-account*.json
+*.key
