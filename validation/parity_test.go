@@ -77,8 +77,22 @@ func shapeOf(value any) shape {
 		}
 		return s
 	case map[string]any:
+		// Object keys holding null or empty collections are wire
+		// filler (annotations: [], refusal: null), mirroring the
+		// smoke checker's normalization: dropped from the projection
+		// so a MEANINGFUL extra field still diverges. Null array
+		// elements and null top-level values stay significant.
 		s := shape{Kind: "object", Keys: map[string]shape{}}
 		for key, item := range value {
+			if item == nil {
+				continue
+			}
+			if m, ok := item.(map[string]any); ok && len(m) == 0 {
+				continue
+			}
+			if a, ok := item.([]any); ok && len(a) == 0 {
+				continue
+			}
 			s.Keys[key] = shapeOf(item)
 		}
 		return s
@@ -125,10 +139,19 @@ func canonicalize(obs observation, stream bool) (canonical, error) {
 		return canonical{}, fmt.Errorf("unknown operation name %q", obs.Name)
 	}
 	var buckets []string
-	for bucket := range obs.UsageDetails {
+	for bucket, value := range obs.UsageDetails {
+		if value == 0 {
+			// Zero-valued buckets are presence noise, not semantics:
+			// the Python SDK forwards provider detail buckets that the
+			// Go adapter's allowlist deliberately drops (real Azure
+			// emits input_audio_tokens: 0). A NON-zero unknown bucket
+			// stays a hard rejection: that is real usage one side
+			// would be losing.
+			continue
+		}
 		mapped, ok := usageAliases[bucket]
 		if !ok {
-			return canonical{}, fmt.Errorf("unknown usage bucket %q", bucket)
+			return canonical{}, fmt.Errorf("unknown non-zero usage bucket %q (value %d)", bucket, value)
 		}
 		buckets = append(buckets, mapped)
 	}
@@ -187,6 +210,8 @@ func decodeGolden(raw []byte) (canonical, error) {
 	}
 	return golden, nil
 }
+
+var traceIDShape = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 var provenanceShape = regexp.MustCompile(`^[A-Za-z0-9 .,:;/()_-]{0,120}$`)
 
@@ -312,7 +337,7 @@ func goParityObservation(t *testing.T) observation {
 		response, callErr := client.CreateChatCompletion(ctx, gopenai.ChatCompletionRequest{
 			Model:       "azure-mapped",
 			Temperature: 0,
-			MaxTokens:   24,
+			MaxTokens:   16,
 			Messages: []gopenai.ChatCompletionMessage{
 				{
 					Role:    gopenai.ChatMessageRoleUser,
@@ -340,8 +365,8 @@ func TestParityRegen(t *testing.T) {
 	if os.Getenv("PARITY_REGEN") == "" {
 		t.Skip("regeneration only; run via `task parity:regen`")
 	}
-	if len(pythonTrace) != 32 {
-		t.Fatalf("PARITY_PYTHON_TRACE %q is not a 32-hex trace ID; the Python oracle failed to report its trace", pythonTrace)
+	if !traceIDShape.MatchString(pythonTrace) {
+		t.Fatalf("PARITY_PYTHON_TRACE %q is not a lowercase 32-hex trace ID; the Python oracle failed to report its trace", pythonTrace)
 	}
 	r := newRun(t)
 	pythonObs := r.observation(t, pythonTrace, "OpenAI-generation")
@@ -386,8 +411,12 @@ func TestParityRegen(t *testing.T) {
 	}
 	if previous, err := os.ReadFile(goldenPath); err == nil {
 		if old, err := decodeGolden(previous); err == nil {
-			t.Logf("old-vs-candidate diff follows (empty when identical)")
-			diffCanonical(t, old, pythonCanonical)
+			// Informational only: an intentional change must not fail
+			// the regeneration that produces it.
+			oldJSON, _ := json.MarshalIndent(old, "", "  ")
+			if !reflect.DeepEqual(old, pythonCanonical) {
+				t.Logf("old golden differs from candidate; previous:\n%s", oldJSON)
+			}
 		}
 	}
 	t.Logf("candidate golden:\n%s", candidate)

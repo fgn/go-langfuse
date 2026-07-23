@@ -6,3 +6,5 @@
 *service-account*.json
 *.key
 *.candidate
+.envrc
+service_account.json

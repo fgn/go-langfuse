@@ -111,17 +111,25 @@ func requireEnv(t *testing.T, names ...string) map[string]string {
 // inside the repository checkout: credentials must live outside it.
 func rejectRepoPath(t *testing.T, name, path string) {
 	t.Helper()
-	resolved, err := filepath.EvalSymlinks(path)
-	if err != nil {
-		t.Fatalf("%s cannot be resolved (no raw error to avoid echoing paths into logs): %v", name, err)
+	// Absolute-then-resolved on BOTH sides, failing closed: a Rel
+	// error must reject, never accept.
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		abs, err = filepath.EvalSymlinks(abs)
 	}
-	repo, err := filepath.EvalSymlinks("..")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%s cannot be resolved; configure an existing path outside the checkout", name)
 	}
-	rel, err := filepath.Rel(repo, resolved)
-	if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		t.Fatalf("%s resolves inside the repository; keep credentials outside the checkout", name)
+	repo, err := filepath.Abs("..")
+	if err == nil {
+		repo, err = filepath.EvalSymlinks(repo)
+	}
+	if err != nil {
+		t.Fatal("repository root cannot be resolved")
+	}
+	rel, err := filepath.Rel(repo, abs)
+	if err != nil || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+		t.Fatalf("%s resolves inside the repository (or could not be proven outside); keep credentials outside the checkout", name)
 	}
 }
 
@@ -318,8 +326,13 @@ func checkObservation(t *testing.T, got observation, want expectedObservation) {
 	}
 	if want.Usage != nil {
 		for bucket, wantCount := range want.Usage {
-			if got.UsageDetails[bucket] != wantCount {
-				t.Errorf("usage[%s] = %d, want %d", bucket, got.UsageDetails[bucket], wantCount)
+			gotCount, present := got.UsageDetails[bucket]
+			if !present {
+				t.Errorf("usage[%s] missing (want %d)", bucket, wantCount)
+				continue
+			}
+			if gotCount != wantCount {
+				t.Errorf("usage[%s] = %d, want %d", bucket, gotCount, wantCount)
 			}
 		}
 		for bucket, gotCount := range got.UsageDetails {

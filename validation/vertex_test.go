@@ -42,7 +42,13 @@ func vertexClient(t *testing.T, r *run, env map[string]string) *genai.Client {
 	}
 	creds, err := credentials.DetectDefault(options)
 	if err != nil {
-		t.Skipf("skipped; no usable Google credentials: set VERTEX_CREDENTIALS_JSON or application default credentials")
+		if len(options.CredentialsJSON) > 0 {
+			// An explicitly configured credential that cannot be parsed
+			// is a failure, never a green-by-skip (no raw error: it can
+			// echo credential content).
+			t.Fatal("VERTEX_CREDENTIALS_JSON was provided but is not a usable credential")
+		}
+		t.Skip("skipped; no usable Google credentials: set VERTEX_CREDENTIALS_JSON or application default credentials")
 	}
 
 	authed, err := httptransport.NewClient(&httptransport.Options{

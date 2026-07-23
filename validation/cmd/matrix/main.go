@@ -76,8 +76,9 @@ func run(outPath string) error {
 		candidate, err := newestStableAbove(sdk.Module, maxVersion(sdk.Supported))
 		if err != nil {
 			// A discovery failure must never masquerade as "no new
-			// versions": that would green a run that probed nothing.
-			return fmt.Errorf("version discovery for %s failed: %w", sdk.Module, err)
+			// versions", and it is infrastructure, not compatibility:
+			// the marker lets the workflow leave the alert untouched.
+			return fmt.Errorf("matrix infrastructure failure: version discovery for %s: %w", sdk.Module, err)
 		}
 		if candidate != "" {
 			versions = append(versions, candidate)
@@ -172,9 +173,11 @@ func runCell(tree string, index int, module, version string, candidate bool) cel
 			return result
 		}
 	}
-	// The resolved graph must actually contain the requested version.
+	// The resolved graph must contain EXACTLY the requested version:
+	// substring checks would let v1.2.3 match v1.2.30.
 	out, err := cellCmd(cell, "go", "list", "-m", module)
-	if err != nil || !strings.Contains(out, version) {
+	fields := strings.Fields(strings.TrimSpace(out))
+	if err != nil || len(fields) < 2 || fields[0] != module || fields[1] != version {
 		result.phase, result.detail = "resolve", "requested version not in resolved graph: "+firstLine(out)
 		return result
 	}
