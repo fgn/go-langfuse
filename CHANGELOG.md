@@ -5,6 +5,8 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-24
+
 - Add opt-in cross-process trace-attribute propagation over W3C baggage,
   interoperable with the official SDKs. `Client.WithBaggagePropagation`
   marks a context branch for export and keeps the closed `langfuse_*`
@@ -20,6 +22,9 @@ Versioning once the first release is tagged.
   (never `Config.Environment`). A credential-free interop corpus and
   cross-language process smokes against the uv-locked Python SDK run in
   ordinary CI (`task interop`) and gate core releases.
+
+- Promote `google.golang.org/genai` v1.65.0 in the tested provider-SDK
+  transport compatibility matrix (`docs/support-matrix.md`).
 
 ## [0.5.0] - 2026-07-23
 
