@@ -61,7 +61,9 @@ func TestRecognizeOpenAIRoutes(t *testing.T) {
 			wantType: langfuse.TypeGeneration,
 			provider: "openai-compatible",
 		},
-		{url: "https://api.openai.com/v1/responses", wantOK: false},
+		{url: "https://api.openai.com/v1/responses", wantOK: true, wantName: "openai.responses", wantType: langfuse.TypeGeneration, provider: "openai"},
+		{url: "https://api.openai.com/v1/responses/resp-1", wantOK: false},
+		{url: "https://api.openai.com/v1/responses/resp-1/input_items", wantOK: false},
 		{url: "https://api.openai.com/v1/models", wantOK: false},
 		{url: "https://api.openai.com/v1/audio/transcriptions", wantOK: false},
 	}

@@ -225,7 +225,7 @@ func validateCanonical(c canonical) error {
 	if !enumLevels[c.Level] {
 		return fmt.Errorf("level %q outside enum", c.Level)
 	}
-	if c.Operation != "chat.completion" {
+	if c.Operation != "chat.completion" && c.Operation != "responses" {
 		return fmt.Errorf("operation %q outside enum", c.Operation)
 	}
 	if c.Mode != "unary" && c.Mode != "stream" {

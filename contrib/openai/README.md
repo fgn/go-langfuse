@@ -53,18 +53,32 @@ built-in synthetic servers):
 [official `openai-go` streaming chat](../integrationtest/examples/openaichat/main.go)
 and [`sashabaranov/go-openai` streaming chat](../integrationtest/examples/sashabaranovchat/main.go).
 
-## Scope (v0.1)
+## Scope (v0.2)
 
 | Route | Observation | Streaming |
 | --- | --- | --- |
 | `/chat/completions` | generation | yes (SSE) |
 | `/completions` | generation | yes (SSE) |
+| `/responses` | generation | yes (typed SSE events) |
 | `/embeddings` | embedding | no |
 
-The Responses API and multipart routes (audio, files) pass through
-unobserved; Responses support is planned. Azure deployment names are
-recorded as `azure.deployment` metadata, never as the model; the model
-prefers the response's `model` field.
+Response retrieval (`/responses/{id}`), input-item listing, background
+polling, and multipart routes (audio, files) pass through unobserved.
+Azure deployment names are recorded as `azure.deployment` metadata,
+never as the model; the model prefers the response's `model` field.
+
+For `/responses`, output is a closed sanitized projection: message
+text and refusals, function calls, and visible reasoning summaries are
+retained; logprobs, annotations, encrypted reasoning, media payloads,
+and every other or unknown item variant become fixed
+`{"type": ..., "omitted": true}` placeholders. Streaming output is
+taken from the terminal event's embedded final response; the
+`response.completed` / `response.failed` / `response.incomplete`
+events (and a top-level `error` event) are the protocol terminals —
+`[DONE]` never ends a Responses stream, and clean EOF before a
+terminal reports `incomplete`. Terminal events too large to buffer
+still contribute status, model, and usage through a bounded salvage
+scan, with `telemetry_partial` declaring the omitted content.
 
 ## Attempts, retries, and metrics
 

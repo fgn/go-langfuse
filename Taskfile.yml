@@ -114,9 +114,9 @@ tasks:
       - cd validation && GOWORK=off go test -tags=validation -count=1 -v -timeout=15m ./...
 
   parity:
-    desc: Cross-SDK parity against the committed snapshot (credentialed, one inference call)
+    desc: Cross-SDK parity against the committed snapshots (credentialed, two inference calls)
     cmds:
-      - cd validation && GOWORK=off go test -tags="validation parity" -count=1 -v -timeout=10m -run 'TestParityAzure|TestCanonicalizerFixtures' .
+      - cd validation && GOWORK=off go test -tags="validation parity" -count=1 -v -timeout=10m -run 'TestParityAzure|TestParityAzureResponses|TestCanonicalizerFixtures|TestResponsesCanonicalizerFixtures' .
 
   parity:regen:
     desc: Regenerate the parity golden (requires uv, Azure and Langfuse credentials; ACCEPT=accept to replace)
@@ -124,8 +124,9 @@ tasks:
       - |
         marker="parity-$(date +%s%N)"
         tid=$(cd validation/parity && uv run --locked python log_call.py "$marker")
-        echo "python trace: $tid"
-        cd validation && PARITY_PYTHON_TRACE="$tid" PARITY_REGEN="${ACCEPT:-diff}" GOWORK=off go test -tags="validation parity" -count=1 -v -run TestParityRegen .
+        rtid=$(cd validation/parity && uv run --locked python log_responses.py "$marker-responses")
+        echo "python traces: $tid $rtid"
+        cd validation && PARITY_PYTHON_TRACE="$tid" PARITY_PYTHON_TRACE_RESPONSES="$rtid" PARITY_MARKER_RESPONSES="$marker-responses" PARITY_REGEN="${ACCEPT:-diff}" GOWORK=off go test -tags="validation parity" -count=1 -v -run 'TestParityRegen' .
 
   matrix:
     desc: Regenerate the provider-SDK transport compatibility matrix (credential-free)

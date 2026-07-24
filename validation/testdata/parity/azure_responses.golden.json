@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "kind": "generation",
+  "level": "DEFAULT",
+  "operation": "responses",
+  "mode": "unary",
+  "usageBuckets": [
+    "input",
+    "output",
+    "total"
+  ],
+  "inputShape": {
+    "kind": "array",
+    "elems": [
+      {
+        "kind": "object",
+        "keys": {
+          "content": {
+            "kind": "string"
+          },
+          "role": {
+            "kind": "string"
+          }
+        }
+      },
+      {
+        "kind": "object",
+        "keys": {
+          "content": {
+            "kind": "array",
+            "elems": [
+              {
+                "kind": "object",
+                "keys": {
+                  "text": {
+                    "kind": "string"
+                  },
+                  "type": {
+                    "kind": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "role": {
+            "kind": "string"
+          }
+        }
+      }
+    ]
+  },
+  "outputShape": {
+    "kind": "array",
+    "elems": [
+      {
+        "kind": "object",
+        "keys": {
+          "content": {
+            "kind": "array",
+            "elems": [
+              {
+                "kind": "object",
+                "keys": {
+                  "text": {
+                    "kind": "string"
+                  },
+                  "type": {
+                    "kind": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "role": {
+            "kind": "string"
+          },
+          "type": {
+            "kind": "string"
+          }
+        }
+      }
+    ]
+  },
+  "provenance": {
+    "note": "normalized Python Responses trace; cross-SDK usage token values excluded (separate inferences); task parity:regen",
+    "pythonLangfuse": "4.14.1",
+    "pythonOpenAI": "2.47.0"
+  }
+}

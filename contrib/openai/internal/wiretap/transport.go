@@ -242,8 +242,13 @@ func (t *Transport) newFinalizer(
 		}
 
 		state := outcome.State
+		// Parser flags refine ONLY an otherwise-complete finalization;
+		// canceled, closed-early, transport-failed, and incomplete
+		// lifecycle states keep their stronger wire-derived meaning.
 		if state == StateComplete && result.ErrorCategory != "" {
 			state = StateFailed
+		} else if state == StateComplete && result.Incomplete {
+			state = StateIncomplete
 		}
 		switch {
 		case httpStatus >= 300:

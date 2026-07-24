@@ -579,7 +579,7 @@ func TestUnrecognizedRoutesPassThrough(t *testing.T) {
 		_, _ = io.WriteString(w, `{"data":[]}`)
 	})
 	httpClient := &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
-	for _, path := range []string{"/v1/models", "/v1/responses", "/v1/files"} {
+	for _, path := range []string{"/v1/models", "/v1/responses/resp-1", "/v1/files"} {
 		req, err := http.NewRequest(http.MethodGet, provider.URL+path, nil)
 		if err != nil {
 			t.Fatal(err)
