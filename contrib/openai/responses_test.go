@@ -709,3 +709,70 @@ func TestResponsesEasyAssistantMessageIsNotTombstoned(t *testing.T) {
 		t.Fatalf("an unpinned role must tombstone, not copy through: %q", input)
 	}
 }
+
+func TestResponsesOversizedSchemaInvalidTerminalsAreNotTerminals(t *testing.T) {
+	pad := `,"pad":"` + strings.Repeat("p", 300<<10) + `"`
+	for name, terminal := range map[string]string{
+		"status-number":    `{"type":"response.completed","response":{"status":123` + pad + `}}`,
+		"missing-response": `{"type":"response.completed"` + pad + `}`,
+		"response-string":  `{"type":"response.completed","response":"done"` + pad + `}`,
+		"usage-array":      `{"type":"response.completed","response":{"status":"completed","usage":[1]` + pad + `}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			receiver, flushFn := runResponsesStream(t, sseBody(terminal))
+			flushFn()
+			span := receiver.nextSpan(t)
+			got := attrString(t, span, "langfuse.observation.status_message")
+			if got != "incomplete" && got != "telemetry_partial" {
+				t.Fatalf("status %q; an oversized schema-invalid terminal must not freeze the stream", got)
+			}
+			if got != "incomplete" {
+				t.Fatalf("status %q, want incomplete (EOF without a valid terminal)", got)
+			}
+		})
+	}
+}
+
+func TestResponsesBufferedDecodedModelCapMatchesSalvage(t *testing.T) {
+	longModel := strings.Repeat("m", 257)
+	receiver, flushFn := runResponsesStream(t, sseBody(
+		`{"type":"response.completed","response":{"id":"r","status":"completed","model":"`+longModel+`","output":[]}}`,
+	))
+	flushFn()
+	span := receiver.nextSpan(t)
+	if got := attrString(t, span, "langfuse.observation.model.name"); got != "" {
+		t.Fatalf("a 257-byte model must be dropped on the buffered path too; got %d bytes", len(got))
+	}
+	if got := attrString(t, span, "langfuse.observation.status_message"); got != "telemetry_partial" {
+		t.Fatalf("status %q, want telemetry_partial for the dropped field", got)
+	}
+}
+
+func TestResponsesTerminalMediaResultBearsOutput(t *testing.T) {
+	receiver, flushFn := runResponsesStream(t, sseBody(
+		`{"type":"response.completed","response":{"id":"r","status":"completed","model":"m",`+
+			`"output":[{"type":"image_generation_call","id":"ig","result":"BASE64"}]}}`,
+	))
+	flushFn()
+	span := receiver.nextSpan(t)
+	if !hasAttr(span, "langfuse.observation.completion_start_time") {
+		t.Fatal("a terminal-first media placeholder with a present media field must stamp completion start")
+	}
+	output := attrString(t, span, "langfuse.observation.output")
+	if strings.Contains(output, "BASE64") || !strings.Contains(output, "omitted") {
+		t.Fatalf("media must be a placeholder: %q", output)
+	}
+}
+
+func TestResponsesStalePartialImageAfterTombstoneIsNotBearing(t *testing.T) {
+	bigItem := `{"type":"image_generation_call","id":"ig","result":"` + strings.Repeat("b", 80<<10) + `"}`
+	receiver, flushFn := runResponsesStream(t, sseBody(
+		`{"type":"response.output_item.done","output_index":0,"item":`+bigItem+`}`,
+		`{"type":"response.image_generation_call.partial_image","output_index":0,"item_id":"ig","partial_image_b64":"STALE"}`,
+	))
+	flushFn()
+	span := receiver.nextSpan(t)
+	if hasAttr(span, "langfuse.observation.completion_start_time") {
+		t.Fatal("a stale media chunk on a tombstoned identity must not stamp completion start")
+	}
+}

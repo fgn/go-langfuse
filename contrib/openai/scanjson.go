@@ -113,6 +113,15 @@ type controlScanner struct {
 	// droppedFields names selected fields whose cap was breached; the
 	// buffered parse applies the same whole-field omission.
 	droppedFields map[string]bool
+	// valueKinds records the first byte of each selected member's value
+	// (and of the root response member), giving both paths the same
+	// closed-envelope kind evidence; kindPending names the member whose
+	// value byte is awaited.
+	valueKinds  map[string]byte
+	kindPending string
+	// responseSeen marks that the envelope carried a root response
+	// member at all.
+	responseSeen bool
 
 	// key assembly (bounded, DECODED); isKey marks the current string
 	// as a key.
@@ -150,6 +159,7 @@ func newControlScanner(mode scanMode) *controlScanner {
 		seen:          make(map[string]bool),
 		presentTop:    make(map[string]bool),
 		droppedFields: make(map[string]bool),
+		valueKinds:    make(map[string]byte),
 	}
 }
 
@@ -398,6 +408,10 @@ func decodedEscape(b byte) byte {
 }
 
 func (s *controlScanner) stepValue(b byte) {
+	if s.kindPending != "" && !isJSONSpace(b) {
+		s.valueKinds[s.kindPending] = b
+		s.kindPending = ""
+	}
 	switch {
 	case isJSONSpace(b):
 	case b == '{':
@@ -521,6 +535,8 @@ func (s *controlScanner) endKey() {
 			s.duplicates = true
 		}
 		s.seen["response"] = true
+		s.responseSeen = true
+		s.kindPending = "response"
 	}
 
 	if name, selected := s.selectedKeyName(); selected {
@@ -531,6 +547,7 @@ func (s *controlScanner) endKey() {
 		s.captureName = name
 		s.captureDepth = len(s.stack)
 		s.captureOver = false
+		s.kindPending = name
 		delete(s.fields, name)
 	}
 }
@@ -675,6 +692,40 @@ func (s *controlScanner) afterValue() {
 	} else {
 		s.state = scanArrayValueDone
 	}
+}
+
+// finalizeSelected applies the DECODED caps to every retained string
+// field, so buffered and salvage paths consume identical drops before
+// either inspects a value: an escaped spelling cannot smuggle an
+// over-limit control value into the buffered parse.
+func (s *controlScanner) finalizeSelected() {
+	for name := range s.fields {
+		if scanFieldIsString[name] {
+			// decodeScannedFieldRaw records any decoded-cap drop.
+			_, _ = decodeScannedFieldRaw(s, name)
+		}
+	}
+}
+
+// envelopeWellTyped applies the closed terminal-envelope kind rules to
+// the recorded value kinds: the root response member must exist and be
+// an object, and every selected member present must carry its pinned
+// kind (null counts as absent). It is the salvage-path twin of
+// validateResponsesBody.
+func (s *controlScanner) envelopeWellTyped() bool {
+	if s.mode != scanSSEEnvelope {
+		return true
+	}
+	if !s.responseSeen || s.valueKinds["response"] != '{' {
+		return false
+	}
+	kindOK := func(name string, want byte) bool {
+		kind, present := s.valueKinds[name]
+		return !present || kind == want || kind == 'n'
+	}
+	return kindOK("status", '"') && kindOK("model", '"') &&
+		kindOK("usage", '{') && kindOK("error", '{') &&
+		kindOK("incomplete_details", '{')
 }
 
 // documentUsable reports whether hard verdicts may be derived: one

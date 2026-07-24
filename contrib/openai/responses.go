@@ -386,9 +386,16 @@ func (c *responsesCall) FeedEvent(data []byte) wiretap.EventVerdict {
 		c.partial = true
 		return wiretap.EventVerdict{}
 	}
+	grammar.finalizeSelected()
 	c.pendingDrops = grammar.droppedFields
 	if grammar.fieldOver {
 		c.partial = true
+	}
+	if grammar.droppedFields["type"] {
+		// An over-cap decoded type has no protocol meaning: the event
+		// is unknown, exactly as salvage would treat it.
+		c.pendingDrops = nil
+		return wiretap.EventVerdict{}
 	}
 	verdict := c.consumeEvent(&event)
 	c.pendingDrops = nil
@@ -477,9 +484,15 @@ func (c *responsesCall) consumeEvent(event *responsesStreamEvent) wiretap.EventV
 	case "response.image_generation_call.partial_image":
 		accepted := false
 		if item := c.itemFor(event); item != nil && event.PartialImageB64 != "" {
-			item.kind = "image_generation_call"
-			item.imaged = true
-			accepted = true
+			if item.tombstone {
+				// A finalized identity stays authoritative; a stale
+				// media chunk changes nothing and bears nothing.
+				c.partial = true
+			} else {
+				item.kind = "image_generation_call"
+				item.imaged = true
+				accepted = true
+			}
 		}
 		return wiretap.EventVerdict{Output: accepted}
 	case "response.output_item.added":
@@ -892,6 +905,7 @@ func (c *responsesCall) FinishUnary(body []byte, httpStatus int) {
 		c.partial = true
 		return
 	}
+	grammar.finalizeSelected()
 	if grammar.fieldOver {
 		c.partial = true
 	}
@@ -1056,6 +1070,7 @@ func sanitizeResponsesOutputItem(raw json.RawMessage) (any, bool, bool) {
 		Arguments string          `json:"arguments"`
 		CallID    string          `json:"call_id"`
 		Summary   json.RawMessage `json:"summary"`
+		Result    string          `json:"result"`
 	}
 	if err := json.Unmarshal(raw, &item); err != nil {
 		return map[string]any{"type": "unknown", "omitted": true}, false, true
@@ -1087,6 +1102,11 @@ func sanitizeResponsesOutputItem(raw json.RawMessage) (any, bool, bool) {
 			"type": "reasoning", "thought": true,
 			"summary": sanitizeReasoningSummary(item.Summary),
 		}, false, false
+	case "image_generation_call":
+		// The fixed media placeholder bears output exactly when the
+		// pinned media field is present.
+		return map[string]any{"type": "image_generation_call", "omitted": true},
+			item.Result != "", true
 	default:
 		kind := "unknown"
 		if knownResponsesOutputTypes[item.Type] {
@@ -1139,6 +1159,7 @@ func (c *responsesCall) FinishOversizedEvent() wiretap.EventVerdict {
 	if scanner == nil || !scanner.documentUsable() {
 		return wiretap.EventVerdict{}
 	}
+	scanner.finalizeSelected()
 	eventType, ok := decodeScannedField(scanner, "type")
 	if !ok {
 		return wiretap.EventVerdict{}
@@ -1149,6 +1170,14 @@ func (c *responsesCall) FinishOversizedEvent() wiretap.EventVerdict {
 	verdict := wiretap.EventVerdict{Output: oversizedOutputPresence(eventType, scanner)}
 	switch eventType {
 	case "response.completed", "response.failed", "response.incomplete":
+		// The salvage path enforces the same closed terminal envelope
+		// as the buffered validator: a missing or non-object response
+		// member, or a selected member outside its pinned kind, is
+		// schema-invalid and never a hard verdict.
+		if !scanner.envelopeWellTyped() {
+			c.partial = true
+			return wiretap.EventVerdict{}
+		}
 		c.applyScannedControl(scanner)
 		eventClass := strings.TrimPrefix(eventType, "response.")
 		status, _ := decodeScannedField(scanner, "status")
@@ -1239,7 +1268,7 @@ func (c *responsesCall) FinishOversizedUnary(httpStatus int) {
 	scanner := c.scanner
 	c.scanner = nil
 	c.partial = true
-	c.unaryOutput = map[string]any{"omitted": true}
+	c.unaryOutput = []any{map[string]any{"omitted": true}}
 	c.haveUnary = true
 	if scanner == nil || !scanner.documentUsable() {
 		return
@@ -1262,6 +1291,10 @@ func (c *responsesCall) UnaryComplete() bool {
 // the field's cap on the DECODED value: escaped spellings cannot
 // smuggle an over-limit value past the raw retention bound.
 func decodeScannedField(scanner *controlScanner, name string) (string, bool) {
+	return decodeScannedFieldRaw(scanner, name)
+}
+
+func decodeScannedFieldRaw(scanner *controlScanner, name string) (string, bool) {
 	trimmed, ok := scannedRaw(scanner.fields[name])
 	if !ok {
 		return "", false
@@ -1273,6 +1306,7 @@ func decodeScannedField(scanner *controlScanner, name string) (string, bool) {
 	if limit := scanFieldCaps[name]; limit > 0 && len(value) > limit {
 		scanner.fieldOver = true
 		scanner.droppedFields[name] = true
+		delete(scanner.fields, name)
 		return "", false
 	}
 	return value, true

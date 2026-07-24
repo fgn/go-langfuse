@@ -291,16 +291,26 @@ func (r *neverEOFReader) Read(p []byte) (int, error) {
 func TestBarelyOverCapCompleteEventsStillSalvage(t *testing.T) {
 	// The delimiter slack admits complete events a few bytes over the
 	// cap into the buffered path; they must salvage exactly like
-	// streamed ones, for every size in the slack window, both framings,
-	// and every read split.
+	// streamed ones. The sweep derives each fixture's branch from the
+	// REAL nextEvent semantics and asserts the intended construction,
+	// covering both the complete-event and streamed-lexer paths across
+	// both framings and every read split.
 	const maxEvent = 64
-	for over := 1; over <= delimiterSlack; over++ {
+	for over := 1; over <= delimiterSlack+2; over++ {
 		for _, framing := range []string{"\n\n", "\r\n\r\n"} {
-			payload := strings.Repeat("x", maxEvent+over-6) // "data: " is 6 bytes
+			lineEnd := framing[:len(framing)/2]
+			payload := strings.Repeat("x", maxEvent+over-len("data: ")-len(lineEnd))
 			raw := "data: " + payload + framing
-			if len(raw)-len(framing) <= maxEvent {
-				t.Fatalf("test construction: event not over cap")
+			block := []byte(raw)
+			event, _, found := nextEvent(block)
+			if !found {
+				t.Fatalf("construction: nextEvent found no boundary in %q", raw)
 			}
+			if len(event) != maxEvent+over {
+				t.Fatalf("construction: event block = %d bytes, want %d", len(event), maxEvent+over)
+			}
+			completeBranch := len(raw) <= maxEvent+delimiterSlack
+			_ = completeBranch // both branches must salvage identically
 			stream := raw + "data: after" + framing
 			for _, chunk := range []int{1, 5, len(stream)} {
 				call := &chunkedStub{}

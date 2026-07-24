@@ -134,3 +134,41 @@ func TestUnaryScannerHistories(t *testing.T) {
 		})
 	}
 }
+
+// TestUsageTotalGuards locks the wire-total requirements: all three
+// totals present, non-negative, and equal to the inclusive sum.
+func TestUsageTotalGuards(t *testing.T) {
+	ptr := func(v int64) *int64 { return &v }
+	cases := []struct {
+		name  string
+		usage responsesUsage
+		ok    bool
+	}{
+		{"valid", responsesUsage{InputTokens: ptr(3), OutputTokens: ptr(2), TotalTokens: ptr(5)}, true},
+		{"missing-total", responsesUsage{InputTokens: ptr(3), OutputTokens: ptr(2)}, false},
+		{"missing-input", responsesUsage{OutputTokens: ptr(2), TotalTokens: ptr(2)}, false},
+		{"negative-output", responsesUsage{InputTokens: ptr(3), OutputTokens: ptr(-2), TotalTokens: ptr(1)}, false},
+		{"mismatched-total", responsesUsage{InputTokens: ptr(3), OutputTokens: ptr(2), TotalTokens: ptr(9)}, false},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, ok := mapResponsesUsage(&testCase.usage); ok != testCase.ok {
+				t.Fatalf("ok = %v, want %v", ok, testCase.ok)
+			}
+		})
+	}
+}
+
+// TestOversizedUnaryOutputIsAnArray locks the route-level array
+// contract for the salvage placeholder as well.
+func TestOversizedUnaryOutputIsAnArray(t *testing.T) {
+	call := newResponsesCall(wiretap.Route{}, 1<<20)
+	call.BeginOversizedUnary()
+	call.FeedOversized([]byte(`{"status":"completed"}`))
+	call.FinishOversizedUnary(200)
+	result := call.Result()
+	outputs, isArray := result.Output.([]any)
+	if !isArray || len(outputs) != 1 {
+		t.Fatalf("oversized unary output = %T, want a one-element item array", result.Output)
+	}
+}

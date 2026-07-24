@@ -53,11 +53,16 @@ func responsesParityInput(value any) (any, error) {
 // fact, and projects every item through the closed subset so raw
 // Python fields (ids, statuses, logprobs, annotations) and sanitized
 // Go items compare on the same surface.
-func responsesParityOutput(value any) (any, error) {
+func responsesParityOutput(value any, goSide bool) (any, error) {
 	switch typed := value.(type) {
 	case nil:
 		return nil, nil // Python serializes output: [] as null
 	case map[string]any:
+		if goSide {
+			// The Go route contract is ALWAYS an item array; only the
+			// Python wrapper's documented singleton collapse is bridged.
+			return nil, fmt.Errorf("go responses output must be an item array, got a single object")
+		}
 		return projectResponsesItems([]any{typed}), nil
 	case []any:
 		if len(typed) == 0 {
@@ -168,11 +173,14 @@ func canonicalizeResponses(obs observation, stream bool) (canonical, error) {
 		}
 		return shapeOf(projected), nil
 	}
+	goSide := obs.Name == "openai.responses"
 	inputShape, err := projectedShape(obs.Input, responsesParityInput)
 	if err != nil {
 		return canonical{}, fmt.Errorf("input projection: %w", err)
 	}
-	outputShape, err := projectedShape(obs.Output, responsesParityOutput)
+	outputShape, err := projectedShape(obs.Output, func(value any) (any, error) {
+		return responsesParityOutput(value, goSide)
+	})
 	if err != nil {
 		return canonical{}, fmt.Errorf("output projection: %w", err)
 	}
@@ -390,7 +398,7 @@ func TestResponsesCanonicalizerFixtures(t *testing.T) {
 	t.Run("singleton-rewrap-and-raw-field-drop", func(t *testing.T) {
 		pythonRaw := `{"id":"msg-1","type":"message","status":"completed","role":"assistant",` +
 			`"content":[{"type":"output_text","text":"ok","annotations":[],"logprobs":[{"token":"SECRET"}]}]}`
-		goSanitized := `{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}`
+		goSanitized := `[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]`
 		python, err := canonicalizeResponses(obs("OpenAI-responses-parity", pythonInput, pythonRaw), false)
 		if err != nil {
 			t.Fatal(err)
@@ -417,12 +425,12 @@ func TestResponsesCanonicalizerFixtures(t *testing.T) {
 	})
 	t.Run("meaningful-asymmetry-still-fails", func(t *testing.T) {
 		one, err := canonicalizeResponses(obs("openai.responses", goInput,
-			`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}`), false)
+			`[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}]`), false)
 		if err != nil {
 			t.Fatal(err)
 		}
 		two, err := canonicalizeResponses(obs("openai.responses", goInput,
-			`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"},{"type":"refusal","refusal":"no"}]}`), false)
+			`[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"},{"type":"refusal","refusal":"no"}]}]`), false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -446,8 +454,9 @@ func TestResponsesCanonicalizerFixtures(t *testing.T) {
 // output text is nondeterministic across separate live calls and is
 // compared structurally by the shape document instead.
 type responsesValueRecord struct {
-	Model string
-	Input any
+	Model  string
+	Input  any
+	Output any
 }
 
 func responsesValueRecordOf(obs observation, marker string) (responsesValueRecord, error) {
@@ -466,7 +475,61 @@ func responsesValueRecordOf(obs observation, marker string) (responsesValueRecor
 		}
 		record.Input = normalizeMarker(projected, marker)
 	}
+	if len(obs.Output) != 0 {
+		var value any
+		if err := json.Unmarshal(obs.Output, &value); err != nil {
+			return record, err
+		}
+		projected, err := responsesParityOutput(value, obs.Name == "openai.responses")
+		if err != nil {
+			return record, err
+		}
+		record.Output = normalizeGeneratedText(projected)
+	}
 	return record, nil
+}
+
+// generatedTextKeys are the free-text fields whose values are model
+// output and therefore nondeterministic across the two separate live
+// oracle calls; every FIXED literal (type, role, omitted, thought,
+// call ids, names) and the item order stay value-compared.
+var generatedTextKeys = map[string]bool{
+	"text": true, "refusal": true, "arguments": true, "content": false,
+}
+
+func normalizeGeneratedText(value any) any {
+	switch typed := value.(type) {
+	case []any:
+		result := make([]any, 0, len(typed))
+		for _, item := range typed {
+			result = append(result, normalizeGeneratedText(item))
+		}
+		return result
+	case map[string]any:
+		result := make(map[string]any, len(typed))
+		for key, item := range typed {
+			if generatedTextKeys[key] {
+				if _, isString := item.(string); isString {
+					result[key] = "<generated>"
+					continue
+				}
+			}
+			if key == "summary" {
+				// Reasoning summaries are generated prose lists.
+				if list, isList := item.([]any); isList {
+					result[key] = make([]any, len(list))
+					for index := range list {
+						result[key].([]any)[index] = "<generated>"
+					}
+					continue
+				}
+			}
+			result[key] = normalizeGeneratedText(item)
+		}
+		return result
+	default:
+		return value
+	}
 }
 
 func normalizeMarker(value any, marker string) any {
@@ -493,9 +556,14 @@ func normalizeMarker(value any, marker string) any {
 	}
 }
 
-// compareResponsesValues rejects a candidate whose exact model or
-// marker-normalized input values disagree between the two SDKs, and
-// requires each side's usage to be internally consistent.
+// compareResponsesValues rejects a candidate whose exact model,
+// marker-normalized input values, or generated-text-normalized output
+// literals disagree between the two SDKs, and requires each side's
+// usage to be internally consistent. Usage token VALUES are a
+// documented scoped exclusion from cross-SDK comparison: the two
+// oracle calls are separate live inferences whose token counts differ
+// with the marker and the model's answer, so only bucket names (via
+// the shape document) and per-side checked sums are comparable.
 func compareResponsesValues(t *testing.T, python, goSide observation, pythonMarker, goMarker string) {
 	t.Helper()
 	pythonRecord, err := responsesValueRecordOf(python, pythonMarker)
@@ -513,6 +581,13 @@ func compareResponsesValues(t *testing.T, python, goSide observation, pythonMark
 		pythonJSON, _ := json.Marshal(pythonRecord.Input)
 		goJSON, _ := json.Marshal(goRecord.Input)
 		t.Errorf("normalized input values differ:\npython %s\ngo     %s", pythonJSON, goJSON)
+	}
+	// Output literals (type, role, omitted, thought, ids, ordering) are
+	// deterministic and value-compared; only generated prose is opaque.
+	if !reflect.DeepEqual(pythonRecord.Output, goRecord.Output) {
+		pythonJSON, _ := json.Marshal(pythonRecord.Output)
+		goJSON, _ := json.Marshal(goRecord.Output)
+		t.Errorf("normalized output values differ:\npython %s\ngo     %s", pythonJSON, goJSON)
 	}
 	for side, obs := range map[string]observation{"python": python, "go": goSide} {
 		input, output := obs.UsageDetails["input"], obs.UsageDetails["output"]
@@ -567,6 +642,36 @@ func TestResponsesValueComparisonFixtures(t *testing.T) {
 		compareResponsesValues(probe, python, goSide, "marker-b", "marker-a")
 		if !probe.Failed() {
 			t.Fatal("a wrong instruction value must fail the value comparison")
+		}
+	})
+	t.Run("output-literal-mutation-fails", func(t *testing.T) {
+		python, goSide := base()
+		python.Output = json.RawMessage(`{"type":"message","role":"assistant","content":[{"type":"output_text","text":"anything"}]}`)
+		goSide.Output = json.RawMessage(`[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"different prose"}]}]`)
+		agree := &testing.T{}
+		compareResponsesValues(agree, python, goSide, "marker-b", "marker-a")
+		if agree.Failed() {
+			t.Fatal("generated prose differences must not fail the literal comparison")
+		}
+		goSide.Output = json.RawMessage(`[{"type":"message","role":"tool","content":[{"type":"output_text","text":"x"}]}]`)
+		probe := &testing.T{}
+		compareResponsesValues(probe, python, goSide, "marker-b", "marker-a")
+		if !probe.Failed() {
+			t.Fatal("a mutated role literal must fail the value comparison")
+		}
+		goSide.Output = json.RawMessage(`[{"type":"unknown","omitted":true}]`)
+		probe = &testing.T{}
+		compareResponsesValues(probe, python, goSide, "marker-b", "marker-a")
+		if !probe.Failed() {
+			t.Fatal("a mutated discriminator must fail the value comparison")
+		}
+	})
+	t.Run("go-map-output-rejected", func(t *testing.T) {
+		obs := observation{Name: "openai.responses", Type: "GENERATION",
+			Input:  json.RawMessage(baseInput),
+			Output: json.RawMessage(`{"type":"message","role":"assistant","content":[]}`)}
+		if _, err := canonicalizeResponses(obs, false); err == nil {
+			t.Fatal("a Go singleton object output violates the array contract and must be rejected")
 		}
 	})
 	t.Run("usage-inconsistency-fails", func(t *testing.T) {
