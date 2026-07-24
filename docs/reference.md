@@ -85,10 +85,12 @@ Receipt is **never** automatic. Inbound baggage is caller-controlled, so
 authenticated the request — this is a deliberate security divergence from the
 Python SDK, whose processor reads baggage for every span. Import applies the
 allowlisted members into propagated trace state; per field, an explicit local
-value always wins, while a later import replaces values an earlier import
-accepted (and replaces or clears imported trace-claim authority from the
-current namespace — a claim installed by a locally started root is never
-cleared). Import always strips the entire `langfuse_*` namespace from the
+value always wins, while the accepted layer is a projection of the CURRENT
+namespace: a later import replaces values an earlier import accepted and
+retires accepted fields whose member is absent or invalid in the new
+namespace. Imported trace-claim authority is likewise replaced or cleared
+per import; a claim installed by a locally started root is never cleared or
+relabeled. Import always strips the entire `langfuse_*` namespace from the
 returned branch's baggage: on an unmarked branch a standard inject then
 forwards nothing of Langfuse's, while an already marked branch is rebuilt
 from the accepted and local state and keeps exporting. Import before

@@ -769,12 +769,53 @@ func TestInteropSmokes(t *testing.T) {
 		}
 	})
 
+	// Python-side claim non-authority, through the real pinned
+	// receiver: a mismatched claim leaves trace identity to the
+	// traceparent, a claim without a traceparent never seeds a trace,
+	// and both leave the receiver as its own app root.
+	t.Run("PythonMismatchedClaimIsNotAuthority", func(t *testing.T) {
+		results := runOracle(t, []oracleCase{{
+			ID: "rx", Op: "extract",
+			Headers:     []string{"langfuse_trace_id=ffffffffffffffffffffffffffffffff,langfuse_user_id=alice"},
+			Traceparent: "00-0123456789abcdef0123456789abcdef-00f067aa0ba902b7-01",
+		}})
+		receiver := results["rx"]
+		if receiver.TraceID != "0123456789abcdef0123456789abcdef" {
+			t.Errorf("python trace = %s, want the traceparent's", receiver.TraceID)
+		}
+		if receiver.ParentSpanID != "00f067aa0ba902b7" {
+			t.Errorf("python parent = %s, want the traceparent's span", receiver.ParentSpanID)
+		}
+		if _, isRoot := receiver.Attributes["langfuse.internal.is_app_root"]; !isRoot {
+			t.Errorf("a mismatched claim must not suppress python's app root: %v", receiver.Attributes)
+		}
+		if receiver.Attributes["user.id"] != "alice" {
+			t.Errorf("attribute acceptance is independent of the claim: %v", receiver.Attributes)
+		}
+	})
+	t.Run("PythonClaimWithoutTraceparentIsNotAuthority", func(t *testing.T) {
+		results := runOracle(t, []oracleCase{{
+			ID: "rx", Op: "extract",
+			Headers: []string{"langfuse_trace_id=0123456789abcdef0123456789abcdef"},
+		}})
+		receiver := results["rx"]
+		if receiver.TraceID == "0123456789abcdef0123456789abcdef" {
+			t.Error("python must never seed trace identity from the claim")
+		}
+		if _, isRoot := receiver.Attributes["langfuse.internal.is_app_root"]; !isRoot {
+			t.Errorf("a parentless rejected claim leaves python as its own app root: %v", receiver.Attributes)
+		}
+	})
+
 	t.Run("GoToPython", func(t *testing.T) {
 		harness := newInteropGoClient(t, "pk-interop-gopy")
 		ctx := harness.client.WithTraceAttributes(context.Background(), langfuse.TraceAttributes{
 			UserID:      "go-user",
 			SessionID:   "go-session",
 			Environment: "staging",
+			Name:        "go-flow",
+			Version:     "v9",
+			Metadata:    map[string]any{"tenant": "acme"},
 		})
 		ctx = harness.client.WithBaggagePropagation(ctx)
 		rootCtx, root := harness.client.StartObservation(ctx, "go-root", langfuse.TypeSpan, langfuse.ObservationAttributes{})
@@ -807,6 +848,12 @@ func TestInteropSmokes(t *testing.T) {
 		}
 		if receiver.Attributes["langfuse.environment"] != "staging" {
 			t.Errorf("python environment = %v, want staging", receiver.Attributes["langfuse.environment"])
+		}
+		if receiver.Attributes["langfuse.trace.name"] != "go-flow" || receiver.Attributes["langfuse.version"] != "v9" {
+			t.Errorf("trace name/version missing on python side: %v", receiver.Attributes)
+		}
+		if receiver.Attributes["langfuse.trace.metadata.tenant"] != "acme" {
+			t.Errorf("metadata missing on python side: %v", receiver.Attributes)
 		}
 		if _, isRoot := receiver.Attributes["langfuse.internal.is_app_root"]; isRoot {
 			t.Error("the go-claimed trace must not gain a second app root in Python")

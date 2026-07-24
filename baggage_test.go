@@ -919,26 +919,36 @@ func TestReImportUpdatesAcceptedValuesWhileLocalWins(t *testing.T) {
 	client := newInteropClient(t, receiver, Config{})
 	t.Cleanup(func() { shutdownClient(t, client) })
 
-	// Hop 1 accepts alice/s-1; hop 2 must replace the ACCEPTED user with
-	// bob (old accepted baggage has no local precedence) while the
-	// session, absent from hop 2, keeps its earlier accepted value.
+	// Hop 1 accepts alice/s-1/n1/staging; hop 2 carries a namespace
+	// without them: the accepted layer is a projection of the CURRENT
+	// namespace, so bob replaces alice and every accepted field absent
+	// from hop 2 is retired rather than exported as stale attribution.
 	ctx := client.WithTraceAttributesFromBaggage(
 		extractBaggage(t, context.Background(), "langfuse_user_id=alice,langfuse_session_id=s-1,langfuse_metadata_note=n1,langfuse_environment=staging"))
 	ctx = client.WithTraceAttributesFromBaggage(
-		extractBaggage(t, ctx, "langfuse_user_id=bob,langfuse_metadata_note=n2,langfuse_environment=canary"))
+		extractBaggage(t, ctx, "langfuse_user_id=bob,langfuse_metadata_note=n2"))
 
 	state, _ := ctx.Value(traceStateContextKey{client: client}).(traceState)
 	if state.userID != "bob" {
 		t.Errorf("re-imported user = %q, want bob (stale accepted value must not win)", state.userID)
 	}
-	if state.sessionID != "s-1" {
-		t.Errorf("session = %q, want the earlier accepted s-1", state.sessionID)
+	if state.sessionID != "" {
+		t.Errorf("session = %q, want retirement of the accepted value absent from the new namespace", state.sessionID)
+	}
+	if state.environment != "" {
+		t.Errorf("environment = %q, want retirement", state.environment)
 	}
 	if state.metadata["note"] != "n2" {
 		t.Errorf("re-imported metadata = %q, want n2", state.metadata["note"])
 	}
-	if state.environment != "canary" {
-		t.Errorf("re-imported environment = %q, want canary", state.environment)
+
+	// A valid-to-invalid transition retires too: hop 3 carries the
+	// session member again but out of domain.
+	ctx = client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, ctx, "langfuse_user_id=bob,langfuse_session_id=s%2B1"))
+	state, _ = ctx.Value(traceStateContextKey{client: client}).(traceState)
+	if state.sessionID != "" {
+		t.Errorf("invalid member must retire the accepted session; got %q", state.sessionID)
 	}
 
 	// A local value set between imports keeps winning over hop 3.
@@ -1177,5 +1187,110 @@ func TestBaggageDiagnosticsNeverNameUserControlledKeys(t *testing.T) {
 	}
 	if len(*diagnostics) == 0 {
 		t.Fatal("expected diagnostics for the rejected members")
+	}
+}
+
+func TestImportWithMatchingClaimKeepsLocalOrigin(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	client := newInteropClient(t, receiver, Config{})
+	t.Cleanup(func() { shutdownClient(t, client) })
+
+	// A local sampled root claims its trace; an import carrying the
+	// SAME ambient-matching ID must not relabel that authority as
+	// imported, so a following claimless import cannot clear it.
+	marked := client.WithBaggagePropagation(context.Background())
+	rootCtx, root := client.StartObservation(marked, "root", TypeSpan, ObservationAttributes{})
+	defer root.End()
+	ctx := client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, rootCtx, "langfuse_trace_id="+root.TraceID()))
+	ctx = client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, ctx, "langfuse_user_id=alice"))
+	if got := injectedMembers(ctx)[baggageKeyTraceID]; got != root.TraceID() {
+		t.Errorf("claim member = %q, want the local root's %q (matching import must not relabel local origin)",
+			got, root.TraceID())
+	}
+}
+
+func TestImportMaskCollisionsAndExactlyOnce(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	var maskCalls int
+	client := newInteropClient(t, receiver, Config{
+		Mask: func(value any) any {
+			fields, ok := value.(map[string]any)
+			if !ok {
+				return value
+			}
+			maskCalls++
+			masked := make(map[string]any, len(fields))
+			for key, field := range fields {
+				switch key {
+				case "incoming":
+					// Key remap landing on a locally originated entry.
+					masked["local"] = field
+				case "tostruct":
+					// A string value becoming structured loses its wire
+					// representation.
+					masked[key] = map[string]any{"wrapped": field}
+				default:
+					// Non-idempotent stamp: a second mask pass would
+					// change the value again and fail the assertions.
+					if text, isString := field.(string); isString {
+						masked[key] = fmt.Sprintf("%s#%d", text, maskCalls)
+					} else {
+						masked[key] = field
+					}
+				}
+			}
+			return masked
+		},
+	})
+	t.Cleanup(func() { shutdownClient(t, client) })
+
+	base := client.WithTraceAttributes(context.Background(), TraceAttributes{
+		Metadata: map[string]any{"local": "kept"},
+	})
+	localCalls := maskCalls
+	ctx := client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, base, "langfuse_metadata_incoming=remote,langfuse_metadata_tostruct=x,langfuse_metadata_plain=v"))
+	state, _ := ctx.Value(traceStateContextKey{client: client}).(traceState)
+
+	if maskCalls != localCalls+1 {
+		t.Errorf("import mask calls = %d, want exactly one", maskCalls-localCalls)
+	}
+	if state.metadata["local"] != "kept#1" {
+		t.Errorf("local metadata = %q; a mask key remap must not clobber locally originated entries", state.metadata["local"])
+	}
+	if state.metadata["plain"] != fmt.Sprintf("v#%d", localCalls+1) {
+		t.Errorf("plain = %q, want the single-pass masked value", state.metadata["plain"])
+	}
+	marked := client.WithBaggagePropagation(ctx)
+	members := injectedMembers(marked)
+	if _, exported := members[baggageMetadataPrefix+"tostruct"]; exported {
+		t.Error("a post-mask structured value has no wire representation and must not export")
+	}
+}
+
+func TestMarkingReportsReplacedClaim(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	client := newInteropClient(t, receiver, Config{})
+	t.Cleanup(func() { shutdownClient(t, client) })
+	diagnostics := captureBaggageDiagnostics(t)
+
+	traceHex := "0123456789abcdef0123456789abcdef"
+	inbound := oteltrace.ContextWithRemoteSpanContext(context.Background(), remoteSpanContext(t, traceHex))
+	inbound = extractBaggage(t, inbound, "langfuse_trace_id="+traceHex)
+	_ = client.WithBaggagePropagation(inbound)
+
+	found := false
+	for _, message := range *diagnostics {
+		if strings.Contains(message, baggageKeyTraceID) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("marking away an inbound claim must be named; diagnostics: %v", *diagnostics)
 	}
 }

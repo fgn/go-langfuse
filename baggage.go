@@ -120,12 +120,20 @@ func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Con
 	var (
 		claimID             oteltrace.TraceID
 		haveClaim           bool
+		hasNamespace        bool
 		environmentAccepted bool
 		importedMetadata    map[string]any
 		ignored             []string
 	)
+	scalars := map[string]*string{
+		acceptedSessionID: &state.sessionID,
+		acceptedUserID:    &state.userID,
+		acceptedName:      &state.name,
+		acceptedVersion:   &state.version,
+	}
+	confirmed := make(map[string]struct{})
 	// A field is replaceable when it is empty or its current value came
-	// from an earlier import: each import updates the accepted layer
+	// from an earlier import: each import rebuilds the accepted layer
 	// from the CURRENT namespace, while local values keep winning.
 	acceptScalar := func(target *string, originKey, memberKey, value string) {
 		if !wireBaggageValue(value) {
@@ -135,6 +143,7 @@ func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Con
 		if *target == "" || state.isAccepted(originKey) {
 			*target = value
 			state.markAccepted(originKey)
+			confirmed[originKey] = struct{}{}
 		}
 	}
 	for _, member := range bag.Members() {
@@ -142,6 +151,7 @@ func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Con
 		if !strings.HasPrefix(key, baggageKeyPrefix) {
 			continue
 		}
+		hasNamespace = true
 		value := member.Value()
 		switch {
 		case key == baggageKeyTraceID:
@@ -156,6 +166,7 @@ func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Con
 				if state.environment == "" || state.isAccepted(acceptedEnvironment) {
 					state.environment = value
 					state.markAccepted(acceptedEnvironment)
+					confirmed[acceptedEnvironment] = struct{}{}
 					environmentAccepted = true
 				}
 			} else {
@@ -188,20 +199,43 @@ func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Con
 			ignored = append(ignored, key)
 		}
 	}
-	state.mergeImportedMetadata(importedMetadata, c.mask)
+	if hasNamespace {
+		// The accepted layer is a projection of the CURRENT namespace:
+		// accepted fields whose member is absent or invalid in it are
+		// retired, so stale attribution from an earlier hop can never
+		// outlive the message that carried it. Locally originated
+		// fields are untouched, and a consumed context (no namespace)
+		// changes nothing.
+		for originKey, target := range scalars {
+			if _, kept := confirmed[originKey]; !kept && state.isAccepted(originKey) {
+				*target = ""
+				delete(state.accepted, originKey)
+			}
+		}
+		if _, kept := confirmed[acceptedEnvironment]; !kept && state.isAccepted(acceptedEnvironment) {
+			state.environment = ""
+			delete(state.accepted, acceptedEnvironment)
+		}
+	}
+	state.mergeImportedMetadata(importedMetadata, c.mask, hasNamespace)
 	if len(ignored) != 0 {
 		reportIgnoredBaggageMembers(ignored)
 	}
 
 	result := context.WithValue(ctx, traceStateContextKey{client: c}, state)
 	// Claim replacement: a matching claim in the current namespace
-	// installs imported authority; anything else (absent, invalid, or
-	// mismatched) clears authority a PREVIOUS import installed. A claim
-	// from a locally started root is never cleared by an import.
+	// installs imported authority — unless an identical LOCAL claim is
+	// already held, which keeps its local origin so no later import can
+	// clear it. Anything else (absent, invalid, or mismatched) clears
+	// authority a previous import installed; a claim from a locally
+	// started root is never cleared by an import.
+	prior := c.traceClaimState(ctx)
 	switch {
+	case haveClaim && prior.id == claimID && !prior.imported:
+		// Keep the stronger local origin.
 	case haveClaim:
 		result = c.withImportedTraceClaim(result, claimID)
-	case c.traceClaimState(ctx).imported:
+	case prior.imported:
 		result = c.withClearedTraceClaim(result)
 	}
 	result = c.syncBaggage(result, true, false)
@@ -382,12 +416,14 @@ func (c *Client) wireBaggageMembers(
 		}
 		for _, member := range bag.Members() {
 			key := member.Key()
-			if !strings.HasPrefix(key, baggageKeyPrefix) || key == baggageKeyTraceID {
-				// Claim replacement is routine synchronization (detached
-				// re-marks legitimately drop a stale claim), never an
-				// ordering mistake worth a diagnostic.
+			if !strings.HasPrefix(key, baggageKeyPrefix) {
 				continue
 			}
+			// The claim is included deliberately: marking before
+			// importing silently discards inbound app-root suppression,
+			// which is exactly the ordering mistake worth naming. The
+			// wording below states content replacement only, because a
+			// detached re-mark also lands here legitimately.
 			if value, kept := emitted[key]; !kept || value != member.Value() {
 				droppedInbound = append(droppedInbound, key)
 			}

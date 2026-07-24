@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"sort"
+	"strings"
 	"unicode/utf8"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -270,11 +271,25 @@ func (s *traceState) merge(values TraceAttributes, mask func(any) any) {
 // baggage-accepted; those are replaced from the current namespace and
 // re-marked, so a later import updates earlier imports while local
 // values keep winning.
-func (s *traceState) mergeImportedMetadata(imported map[string]any, mask func(any) any) {
-	if len(imported) == 0 {
-		return
-	}
+func (s *traceState) mergeImportedMetadata(imported map[string]any, mask func(any) any, hasNamespace bool) {
 	normalized, stringKeys := lfattr.TraceMetadataWithExisting(imported, mask, s.metadata)
+	if hasNamespace {
+		// Retire accepted metadata keys the current namespace does not
+		// re-confirm (post-mask identity): the accepted layer is a
+		// projection of this namespace, never an accumulation.
+		for originKey := range s.accepted {
+			suffix, isMetadata := strings.CutPrefix(originKey, acceptedMetadata)
+			if !isMetadata {
+				continue
+			}
+			if _, kept := normalized[suffix]; kept {
+				continue
+			}
+			delete(s.metadata, suffix)
+			delete(s.wireMetadata, suffix)
+			delete(s.accepted, originKey)
+		}
+	}
 	if len(normalized) == 0 {
 		return
 	}
@@ -288,6 +303,11 @@ func (s *traceState) mergeImportedMetadata(imported map[string]any, mask func(an
 	sort.Strings(keys)
 	truncated := false
 	for _, key := range keys {
+		// The mask may remap keys: a post-mask key landing on a locally
+		// originated entry must not clobber it (local wins per key).
+		if _, exists := s.metadata[key]; exists && !s.isAccepted(acceptedMetadata+key) {
+			continue
+		}
 		if _, exists := s.metadata[key]; !exists && len(s.metadata) >= lfattr.MaxMetadataEntries {
 			truncated = true
 			continue
