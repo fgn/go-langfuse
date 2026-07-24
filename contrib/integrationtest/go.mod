@@ -15,7 +15,7 @@ require (
 	github.com/fgn/go-langfuse/contrib/openai v0.0.0
 	github.com/sashabaranov/go-openai v1.41.2
 	go.opentelemetry.io/proto/otlp v1.11.0
-	google.golang.org/genai v1.59.0
+	google.golang.org/genai v1.65.0
 	google.golang.org/protobuf v1.36.11
 )
 
@@ -27,7 +27,7 @@ require (
 )
 
 require (
-	cloud.google.com/go v0.116.0 // indirect
+	cloud.google.com/go v0.123.0 // indirect
 	cloud.google.com/go/compute/metadata v0.9.0 // indirect
 	github.com/cenkalti/backoff/v5 v5.0.3 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
