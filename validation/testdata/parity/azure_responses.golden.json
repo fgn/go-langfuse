@@ -82,7 +82,7 @@
     ]
   },
   "provenance": {
-    "note": "normalized Python langfuse.openai Responses trace; regenerate via task parity:regen",
+    "note": "normalized Python Responses trace; cross-SDK usage token values excluded (separate inferences); task parity:regen",
     "pythonLangfuse": "4.14.1",
     "pythonOpenAI": "2.47.0"
   }

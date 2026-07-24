@@ -148,6 +148,19 @@ func TestOversizedEventStreamsNormalizedPayload(t *testing.T) {
 	}
 }
 
+func assertSlackBranchCoverage(t *testing.T, branchCounts map[string]map[bool]int) {
+	t.Helper()
+	// Derived from nextEvent semantics: LF blocks of maxEvent+1..+3
+	// complete inside the slack window (terminator: one byte), CRLF
+	// blocks of +1..+2 (terminator: two bytes); the rest stream.
+	if branchCounts["\n\n"][true] != 3 || branchCounts["\n\n"][false] != 3 {
+		t.Errorf("LF branch counts = %v, want 3 complete / 3 streamed", branchCounts["\n\n"])
+	}
+	if branchCounts["\r\n\r\n"][true] != 2 || branchCounts["\r\n\r\n"][false] != 4 {
+		t.Errorf("CRLF branch counts = %v, want 2 complete / 4 streamed", branchCounts["\r\n\r\n"])
+	}
+}
+
 func TestOversizedEventOutputVerdictStampsCompletionStart(t *testing.T) {
 	const maxEvent = 64
 	raw, _ := oversizedEventStream(3 * maxEvent)
@@ -296,6 +309,7 @@ func TestBarelyOverCapCompleteEventsStillSalvage(t *testing.T) {
 	// covering both the complete-event and streamed-lexer paths across
 	// both framings and every read split.
 	const maxEvent = 64
+	branchCounts := map[string]map[bool]int{"\n\n": {}, "\r\n\r\n": {}}
 	for over := 1; over <= delimiterSlack+2; over++ {
 		for _, framing := range []string{"\n\n", "\r\n\r\n"} {
 			lineEnd := framing[:len(framing)/2]
@@ -310,7 +324,7 @@ func TestBarelyOverCapCompleteEventsStillSalvage(t *testing.T) {
 				t.Fatalf("construction: event block = %d bytes, want %d", len(event), maxEvent+over)
 			}
 			completeBranch := len(raw) <= maxEvent+delimiterSlack
-			_ = completeBranch // both branches must salvage identically
+			branchCounts[framing][completeBranch]++
 			stream := raw + "data: after" + framing
 			for _, chunk := range []int{1, 5, len(stream)} {
 				call := &chunkedStub{}
@@ -339,6 +353,7 @@ func TestBarelyOverCapCompleteEventsStillSalvage(t *testing.T) {
 			}
 		}
 	}
+	assertSlackBranchCoverage(t, branchCounts)
 }
 
 // panickingChunked panics in its oversized hooks: the wrapper must

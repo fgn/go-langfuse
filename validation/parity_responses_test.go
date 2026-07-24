@@ -304,7 +304,7 @@ func TestParityRegenResponses(t *testing.T) {
 	}
 
 	pythonCanonical.Provenance = provenance{
-		Note:           "normalized Python langfuse.openai Responses trace; regenerate via task parity:regen",
+		Note:           "normalized Python Responses trace; cross-SDK usage token values excluded (separate inferences); task parity:regen",
 		PythonLangfuse: "4.14.1",
 		PythonOpenAI:   "2.47.0",
 	}
@@ -681,6 +681,20 @@ func TestResponsesValueComparisonFixtures(t *testing.T) {
 		compareResponsesValues(probe, python, goSide, "marker-b", "marker-a")
 		if !probe.Failed() {
 			t.Fatal("an inconsistent usage total must fail the value comparison")
+		}
+	})
+	t.Run("consistent-usage-difference-passes-by-design", func(t *testing.T) {
+		// The documented scoped exclusion: token values from two
+		// separate live inferences are not cross-comparable, so an
+		// internally consistent one-sided difference passes. This
+		// fixture locks that INTENTIONAL behavior; narrowing it would
+		// require an oracle that replays one identical inference.
+		python, goSide := base()
+		goSide.UsageDetails = map[string]int64{"input": 4, "output": 3, "total": 7}
+		probe := &testing.T{}
+		compareResponsesValues(probe, python, goSide, "marker-b", "marker-a")
+		if probe.Failed() {
+			t.Fatal("internally consistent cross-call usage differences are a documented exclusion")
 		}
 	})
 }

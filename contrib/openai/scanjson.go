@@ -550,6 +550,16 @@ func (s *controlScanner) endKey() {
 		s.kindPending = name
 		delete(s.fields, name)
 	}
+
+	// The output member's KIND is closed-envelope evidence (array or
+	// null) even though its contents are never retained: envelope mode
+	// tracks response.output, unary mode the root output.
+	if key == "output" {
+		if (s.mode == scanSSEEnvelope && len(s.stack) == 2 && s.stack[0].key == "response") ||
+			(s.mode == scanUnaryRoot && len(s.stack) == 1) {
+			s.kindPending = "output"
+		}
+	}
 }
 
 // seenKey namespaces duplicate detection per owning object.
@@ -707,16 +717,14 @@ func (s *controlScanner) finalizeSelected() {
 	}
 }
 
-// envelopeWellTyped applies the closed terminal-envelope kind rules to
-// the recorded value kinds: the root response member must exist and be
-// an object, and every selected member present must carry its pinned
-// kind (null counts as absent). It is the salvage-path twin of
-// validateResponsesBody.
+// envelopeWellTyped applies the closed envelope kind rules to the
+// recorded value kinds — the salvage-path twin of
+// validateResponsesBody. In envelope mode the root response member
+// must exist and be an object; in both modes every selected member
+// present must carry its pinned kind (null counts as absent), and the
+// output member must be an array or null.
 func (s *controlScanner) envelopeWellTyped() bool {
-	if s.mode != scanSSEEnvelope {
-		return true
-	}
-	if !s.responseSeen || s.valueKinds["response"] != '{' {
+	if s.mode == scanSSEEnvelope && (!s.responseSeen || s.valueKinds["response"] != '{') {
 		return false
 	}
 	kindOK := func(name string, want byte) bool {
@@ -725,7 +733,7 @@ func (s *controlScanner) envelopeWellTyped() bool {
 	}
 	return kindOK("status", '"') && kindOK("model", '"') &&
 		kindOK("usage", '{') && kindOK("error", '{') &&
-		kindOK("incomplete_details", '{')
+		kindOK("incomplete_details", '{') && kindOK("output", '[')
 }
 
 // documentUsable reports whether hard verdicts may be derived: one

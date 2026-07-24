@@ -776,3 +776,141 @@ func TestResponsesStalePartialImageAfterTombstoneIsNotBearing(t *testing.T) {
 		t.Fatal("a stale media chunk on a tombstoned identity must not stamp completion start")
 	}
 }
+
+// TestResponsesClosedEnvelopeTable drives every closed-envelope member
+// through wrong-kind, null, and valid cases on BOTH the buffered and
+// salvage paths, plus duplicates and a malformed tail after an early
+// terminal type: the two paths must classify identically.
+func TestResponsesClosedEnvelopeTable(t *testing.T) {
+	pad := `,"pad":"` + strings.Repeat("p", 300<<10) + `"`
+	cases := []struct {
+		name     string
+		envelope string // response object contents
+		valid    bool
+	}{
+		{"valid-minimal", `{"status":"completed"}`, true},
+		{"valid-null-members", `{"status":"completed","usage":null,"error":null,"incomplete_details":null,"output":null}`, true},
+		{"valid-full", `{"status":"completed","model":"m","usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3},"output":[]}`, true},
+		{"status-number", `{"status":123}`, false},
+		{"model-object", `{"status":"completed","model":{}}`, false},
+		{"usage-array", `{"status":"completed","usage":[1]}`, false},
+		{"error-string", `{"status":"completed","error":"boom"}`, false},
+		{"incomplete-details-array", `{"status":"completed","incomplete_details":[]}`, false},
+		{"output-object", `{"status":"completed","output":{}}`, false},
+	}
+	for _, testCase := range cases {
+		for _, oversized := range []bool{false, true} {
+			suffix := "buffered"
+			body := `{"type":"response.completed","response":` + testCase.envelope + `}`
+			if oversized {
+				suffix = "salvaged"
+				body = `{"type":"response.completed","response":` + testCase.envelope + `` + pad + `}`
+			}
+			t.Run(testCase.name+"-"+suffix, func(t *testing.T) {
+				receiver, flushFn := runResponsesStream(t, sseBody(body))
+				flushFn()
+				span := receiver.nextSpan(t)
+				got := attrString(t, span, "langfuse.observation.status_message")
+				if testCase.valid && got == "incomplete" {
+					t.Fatalf("%s: valid envelope classified incomplete", suffix)
+				}
+				if !testCase.valid && got != "incomplete" {
+					t.Fatalf("%s: schema-invalid envelope yielded status %q, want incomplete", suffix, got)
+				}
+			})
+		}
+	}
+
+	t.Run("malformed-after-early-type-salvaged", func(t *testing.T) {
+		receiver, flushFn := runResponsesStream(t, sseBody(
+			`{"type":"response.completed","response":{"status":"completed"`+pad+`},MALFORMED`))
+		flushFn()
+		span := receiver.nextSpan(t)
+		if got := attrString(t, span, "langfuse.observation.status_message"); got != "incomplete" {
+			t.Fatalf("status %q, want incomplete for a malformed oversized tail", got)
+		}
+	})
+	t.Run("duplicate-response-salvaged", func(t *testing.T) {
+		receiver, flushFn := runResponsesStream(t, sseBody(
+			`{"type":"response.completed","response":{"status":"completed"},"response":{"status":"failed"`+pad+`}}`))
+		flushFn()
+		span := receiver.nextSpan(t)
+		if got := attrString(t, span, "langfuse.observation.status_message"); got != "incomplete" {
+			t.Fatalf("status %q, want incomplete for a duplicate response member", got)
+		}
+	})
+}
+
+// TestResponsesDecodedCapBoundaryTable locks the exact decoded caps at
+// 255/256/257 for plain and escaped spellings on the buffered and
+// salvage paths, SSE and unary alike.
+func TestResponsesDecodedCapBoundaryTable(t *testing.T) {
+	pad := `,"pad":"` + strings.Repeat("p", 300<<10) + `"`
+	unaryPad := `,"pad":"` + strings.Repeat("p", 600<<10) + `"`
+	// Models beyond the transport's 128-char shape gate export as the
+	// Mask-governed unvalidated_model metadata; the scanner's 256-byte
+	// decoded cap decides whether the value survives AT ALL, and both
+	// paths must agree exactly at the boundary. Escaped spellings decode
+	// to the same lengths.
+	spellings := map[string]func(int) string{
+		"plain":   func(n int) string { return strings.Repeat("m", n) },
+		"escaped": func(n int) string { return strings.Repeat(`\u006d`, n) },
+	}
+
+	for spelling, build := range spellings {
+		for _, length := range []int{255, 256, 257} {
+			kept := length <= 256
+			model := build(length)
+			t.Run(fmt.Sprintf("%s-%d-sse-buffered", spelling, length), func(t *testing.T) {
+				receiver, flushFn := runResponsesStream(t, sseBody(
+					`{"type":"response.completed","response":{"status":"completed","model":"`+model+`","output":[]}}`))
+				flushFn()
+				span := receiver.nextSpan(t)
+				if got := hasAttr(span, "langfuse.observation.metadata.unvalidated_model"); got != kept {
+					t.Fatalf("model retained = %v, want %v", got, kept)
+				}
+			})
+			t.Run(fmt.Sprintf("%s-%d-sse-salvaged", spelling, length), func(t *testing.T) {
+				receiver, flushFn := runResponsesStream(t, sseBody(
+					`{"type":"response.completed","response":{"status":"completed","model":"`+model+`","output":[]`+pad+`}}`))
+				flushFn()
+				span := receiver.nextSpan(t)
+				if got := hasAttr(span, "langfuse.observation.metadata.unvalidated_model"); got != kept {
+					t.Fatalf("model retained = %v, want %v", got, kept)
+				}
+			})
+			t.Run(fmt.Sprintf("%s-%d-unary-buffered", spelling, length), func(t *testing.T) {
+				receiver := newOTLPReceiver(t)
+				lf := newTestClient(t, receiver, nil)
+				body := `{"status":"completed","model":"` + model + `","output":[]}`
+				provider := chatServer(t, func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, body)
+				})
+				httpClient := &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
+				drainAndClose(t, postResponses(t, httpClient, provider.URL, `{"model":"m","input":"q"}`))
+				flush(t, lf)
+				span := receiver.nextSpan(t)
+				if got := hasAttr(span, "langfuse.observation.metadata.unvalidated_model"); got != kept {
+					t.Fatalf("model retained = %v, want %v", got, kept)
+				}
+			})
+			t.Run(fmt.Sprintf("%s-%d-unary-salvaged", spelling, length), func(t *testing.T) {
+				receiver := newOTLPReceiver(t)
+				lf := newTestClient(t, receiver, nil)
+				body := `{"status":"completed","model":"` + model + `","output":[]` + unaryPad + `}`
+				provider := chatServer(t, func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = io.WriteString(w, body)
+				})
+				httpClient := &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
+				drainAndClose(t, postResponses(t, httpClient, provider.URL, `{"model":"m","input":"q"}`))
+				flush(t, lf)
+				span := receiver.nextSpan(t)
+				if got := hasAttr(span, "langfuse.observation.metadata.unvalidated_model"); got != kept {
+					t.Fatalf("model retained = %v, want %v", got, kept)
+				}
+			})
+		}
+	}
+}

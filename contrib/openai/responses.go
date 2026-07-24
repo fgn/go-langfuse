@@ -554,11 +554,12 @@ func validateResponsesBody(raw json.RawMessage, drops map[string]bool) (*respons
 		return nil, false
 	}
 	var probe struct {
-		Status json.RawMessage `json:"status"`
-		Model  json.RawMessage `json:"model"`
-		Usage  json.RawMessage `json:"usage"`
-		Error  json.RawMessage `json:"error"`
-		Output json.RawMessage `json:"output"`
+		Status            json.RawMessage `json:"status"`
+		Model             json.RawMessage `json:"model"`
+		Usage             json.RawMessage `json:"usage"`
+		Error             json.RawMessage `json:"error"`
+		IncompleteDetails json.RawMessage `json:"incomplete_details"`
+		Output            json.RawMessage `json:"output"`
 	}
 	if err := json.Unmarshal(raw, &probe); err != nil {
 		return nil, false
@@ -575,6 +576,7 @@ func validateResponsesBody(raw json.RawMessage, drops map[string]bool) (*respons
 	isArray := func(b byte) bool { return b == '[' }
 	if !wellTyped(probe.Status, isString) || !wellTyped(probe.Model, isString) ||
 		!wellTyped(probe.Usage, isObject) || !wellTyped(probe.Error, isObject) ||
+		!wellTyped(probe.IncompleteDetails, isObject) ||
 		!wellTyped(probe.Output, isArray) {
 		return nil, false
 	}
@@ -1270,7 +1272,7 @@ func (c *responsesCall) FinishOversizedUnary(httpStatus int) {
 	c.partial = true
 	c.unaryOutput = []any{map[string]any{"omitted": true}}
 	c.haveUnary = true
-	if scanner == nil || !scanner.documentUsable() {
+	if scanner == nil || !scanner.documentUsable() || !scanner.envelopeWellTyped() {
 		return
 	}
 	if httpStatus >= 400 {
