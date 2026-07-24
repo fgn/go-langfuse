@@ -797,6 +797,11 @@ func TestBaggageRoundTripsThroughRawHeaderUnchanged(t *testing.T) {
 	}
 }
 
+func hasMember(members map[string]string, key string) bool {
+	_, present := members[key]
+	return present
+}
+
 func keysOf(members map[string]string) []string {
 	keys := make([]string, 0, len(members))
 	for key := range members {
@@ -956,7 +961,7 @@ func TestReImportUpdatesAcceptedValuesWhileLocalWins(t *testing.T) {
 	if freshState.sessionID != "" {
 		t.Errorf("an invalid member must retire the held accepted session; got %q", freshState.sessionID)
 	}
-	if members := injectedMembers(client.WithBaggagePropagation(fresh)); members[baggageKeySessionID] != "" {
+	if members := injectedMembers(client.WithBaggagePropagation(fresh)); hasMember(members, baggageKeySessionID) {
 		t.Errorf("retired session must leave the wire; members: %v", members)
 	}
 

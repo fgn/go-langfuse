@@ -29,6 +29,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 const interopGoldenPath = "testdata/interop/corpus.golden.json"
@@ -802,7 +803,7 @@ func TestInteropSmokes(t *testing.T) {
 		if receiver.TraceID == "0123456789abcdef0123456789abcdef" {
 			t.Error("python must never seed trace identity from the claim")
 		}
-		if len(receiver.TraceID) != 32 || receiver.TraceID == strings.Repeat("0", 32) {
+		if id, err := oteltrace.TraceIDFromHex(receiver.TraceID); err != nil || !id.IsValid() {
 			t.Errorf("python trace ID must be a fresh nonzero 32-hex ID, got %q", receiver.TraceID)
 		}
 		if receiver.ParentSpanID != "" {
