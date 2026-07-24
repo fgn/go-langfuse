@@ -1,0 +1,1967 @@
+{
+  "pins": {
+    "langfuse": "4.14.1",
+    "opentelemetry-sdk": "1.44.0"
+  },
+  "fixtures": {
+    "duplicate-member-keys": {
+      "go_accepted_from_header": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "user.id": "second"
+      },
+      "python_attributes_from_header": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "user.id": "second"
+      }
+    },
+    "empty-value-ignored": {
+      "go_accepted_from_header": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "session.id": "s-3"
+      },
+      "python_attributes_from_header": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "session.id": "s-3",
+        "user.id": ""
+      }
+    },
+    "encoded-metadata-key-rejected-by-go": {
+      "go_accepted_from_header": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.ok": "v"
+      },
+      "python_attributes_from_header": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.a+b": "v",
+        "langfuse.trace.metadata.ok": "v"
+      }
+    },
+    "encoded-plus-value-rejected-by-go": {
+      "go_accepted_from_header": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "session.id": "ok"
+      },
+      "python_attributes_from_header": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "session.id": "ok",
+        "user.id": "a+b"
+      }
+    },
+    "excluded-rows-ignored-by-go": {
+      "go_accepted_from_header": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "user.id": "alice"
+      },
+      "python_attributes_from_header": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.prompt.name": "greet",
+        "langfuse.observation.prompt.version": 3,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.tags": "['a']",
+        "user.id": "alice"
+      }
+    },
+    "foreign-member-with-property": {
+      "go_accepted_from_header": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "user.id": "alice"
+      },
+      "go_reinjected_after_import": [
+        "foo=bar;prop=1"
+      ],
+      "python_attributes_from_header": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "user.id": "alice"
+      }
+    },
+    "limit-200-chars": {
+      "python_raw": [
+        "langfuse_user_id=uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu"
+      ],
+      "go_raw": [
+        "langfuse_user_id=uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu"
+      ],
+      "go_accepted_from_python": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "user.id": "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu"
+      },
+      "python_attributes_from_go": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "user.id": "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu"
+      }
+    },
+    "limit-201-chars-dropped": {
+      "go_accepted_from_python": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span"
+      },
+      "python_attributes_from_go": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span"
+      }
+    },
+    "metadata-33-keys-capped": {
+      "python_raw": [
+        "langfuse_metadata_k00=v00",
+        "langfuse_metadata_k01=v01",
+        "langfuse_metadata_k02=v02",
+        "langfuse_metadata_k03=v03",
+        "langfuse_metadata_k04=v04",
+        "langfuse_metadata_k05=v05",
+        "langfuse_metadata_k06=v06",
+        "langfuse_metadata_k07=v07",
+        "langfuse_metadata_k08=v08",
+        "langfuse_metadata_k09=v09",
+        "langfuse_metadata_k10=v10",
+        "langfuse_metadata_k11=v11",
+        "langfuse_metadata_k12=v12",
+        "langfuse_metadata_k13=v13",
+        "langfuse_metadata_k14=v14",
+        "langfuse_metadata_k15=v15",
+        "langfuse_metadata_k16=v16",
+        "langfuse_metadata_k17=v17",
+        "langfuse_metadata_k18=v18",
+        "langfuse_metadata_k19=v19",
+        "langfuse_metadata_k20=v20",
+        "langfuse_metadata_k21=v21",
+        "langfuse_metadata_k22=v22",
+        "langfuse_metadata_k23=v23",
+        "langfuse_metadata_k24=v24",
+        "langfuse_metadata_k25=v25",
+        "langfuse_metadata_k26=v26",
+        "langfuse_metadata_k27=v27",
+        "langfuse_metadata_k28=v28",
+        "langfuse_metadata_k29=v29",
+        "langfuse_metadata_k30=v30",
+        "langfuse_metadata_k31=v31",
+        "langfuse_metadata_k32=v32"
+      ],
+      "go_raw": [
+        "langfuse_metadata_k00=v00",
+        "langfuse_metadata_k01=v01",
+        "langfuse_metadata_k02=v02",
+        "langfuse_metadata_k03=v03",
+        "langfuse_metadata_k04=v04",
+        "langfuse_metadata_k05=v05",
+        "langfuse_metadata_k06=v06",
+        "langfuse_metadata_k07=v07",
+        "langfuse_metadata_k08=v08",
+        "langfuse_metadata_k09=v09",
+        "langfuse_metadata_k10=v10",
+        "langfuse_metadata_k11=v11",
+        "langfuse_metadata_k12=v12",
+        "langfuse_metadata_k13=v13",
+        "langfuse_metadata_k14=v14",
+        "langfuse_metadata_k15=v15",
+        "langfuse_metadata_k16=v16",
+        "langfuse_metadata_k17=v17",
+        "langfuse_metadata_k18=v18",
+        "langfuse_metadata_k19=v19",
+        "langfuse_metadata_k20=v20",
+        "langfuse_metadata_k21=v21",
+        "langfuse_metadata_k22=v22",
+        "langfuse_metadata_k23=v23",
+        "langfuse_metadata_k24=v24",
+        "langfuse_metadata_k25=v25",
+        "langfuse_metadata_k26=v26",
+        "langfuse_metadata_k27=v27",
+        "langfuse_metadata_k28=v28",
+        "langfuse_metadata_k29=v29",
+        "langfuse_metadata_k30=v30",
+        "langfuse_metadata_k31=v31"
+      ],
+      "go_accepted_from_python": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.k00": "v00",
+        "langfuse.trace.metadata.k01": "v01",
+        "langfuse.trace.metadata.k02": "v02",
+        "langfuse.trace.metadata.k03": "v03",
+        "langfuse.trace.metadata.k04": "v04",
+        "langfuse.trace.metadata.k05": "v05",
+        "langfuse.trace.metadata.k06": "v06",
+        "langfuse.trace.metadata.k07": "v07",
+        "langfuse.trace.metadata.k08": "v08",
+        "langfuse.trace.metadata.k09": "v09",
+        "langfuse.trace.metadata.k10": "v10",
+        "langfuse.trace.metadata.k11": "v11",
+        "langfuse.trace.metadata.k12": "v12",
+        "langfuse.trace.metadata.k13": "v13",
+        "langfuse.trace.metadata.k14": "v14",
+        "langfuse.trace.metadata.k15": "v15",
+        "langfuse.trace.metadata.k16": "v16",
+        "langfuse.trace.metadata.k17": "v17",
+        "langfuse.trace.metadata.k18": "v18",
+        "langfuse.trace.metadata.k19": "v19",
+        "langfuse.trace.metadata.k20": "v20",
+        "langfuse.trace.metadata.k21": "v21",
+        "langfuse.trace.metadata.k22": "v22",
+        "langfuse.trace.metadata.k23": "v23",
+        "langfuse.trace.metadata.k24": "v24",
+        "langfuse.trace.metadata.k25": "v25",
+        "langfuse.trace.metadata.k26": "v26",
+        "langfuse.trace.metadata.k27": "v27",
+        "langfuse.trace.metadata.k28": "v28",
+        "langfuse.trace.metadata.k29": "v29",
+        "langfuse.trace.metadata.k30": "v30",
+        "langfuse.trace.metadata.k31": "v31"
+      },
+      "python_attributes_from_go": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.k00": "v00",
+        "langfuse.trace.metadata.k01": "v01",
+        "langfuse.trace.metadata.k02": "v02",
+        "langfuse.trace.metadata.k03": "v03",
+        "langfuse.trace.metadata.k04": "v04",
+        "langfuse.trace.metadata.k05": "v05",
+        "langfuse.trace.metadata.k06": "v06",
+        "langfuse.trace.metadata.k07": "v07",
+        "langfuse.trace.metadata.k08": "v08",
+        "langfuse.trace.metadata.k09": "v09",
+        "langfuse.trace.metadata.k10": "v10",
+        "langfuse.trace.metadata.k11": "v11",
+        "langfuse.trace.metadata.k12": "v12",
+        "langfuse.trace.metadata.k13": "v13",
+        "langfuse.trace.metadata.k14": "v14",
+        "langfuse.trace.metadata.k15": "v15",
+        "langfuse.trace.metadata.k16": "v16",
+        "langfuse.trace.metadata.k17": "v17",
+        "langfuse.trace.metadata.k18": "v18",
+        "langfuse.trace.metadata.k19": "v19",
+        "langfuse.trace.metadata.k20": "v20",
+        "langfuse.trace.metadata.k21": "v21",
+        "langfuse.trace.metadata.k22": "v22",
+        "langfuse.trace.metadata.k23": "v23",
+        "langfuse.trace.metadata.k24": "v24",
+        "langfuse.trace.metadata.k25": "v25",
+        "langfuse.trace.metadata.k26": "v26",
+        "langfuse.trace.metadata.k27": "v27",
+        "langfuse.trace.metadata.k28": "v28",
+        "langfuse.trace.metadata.k29": "v29",
+        "langfuse.trace.metadata.k30": "v30",
+        "langfuse.trace.metadata.k31": "v31"
+      }
+    },
+    "multibyte-rejected": {
+      "python_raw": [
+        "langfuse_user_id=h%C3%A9llo-w%C3%B6rld"
+      ],
+      "go_accepted_from_python": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span"
+      },
+      "python_attributes_from_go": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span"
+      }
+    },
+    "multiple-header-lines": {
+      "go_accepted_from_header": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "session.id": "s-2",
+        "user.id": "alice"
+      },
+      "python_attributes_from_header": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "user.id": "alice"
+      }
+    },
+    "python-70-metadata-keys-vs-go-64-member-parse-limit": {
+      "go_accepted_from_header": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.k00": "v00",
+        "langfuse.trace.metadata.k01": "v01",
+        "langfuse.trace.metadata.k02": "v02",
+        "langfuse.trace.metadata.k03": "v03",
+        "langfuse.trace.metadata.k04": "v04",
+        "langfuse.trace.metadata.k05": "v05",
+        "langfuse.trace.metadata.k06": "v06",
+        "langfuse.trace.metadata.k07": "v07",
+        "langfuse.trace.metadata.k08": "v08",
+        "langfuse.trace.metadata.k09": "v09",
+        "langfuse.trace.metadata.k10": "v10",
+        "langfuse.trace.metadata.k11": "v11",
+        "langfuse.trace.metadata.k12": "v12",
+        "langfuse.trace.metadata.k13": "v13",
+        "langfuse.trace.metadata.k14": "v14",
+        "langfuse.trace.metadata.k15": "v15",
+        "langfuse.trace.metadata.k16": "v16",
+        "langfuse.trace.metadata.k17": "v17",
+        "langfuse.trace.metadata.k18": "v18",
+        "langfuse.trace.metadata.k19": "v19",
+        "langfuse.trace.metadata.k20": "v20",
+        "langfuse.trace.metadata.k21": "v21",
+        "langfuse.trace.metadata.k22": "v22",
+        "langfuse.trace.metadata.k23": "v23",
+        "langfuse.trace.metadata.k24": "v24",
+        "langfuse.trace.metadata.k25": "v25",
+        "langfuse.trace.metadata.k26": "v26",
+        "langfuse.trace.metadata.k27": "v27",
+        "langfuse.trace.metadata.k28": "v28",
+        "langfuse.trace.metadata.k29": "v29",
+        "langfuse.trace.metadata.k30": "v30",
+        "langfuse.trace.metadata.k31": "v31"
+      },
+      "python_attributes_from_header": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.k00": "v00",
+        "langfuse.trace.metadata.k01": "v01",
+        "langfuse.trace.metadata.k02": "v02",
+        "langfuse.trace.metadata.k03": "v03",
+        "langfuse.trace.metadata.k04": "v04",
+        "langfuse.trace.metadata.k05": "v05",
+        "langfuse.trace.metadata.k06": "v06",
+        "langfuse.trace.metadata.k07": "v07",
+        "langfuse.trace.metadata.k08": "v08",
+        "langfuse.trace.metadata.k09": "v09",
+        "langfuse.trace.metadata.k10": "v10",
+        "langfuse.trace.metadata.k11": "v11",
+        "langfuse.trace.metadata.k12": "v12",
+        "langfuse.trace.metadata.k13": "v13",
+        "langfuse.trace.metadata.k14": "v14",
+        "langfuse.trace.metadata.k15": "v15",
+        "langfuse.trace.metadata.k16": "v16",
+        "langfuse.trace.metadata.k17": "v17",
+        "langfuse.trace.metadata.k18": "v18",
+        "langfuse.trace.metadata.k19": "v19",
+        "langfuse.trace.metadata.k20": "v20",
+        "langfuse.trace.metadata.k21": "v21",
+        "langfuse.trace.metadata.k22": "v22",
+        "langfuse.trace.metadata.k23": "v23",
+        "langfuse.trace.metadata.k24": "v24",
+        "langfuse.trace.metadata.k25": "v25",
+        "langfuse.trace.metadata.k26": "v26",
+        "langfuse.trace.metadata.k27": "v27",
+        "langfuse.trace.metadata.k28": "v28",
+        "langfuse.trace.metadata.k29": "v29",
+        "langfuse.trace.metadata.k30": "v30",
+        "langfuse.trace.metadata.k31": "v31",
+        "langfuse.trace.metadata.k32": "v32",
+        "langfuse.trace.metadata.k33": "v33",
+        "langfuse.trace.metadata.k34": "v34",
+        "langfuse.trace.metadata.k35": "v35",
+        "langfuse.trace.metadata.k36": "v36",
+        "langfuse.trace.metadata.k37": "v37",
+        "langfuse.trace.metadata.k38": "v38",
+        "langfuse.trace.metadata.k39": "v39",
+        "langfuse.trace.metadata.k40": "v40",
+        "langfuse.trace.metadata.k41": "v41",
+        "langfuse.trace.metadata.k42": "v42",
+        "langfuse.trace.metadata.k43": "v43",
+        "langfuse.trace.metadata.k44": "v44",
+        "langfuse.trace.metadata.k45": "v45",
+        "langfuse.trace.metadata.k46": "v46",
+        "langfuse.trace.metadata.k47": "v47",
+        "langfuse.trace.metadata.k48": "v48",
+        "langfuse.trace.metadata.k49": "v49",
+        "langfuse.trace.metadata.k50": "v50",
+        "langfuse.trace.metadata.k51": "v51",
+        "langfuse.trace.metadata.k52": "v52",
+        "langfuse.trace.metadata.k53": "v53",
+        "langfuse.trace.metadata.k54": "v54",
+        "langfuse.trace.metadata.k55": "v55",
+        "langfuse.trace.metadata.k56": "v56",
+        "langfuse.trace.metadata.k57": "v57",
+        "langfuse.trace.metadata.k58": "v58",
+        "langfuse.trace.metadata.k59": "v59",
+        "langfuse.trace.metadata.k60": "v60",
+        "langfuse.trace.metadata.k61": "v61",
+        "langfuse.trace.metadata.k62": "v62",
+        "langfuse.trace.metadata.k63": "v63",
+        "langfuse.trace.metadata.k64": "v64",
+        "langfuse.trace.metadata.k65": "v65",
+        "langfuse.trace.metadata.k66": "v66",
+        "langfuse.trace.metadata.k67": "v67",
+        "langfuse.trace.metadata.k68": "v68",
+        "langfuse.trace.metadata.k69": "v69"
+      }
+    },
+    "python-space-becomes-plus-rejected-by-go": {
+      "go_accepted_from_header": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "user.id": "alice"
+      },
+      "python_attributes_from_header": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.name": "checkout flow",
+        "user.id": "alice"
+      }
+    },
+    "scalars-basic": {
+      "byte_identical": true,
+      "python_raw": [
+        "langfuse_environment=staging",
+        "langfuse_metadata_tenant=acme",
+        "langfuse_session_id=s-1",
+        "langfuse_trace_name=checkout",
+        "langfuse_user_id=alice",
+        "langfuse_version=v1"
+      ],
+      "go_raw": [
+        "langfuse_environment=staging",
+        "langfuse_metadata_tenant=acme",
+        "langfuse_session_id=s-1",
+        "langfuse_trace_name=checkout",
+        "langfuse_user_id=alice",
+        "langfuse_version=v1"
+      ],
+      "go_accepted_from_python": {
+        "langfuse.environment": "staging",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.tenant": "acme",
+        "langfuse.trace.name": "checkout",
+        "langfuse.version": "v1",
+        "session.id": "s-1",
+        "user.id": "alice"
+      },
+      "python_attributes_from_go": {
+        "langfuse.environment": "staging",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.tenant": "acme",
+        "langfuse.trace.name": "checkout",
+        "langfuse.version": "v1",
+        "session.id": "s-1",
+        "user.id": "alice"
+      }
+    },
+    "space-and-plus-out-of-domain": {
+      "python_raw": [
+        "langfuse_session_id=s%2B1",
+        "langfuse_user_id=alice+smith"
+      ],
+      "go_accepted_from_python": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span"
+      },
+      "python_attributes_from_go": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span"
+      }
+    },
+    "tags-are-excluded-from-go": {
+      "python_raw": [
+        "langfuse_tags=%5B%27t1%27%2C+%27t2%27%5D",
+        "langfuse_user_id=alice"
+      ],
+      "go_raw": [
+        "langfuse_user_id=alice"
+      ],
+      "go_accepted_from_python": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "user.id": "alice"
+      },
+      "python_attributes_from_go": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "user.id": "alice"
+      }
+    },
+    "unknown-member-terminates-at-go": {
+      "go_accepted_from_header": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "user.id": "alice"
+      },
+      "go_reinjected_after_import": [
+        "foo=bar"
+      ],
+      "python_attributes_from_header": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.region": "eu",
+        "user.id": "alice"
+      }
+    },
+    "value-specials": {
+      "python_raw": [
+        "langfuse_metadata_quoted=q%22w%2Cx%3By%5Cz",
+        "langfuse_session_id=s%5B1%5D%26%282%29%2A%273%27",
+        "langfuse_trace_name=a%3Db%2525c",
+        "langfuse_user_id=alice%40example.com%3A8080%2Fx"
+      ],
+      "go_raw": [
+        "langfuse_metadata_quoted=q%22w%2Cx%3By%5Cz",
+        "langfuse_session_id=s[1]\u0026(2)*'3'",
+        "langfuse_trace_name=a=b%2525c",
+        "langfuse_user_id=alice@example.com:8080/x"
+      ],
+      "go_accepted_from_python": {
+        "langfuse.environment": "go-default",
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.quoted": "q\"w,x;y\\z",
+        "langfuse.trace.name": "a=b%25c",
+        "session.id": "s[1]\u0026(2)*'3'",
+        "user.id": "alice@example.com:8080/x"
+      },
+      "python_attributes_from_go": {
+        "langfuse.internal.is_app_root": true,
+        "langfuse.observation.type": "span",
+        "langfuse.trace.metadata.quoted": "q\"w,x;y\\z",
+        "langfuse.trace.name": "a=b%25c",
+        "session.id": "s[1]\u0026(2)*'3'",
+        "user.id": "alice@example.com:8080/x"
+      }
+    }
+  },
+  "value_sweep": {
+    "0x21": {
+      "go_exported": true,
+      "go_raw_member": "a!b",
+      "python_received": "a!b",
+      "python_raw_member": "a%21b",
+      "go_accepted": true,
+      "go_received": "a!b"
+    },
+    "0x22": {
+      "go_exported": true,
+      "go_raw_member": "a%22b",
+      "python_received": "a\"b",
+      "python_raw_member": "a%22b",
+      "go_accepted": true,
+      "go_received": "a\"b"
+    },
+    "0x23": {
+      "go_exported": true,
+      "go_raw_member": "a#b",
+      "python_received": "a#b",
+      "python_raw_member": "a%23b",
+      "go_accepted": true,
+      "go_received": "a#b"
+    },
+    "0x24": {
+      "go_exported": true,
+      "go_raw_member": "a$b",
+      "python_received": "a$b",
+      "python_raw_member": "a%24b",
+      "go_accepted": true,
+      "go_received": "a$b"
+    },
+    "0x25": {
+      "go_exported": true,
+      "go_raw_member": "a%25b",
+      "python_received": "a%b",
+      "python_raw_member": "a%25b",
+      "go_accepted": true,
+      "go_received": "a%b"
+    },
+    "0x26": {
+      "go_exported": true,
+      "go_raw_member": "a\u0026b",
+      "python_received": "a\u0026b",
+      "python_raw_member": "a%26b",
+      "go_accepted": true,
+      "go_received": "a\u0026b"
+    },
+    "0x27": {
+      "go_exported": true,
+      "go_raw_member": "a'b",
+      "python_received": "a'b",
+      "python_raw_member": "a%27b",
+      "go_accepted": true,
+      "go_received": "a'b"
+    },
+    "0x28": {
+      "go_exported": true,
+      "go_raw_member": "a(b",
+      "python_received": "a(b",
+      "python_raw_member": "a%28b",
+      "go_accepted": true,
+      "go_received": "a(b"
+    },
+    "0x29": {
+      "go_exported": true,
+      "go_raw_member": "a)b",
+      "python_received": "a)b",
+      "python_raw_member": "a%29b",
+      "go_accepted": true,
+      "go_received": "a)b"
+    },
+    "0x2a": {
+      "go_exported": true,
+      "go_raw_member": "a*b",
+      "python_received": "a*b",
+      "python_raw_member": "a%2Ab",
+      "go_accepted": true,
+      "go_received": "a*b"
+    },
+    "0x2b": {
+      "go_exported": false,
+      "python_raw_member": "a%2Bb",
+      "go_accepted": false
+    },
+    "0x2c": {
+      "go_exported": true,
+      "go_raw_member": "a%2Cb",
+      "python_received": "a,b",
+      "python_raw_member": "a%2Cb",
+      "go_accepted": true,
+      "go_received": "a,b"
+    },
+    "0x2d": {
+      "go_exported": true,
+      "go_raw_member": "a-b",
+      "python_received": "a-b",
+      "python_raw_member": "a-b",
+      "go_accepted": true,
+      "go_received": "a-b"
+    },
+    "0x2e": {
+      "go_exported": true,
+      "go_raw_member": "a.b",
+      "python_received": "a.b",
+      "python_raw_member": "a.b",
+      "go_accepted": true,
+      "go_received": "a.b"
+    },
+    "0x2f": {
+      "go_exported": true,
+      "go_raw_member": "a/b",
+      "python_received": "a/b",
+      "python_raw_member": "a%2Fb",
+      "go_accepted": true,
+      "go_received": "a/b"
+    },
+    "0x30": {
+      "go_exported": true,
+      "go_raw_member": "a0b",
+      "python_received": "a0b",
+      "python_raw_member": "a0b",
+      "go_accepted": true,
+      "go_received": "a0b"
+    },
+    "0x31": {
+      "go_exported": true,
+      "go_raw_member": "a1b",
+      "python_received": "a1b",
+      "python_raw_member": "a1b",
+      "go_accepted": true,
+      "go_received": "a1b"
+    },
+    "0x32": {
+      "go_exported": true,
+      "go_raw_member": "a2b",
+      "python_received": "a2b",
+      "python_raw_member": "a2b",
+      "go_accepted": true,
+      "go_received": "a2b"
+    },
+    "0x33": {
+      "go_exported": true,
+      "go_raw_member": "a3b",
+      "python_received": "a3b",
+      "python_raw_member": "a3b",
+      "go_accepted": true,
+      "go_received": "a3b"
+    },
+    "0x34": {
+      "go_exported": true,
+      "go_raw_member": "a4b",
+      "python_received": "a4b",
+      "python_raw_member": "a4b",
+      "go_accepted": true,
+      "go_received": "a4b"
+    },
+    "0x35": {
+      "go_exported": true,
+      "go_raw_member": "a5b",
+      "python_received": "a5b",
+      "python_raw_member": "a5b",
+      "go_accepted": true,
+      "go_received": "a5b"
+    },
+    "0x36": {
+      "go_exported": true,
+      "go_raw_member": "a6b",
+      "python_received": "a6b",
+      "python_raw_member": "a6b",
+      "go_accepted": true,
+      "go_received": "a6b"
+    },
+    "0x37": {
+      "go_exported": true,
+      "go_raw_member": "a7b",
+      "python_received": "a7b",
+      "python_raw_member": "a7b",
+      "go_accepted": true,
+      "go_received": "a7b"
+    },
+    "0x38": {
+      "go_exported": true,
+      "go_raw_member": "a8b",
+      "python_received": "a8b",
+      "python_raw_member": "a8b",
+      "go_accepted": true,
+      "go_received": "a8b"
+    },
+    "0x39": {
+      "go_exported": true,
+      "go_raw_member": "a9b",
+      "python_received": "a9b",
+      "python_raw_member": "a9b",
+      "go_accepted": true,
+      "go_received": "a9b"
+    },
+    "0x3a": {
+      "go_exported": true,
+      "go_raw_member": "a:b",
+      "python_received": "a:b",
+      "python_raw_member": "a%3Ab",
+      "go_accepted": true,
+      "go_received": "a:b"
+    },
+    "0x3b": {
+      "go_exported": true,
+      "go_raw_member": "a%3Bb",
+      "python_received": "a;b",
+      "python_raw_member": "a%3Bb",
+      "go_accepted": true,
+      "go_received": "a;b"
+    },
+    "0x3c": {
+      "go_exported": true,
+      "go_raw_member": "a\u003cb",
+      "python_received": "a\u003cb",
+      "python_raw_member": "a%3Cb",
+      "go_accepted": true,
+      "go_received": "a\u003cb"
+    },
+    "0x3d": {
+      "go_exported": true,
+      "go_raw_member": "a=b",
+      "python_received": "a=b",
+      "python_raw_member": "a%3Db",
+      "go_accepted": true,
+      "go_received": "a=b"
+    },
+    "0x3e": {
+      "go_exported": true,
+      "go_raw_member": "a\u003eb",
+      "python_received": "a\u003eb",
+      "python_raw_member": "a%3Eb",
+      "go_accepted": true,
+      "go_received": "a\u003eb"
+    },
+    "0x3f": {
+      "go_exported": true,
+      "go_raw_member": "a?b",
+      "python_received": "a?b",
+      "python_raw_member": "a%3Fb",
+      "go_accepted": true,
+      "go_received": "a?b"
+    },
+    "0x40": {
+      "go_exported": true,
+      "go_raw_member": "a@b",
+      "python_received": "a@b",
+      "python_raw_member": "a%40b",
+      "go_accepted": true,
+      "go_received": "a@b"
+    },
+    "0x41": {
+      "go_exported": true,
+      "go_raw_member": "aAb",
+      "python_received": "aAb",
+      "python_raw_member": "aAb",
+      "go_accepted": true,
+      "go_received": "aAb"
+    },
+    "0x42": {
+      "go_exported": true,
+      "go_raw_member": "aBb",
+      "python_received": "aBb",
+      "python_raw_member": "aBb",
+      "go_accepted": true,
+      "go_received": "aBb"
+    },
+    "0x43": {
+      "go_exported": true,
+      "go_raw_member": "aCb",
+      "python_received": "aCb",
+      "python_raw_member": "aCb",
+      "go_accepted": true,
+      "go_received": "aCb"
+    },
+    "0x44": {
+      "go_exported": true,
+      "go_raw_member": "aDb",
+      "python_received": "aDb",
+      "python_raw_member": "aDb",
+      "go_accepted": true,
+      "go_received": "aDb"
+    },
+    "0x45": {
+      "go_exported": true,
+      "go_raw_member": "aEb",
+      "python_received": "aEb",
+      "python_raw_member": "aEb",
+      "go_accepted": true,
+      "go_received": "aEb"
+    },
+    "0x46": {
+      "go_exported": true,
+      "go_raw_member": "aFb",
+      "python_received": "aFb",
+      "python_raw_member": "aFb",
+      "go_accepted": true,
+      "go_received": "aFb"
+    },
+    "0x47": {
+      "go_exported": true,
+      "go_raw_member": "aGb",
+      "python_received": "aGb",
+      "python_raw_member": "aGb",
+      "go_accepted": true,
+      "go_received": "aGb"
+    },
+    "0x48": {
+      "go_exported": true,
+      "go_raw_member": "aHb",
+      "python_received": "aHb",
+      "python_raw_member": "aHb",
+      "go_accepted": true,
+      "go_received": "aHb"
+    },
+    "0x49": {
+      "go_exported": true,
+      "go_raw_member": "aIb",
+      "python_received": "aIb",
+      "python_raw_member": "aIb",
+      "go_accepted": true,
+      "go_received": "aIb"
+    },
+    "0x4a": {
+      "go_exported": true,
+      "go_raw_member": "aJb",
+      "python_received": "aJb",
+      "python_raw_member": "aJb",
+      "go_accepted": true,
+      "go_received": "aJb"
+    },
+    "0x4b": {
+      "go_exported": true,
+      "go_raw_member": "aKb",
+      "python_received": "aKb",
+      "python_raw_member": "aKb",
+      "go_accepted": true,
+      "go_received": "aKb"
+    },
+    "0x4c": {
+      "go_exported": true,
+      "go_raw_member": "aLb",
+      "python_received": "aLb",
+      "python_raw_member": "aLb",
+      "go_accepted": true,
+      "go_received": "aLb"
+    },
+    "0x4d": {
+      "go_exported": true,
+      "go_raw_member": "aMb",
+      "python_received": "aMb",
+      "python_raw_member": "aMb",
+      "go_accepted": true,
+      "go_received": "aMb"
+    },
+    "0x4e": {
+      "go_exported": true,
+      "go_raw_member": "aNb",
+      "python_received": "aNb",
+      "python_raw_member": "aNb",
+      "go_accepted": true,
+      "go_received": "aNb"
+    },
+    "0x4f": {
+      "go_exported": true,
+      "go_raw_member": "aOb",
+      "python_received": "aOb",
+      "python_raw_member": "aOb",
+      "go_accepted": true,
+      "go_received": "aOb"
+    },
+    "0x50": {
+      "go_exported": true,
+      "go_raw_member": "aPb",
+      "python_received": "aPb",
+      "python_raw_member": "aPb",
+      "go_accepted": true,
+      "go_received": "aPb"
+    },
+    "0x51": {
+      "go_exported": true,
+      "go_raw_member": "aQb",
+      "python_received": "aQb",
+      "python_raw_member": "aQb",
+      "go_accepted": true,
+      "go_received": "aQb"
+    },
+    "0x52": {
+      "go_exported": true,
+      "go_raw_member": "aRb",
+      "python_received": "aRb",
+      "python_raw_member": "aRb",
+      "go_accepted": true,
+      "go_received": "aRb"
+    },
+    "0x53": {
+      "go_exported": true,
+      "go_raw_member": "aSb",
+      "python_received": "aSb",
+      "python_raw_member": "aSb",
+      "go_accepted": true,
+      "go_received": "aSb"
+    },
+    "0x54": {
+      "go_exported": true,
+      "go_raw_member": "aTb",
+      "python_received": "aTb",
+      "python_raw_member": "aTb",
+      "go_accepted": true,
+      "go_received": "aTb"
+    },
+    "0x55": {
+      "go_exported": true,
+      "go_raw_member": "aUb",
+      "python_received": "aUb",
+      "python_raw_member": "aUb",
+      "go_accepted": true,
+      "go_received": "aUb"
+    },
+    "0x56": {
+      "go_exported": true,
+      "go_raw_member": "aVb",
+      "python_received": "aVb",
+      "python_raw_member": "aVb",
+      "go_accepted": true,
+      "go_received": "aVb"
+    },
+    "0x57": {
+      "go_exported": true,
+      "go_raw_member": "aWb",
+      "python_received": "aWb",
+      "python_raw_member": "aWb",
+      "go_accepted": true,
+      "go_received": "aWb"
+    },
+    "0x58": {
+      "go_exported": true,
+      "go_raw_member": "aXb",
+      "python_received": "aXb",
+      "python_raw_member": "aXb",
+      "go_accepted": true,
+      "go_received": "aXb"
+    },
+    "0x59": {
+      "go_exported": true,
+      "go_raw_member": "aYb",
+      "python_received": "aYb",
+      "python_raw_member": "aYb",
+      "go_accepted": true,
+      "go_received": "aYb"
+    },
+    "0x5a": {
+      "go_exported": true,
+      "go_raw_member": "aZb",
+      "python_received": "aZb",
+      "python_raw_member": "aZb",
+      "go_accepted": true,
+      "go_received": "aZb"
+    },
+    "0x5b": {
+      "go_exported": true,
+      "go_raw_member": "a[b",
+      "python_received": "a[b",
+      "python_raw_member": "a%5Bb",
+      "go_accepted": true,
+      "go_received": "a[b"
+    },
+    "0x5c": {
+      "go_exported": true,
+      "go_raw_member": "a%5Cb",
+      "python_received": "a\\b",
+      "python_raw_member": "a%5Cb",
+      "go_accepted": true,
+      "go_received": "a\\b"
+    },
+    "0x5d": {
+      "go_exported": true,
+      "go_raw_member": "a]b",
+      "python_received": "a]b",
+      "python_raw_member": "a%5Db",
+      "go_accepted": true,
+      "go_received": "a]b"
+    },
+    "0x5e": {
+      "go_exported": true,
+      "go_raw_member": "a^b",
+      "python_received": "a^b",
+      "python_raw_member": "a%5Eb",
+      "go_accepted": true,
+      "go_received": "a^b"
+    },
+    "0x5f": {
+      "go_exported": true,
+      "go_raw_member": "a_b",
+      "python_received": "a_b",
+      "python_raw_member": "a_b",
+      "go_accepted": true,
+      "go_received": "a_b"
+    },
+    "0x60": {
+      "go_exported": true,
+      "go_raw_member": "a`b",
+      "python_received": "a`b",
+      "python_raw_member": "a%60b",
+      "go_accepted": true,
+      "go_received": "a`b"
+    },
+    "0x61": {
+      "go_exported": true,
+      "go_raw_member": "aab",
+      "python_received": "aab",
+      "python_raw_member": "aab",
+      "go_accepted": true,
+      "go_received": "aab"
+    },
+    "0x62": {
+      "go_exported": true,
+      "go_raw_member": "abb",
+      "python_received": "abb",
+      "python_raw_member": "abb",
+      "go_accepted": true,
+      "go_received": "abb"
+    },
+    "0x63": {
+      "go_exported": true,
+      "go_raw_member": "acb",
+      "python_received": "acb",
+      "python_raw_member": "acb",
+      "go_accepted": true,
+      "go_received": "acb"
+    },
+    "0x64": {
+      "go_exported": true,
+      "go_raw_member": "adb",
+      "python_received": "adb",
+      "python_raw_member": "adb",
+      "go_accepted": true,
+      "go_received": "adb"
+    },
+    "0x65": {
+      "go_exported": true,
+      "go_raw_member": "aeb",
+      "python_received": "aeb",
+      "python_raw_member": "aeb",
+      "go_accepted": true,
+      "go_received": "aeb"
+    },
+    "0x66": {
+      "go_exported": true,
+      "go_raw_member": "afb",
+      "python_received": "afb",
+      "python_raw_member": "afb",
+      "go_accepted": true,
+      "go_received": "afb"
+    },
+    "0x67": {
+      "go_exported": true,
+      "go_raw_member": "agb",
+      "python_received": "agb",
+      "python_raw_member": "agb",
+      "go_accepted": true,
+      "go_received": "agb"
+    },
+    "0x68": {
+      "go_exported": true,
+      "go_raw_member": "ahb",
+      "python_received": "ahb",
+      "python_raw_member": "ahb",
+      "go_accepted": true,
+      "go_received": "ahb"
+    },
+    "0x69": {
+      "go_exported": true,
+      "go_raw_member": "aib",
+      "python_received": "aib",
+      "python_raw_member": "aib",
+      "go_accepted": true,
+      "go_received": "aib"
+    },
+    "0x6a": {
+      "go_exported": true,
+      "go_raw_member": "ajb",
+      "python_received": "ajb",
+      "python_raw_member": "ajb",
+      "go_accepted": true,
+      "go_received": "ajb"
+    },
+    "0x6b": {
+      "go_exported": true,
+      "go_raw_member": "akb",
+      "python_received": "akb",
+      "python_raw_member": "akb",
+      "go_accepted": true,
+      "go_received": "akb"
+    },
+    "0x6c": {
+      "go_exported": true,
+      "go_raw_member": "alb",
+      "python_received": "alb",
+      "python_raw_member": "alb",
+      "go_accepted": true,
+      "go_received": "alb"
+    },
+    "0x6d": {
+      "go_exported": true,
+      "go_raw_member": "amb",
+      "python_received": "amb",
+      "python_raw_member": "amb",
+      "go_accepted": true,
+      "go_received": "amb"
+    },
+    "0x6e": {
+      "go_exported": true,
+      "go_raw_member": "anb",
+      "python_received": "anb",
+      "python_raw_member": "anb",
+      "go_accepted": true,
+      "go_received": "anb"
+    },
+    "0x6f": {
+      "go_exported": true,
+      "go_raw_member": "aob",
+      "python_received": "aob",
+      "python_raw_member": "aob",
+      "go_accepted": true,
+      "go_received": "aob"
+    },
+    "0x70": {
+      "go_exported": true,
+      "go_raw_member": "apb",
+      "python_received": "apb",
+      "python_raw_member": "apb",
+      "go_accepted": true,
+      "go_received": "apb"
+    },
+    "0x71": {
+      "go_exported": true,
+      "go_raw_member": "aqb",
+      "python_received": "aqb",
+      "python_raw_member": "aqb",
+      "go_accepted": true,
+      "go_received": "aqb"
+    },
+    "0x72": {
+      "go_exported": true,
+      "go_raw_member": "arb",
+      "python_received": "arb",
+      "python_raw_member": "arb",
+      "go_accepted": true,
+      "go_received": "arb"
+    },
+    "0x73": {
+      "go_exported": true,
+      "go_raw_member": "asb",
+      "python_received": "asb",
+      "python_raw_member": "asb",
+      "go_accepted": true,
+      "go_received": "asb"
+    },
+    "0x74": {
+      "go_exported": true,
+      "go_raw_member": "atb",
+      "python_received": "atb",
+      "python_raw_member": "atb",
+      "go_accepted": true,
+      "go_received": "atb"
+    },
+    "0x75": {
+      "go_exported": true,
+      "go_raw_member": "aub",
+      "python_received": "aub",
+      "python_raw_member": "aub",
+      "go_accepted": true,
+      "go_received": "aub"
+    },
+    "0x76": {
+      "go_exported": true,
+      "go_raw_member": "avb",
+      "python_received": "avb",
+      "python_raw_member": "avb",
+      "go_accepted": true,
+      "go_received": "avb"
+    },
+    "0x77": {
+      "go_exported": true,
+      "go_raw_member": "awb",
+      "python_received": "awb",
+      "python_raw_member": "awb",
+      "go_accepted": true,
+      "go_received": "awb"
+    },
+    "0x78": {
+      "go_exported": true,
+      "go_raw_member": "axb",
+      "python_received": "axb",
+      "python_raw_member": "axb",
+      "go_accepted": true,
+      "go_received": "axb"
+    },
+    "0x79": {
+      "go_exported": true,
+      "go_raw_member": "ayb",
+      "python_received": "ayb",
+      "python_raw_member": "ayb",
+      "go_accepted": true,
+      "go_received": "ayb"
+    },
+    "0x7a": {
+      "go_exported": true,
+      "go_raw_member": "azb",
+      "python_received": "azb",
+      "python_raw_member": "azb",
+      "go_accepted": true,
+      "go_received": "azb"
+    },
+    "0x7b": {
+      "go_exported": true,
+      "go_raw_member": "a{b",
+      "python_received": "a{b",
+      "python_raw_member": "a%7Bb",
+      "go_accepted": true,
+      "go_received": "a{b"
+    },
+    "0x7c": {
+      "go_exported": true,
+      "go_raw_member": "a|b",
+      "python_received": "a|b",
+      "python_raw_member": "a%7Cb",
+      "go_accepted": true,
+      "go_received": "a|b"
+    },
+    "0x7d": {
+      "go_exported": true,
+      "go_raw_member": "a}b",
+      "python_received": "a}b",
+      "python_raw_member": "a%7Db",
+      "go_accepted": true,
+      "go_received": "a}b"
+    },
+    "0x7e": {
+      "go_exported": true,
+      "go_raw_member": "a~b",
+      "python_received": "a~b",
+      "python_raw_member": "a~b",
+      "go_accepted": true,
+      "go_received": "a~b"
+    }
+  },
+  "key_sweep": {
+    "0x21": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%21b=v",
+      "go_accepted": false
+    },
+    "0x22": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%22b=v",
+      "go_accepted": false
+    },
+    "0x23": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%23b=v",
+      "go_accepted": false
+    },
+    "0x24": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%24b=v",
+      "go_accepted": false
+    },
+    "0x25": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%25b=v",
+      "go_accepted": false
+    },
+    "0x26": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%26b=v",
+      "go_accepted": false
+    },
+    "0x27": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%27b=v",
+      "go_accepted": false
+    },
+    "0x28": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%28b=v",
+      "go_accepted": false
+    },
+    "0x29": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%29b=v",
+      "go_accepted": false
+    },
+    "0x2a": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%2Ab=v",
+      "go_accepted": false
+    },
+    "0x2b": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%2Bb=v",
+      "go_accepted": false
+    },
+    "0x2c": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%2Cb=v",
+      "go_accepted": false
+    },
+    "0x2d": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a-b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x2e": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a.b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x2f": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%2Fb=v",
+      "go_accepted": false
+    },
+    "0x30": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a0b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x31": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a1b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x32": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a2b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x33": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a3b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x34": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a4b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x35": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a5b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x36": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a6b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x37": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a7b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x38": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a8b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x39": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a9b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x3a": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%3Ab=v",
+      "go_accepted": false
+    },
+    "0x3b": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%3Bb=v",
+      "go_accepted": false
+    },
+    "0x3c": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%3Cb=v",
+      "go_accepted": false
+    },
+    "0x3d": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%3Db=v",
+      "go_accepted": false
+    },
+    "0x3e": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%3Eb=v",
+      "go_accepted": false
+    },
+    "0x3f": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%3Fb=v",
+      "go_accepted": false
+    },
+    "0x40": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%40b=v",
+      "go_accepted": false
+    },
+    "0x41": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aAb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x42": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aBb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x43": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aCb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x44": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aDb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x45": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aEb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x46": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aFb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x47": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aGb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x48": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aHb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x49": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aIb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x4a": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aJb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x4b": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aKb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x4c": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aLb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x4d": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aMb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x4e": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aNb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x4f": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aOb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x50": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aPb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x51": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aQb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x52": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aRb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x53": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aSb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x54": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aTb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x55": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aUb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x56": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aVb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x57": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aWb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x58": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aXb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x59": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aYb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x5a": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aZb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x5b": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%5Bb=v",
+      "go_accepted": false
+    },
+    "0x5c": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%5Cb=v",
+      "go_accepted": false
+    },
+    "0x5d": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%5Db=v",
+      "go_accepted": false
+    },
+    "0x5e": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%5Eb=v",
+      "go_accepted": false
+    },
+    "0x5f": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a_b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x60": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%60b=v",
+      "go_accepted": false
+    },
+    "0x61": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aab=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x62": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_abb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x63": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_acb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x64": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_adb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x65": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aeb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x66": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_afb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x67": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_agb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x68": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_ahb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x69": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aib=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x6a": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_ajb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x6b": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_akb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x6c": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_alb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x6d": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_amb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x6e": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_anb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x6f": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aob=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x70": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_apb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x71": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aqb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x72": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_arb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x73": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_asb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x74": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_atb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x75": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_aub=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x76": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_avb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x77": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_awb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x78": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_axb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x79": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_ayb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x7a": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_azb=v",
+      "go_accepted": true,
+      "go_received": "v"
+    },
+    "0x7b": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%7Bb=v",
+      "go_accepted": false
+    },
+    "0x7c": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%7Cb=v",
+      "go_accepted": false
+    },
+    "0x7d": {
+      "go_exported": false,
+      "python_raw_member": "langfuse_metadata_a%7Db=v",
+      "go_accepted": false
+    },
+    "0x7e": {
+      "go_exported": true,
+      "go_raw_member": "v",
+      "python_received": "v",
+      "python_raw_member": "langfuse_metadata_a~b=v",
+      "go_accepted": true,
+      "go_received": "v"
+    }
+  }
+}

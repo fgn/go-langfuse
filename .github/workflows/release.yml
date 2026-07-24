@@ -143,6 +143,18 @@ jobs:
       - name: Vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
 
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        if: ${{ inputs.module == 'core' }}
+        with:
+          enable-cache: true
+          cache-dependency-glob: validation/parity/uv.lock
+
+      - name: Baggage interop gate (core)
+        if: ${{ inputs.module == 'core' }}
+        # The same command task ci runs; executed here directly so the
+        # release never relies on the CI status of an earlier commit.
+        run: cd validation && GOWORK=off go test -tags=interop -count=1 -timeout=10m -run 'TestInterop' .
+
       - name: Contrib release gates
         if: ${{ inputs.module != 'core' }}
         shell: bash

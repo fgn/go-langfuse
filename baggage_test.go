@@ -2,7 +2,10 @@ package langfuse
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -800,4 +803,112 @@ func keysOf(members map[string]string) []string {
 		keys = append(keys, key)
 	}
 	return keys
+}
+
+// TestBaggageCrossProcessGoToGo drives a full producer-to-consumer hop
+// over real HTTP with the standard W3C propagators: trace identity
+// continues via traceparent, attributes and the app-root claim arrive
+// via baggage, and exactly one application root exists across both
+// services.
+func TestBaggageCrossProcessGoToGo(t *testing.T) {
+	producerReceiver := otlpreceiver.New()
+	t.Cleanup(producerReceiver.Close)
+	producer := newInteropClient(t, producerReceiver, Config{PublicKey: "pk-producer"})
+	t.Cleanup(func() { shutdownClient(t, producer) })
+	consumerReceiver := otlpreceiver.New()
+	t.Cleanup(consumerReceiver.Close)
+	consumer := newInteropClient(t, consumerReceiver, Config{
+		PublicKey:   "pk-consumer",
+		Environment: "consumer-default",
+	})
+	t.Cleanup(func() { shutdownClient(t, consumer) })
+
+	propagator := propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{}, propagation.Baggage{})
+
+	type consumerResult struct {
+		traceID    string
+		parentSpan string
+		spanID     string
+	}
+	resultCh := make(chan consumerResult, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := propagator.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		// Authentication happens here; only then is inbound baggage trusted.
+		ctx = consumer.WithTraceAttributesFromBaggage(ctx)
+		// The consumer's own local value must beat the propagated one for
+		// exactly this field.
+		ctx = consumer.WithTraceAttributes(ctx, TraceAttributes{Version: "consumer-v2"})
+		_, observation := consumer.StartObservation(ctx, "consume", TypeSpan, ObservationAttributes{})
+		observation.End()
+		resultCh <- consumerResult{
+			traceID:    observation.TraceID(),
+			parentSpan: oteltrace.SpanFromContext(ctx).SpanContext().SpanID().String(),
+			spanID:     observation.ID(),
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+
+	ctx := producer.WithTraceAttributes(context.Background(), TraceAttributes{
+		UserID:      "alice",
+		SessionID:   "s-1",
+		Version:     "producer-v1",
+		Environment: "staging",
+		Metadata:    map[string]any{"tenant": "acme"},
+	})
+	ctx = producer.WithBaggagePropagation(ctx)
+	rootCtx, root := producer.StartObservation(ctx, "produce", TypeSpan, ObservationAttributes{})
+
+	request, err := http.NewRequestWithContext(rootCtx, http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	propagator.Inject(rootCtx, propagation.HeaderCarrier(request.Header))
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("cross-process request: %v", err)
+	}
+	response.Body.Close()
+	root.End()
+
+	received := <-resultCh
+	if received.traceID != root.TraceID() {
+		t.Fatalf("consumer trace = %s, want the producer trace %s", received.traceID, root.TraceID())
+	}
+
+	flushClient(t, producer)
+	flushClient(t, consumer)
+	producerSpans := interopSpanMap(t, producerReceiver)
+	consumerSpans := interopSpanMap(t, consumerReceiver)
+	produce, consume := producerSpans["produce"], consumerSpans["consume"]
+	if produce == nil || consume == nil {
+		t.Fatalf("spans missing: producer=%v consumer=%v",
+			sortedInteropSpanNames(producerSpans), sortedInteropSpanNames(consumerSpans))
+	}
+
+	// Trace identity and parentage continue across the wire.
+	if got := hex.EncodeToString(consume.TraceId); got != root.TraceID() {
+		t.Errorf("consumer exported trace = %s, want %s", got, root.TraceID())
+	}
+	if got := hex.EncodeToString(consume.ParentSpanId); got != root.ID() {
+		t.Errorf("consumer parent span = %s, want the producer root %s", got, root.ID())
+	}
+
+	// Exactly one application root across both services.
+	if _, isRoot := interopProtoAttribute(produce, lfattr.AppRootKey); !isRoot {
+		t.Error("producer root must carry the app-root marker")
+	}
+	if _, isRoot := interopProtoAttribute(consume, lfattr.AppRootKey); isRoot {
+		t.Error("consumer span must not become a second application root")
+	}
+
+	// Per-field precedence: propagated values apply, the consumer's own
+	// local version wins, and the propagated environment overrides the
+	// consumer's client default.
+	assertInteropStringAttribute(t, consume, lfattr.TraceUserIDKey, "alice")
+	assertInteropStringAttribute(t, consume, lfattr.TraceSessionIDKey, "s-1")
+	assertInteropStringAttribute(t, consume, lfattr.TraceMetadataKey+".tenant", "acme")
+	assertInteropStringAttribute(t, consume, lfattr.VersionKey, "consumer-v2")
+	assertInteropStringAttribute(t, consume, lfattr.EnvironmentKey, "staging")
 }

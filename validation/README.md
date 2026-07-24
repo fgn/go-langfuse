@@ -5,9 +5,12 @@ real provider behavior correctly, judged by reading traces back
 through the Langfuse public API with each provider SDK's own response
 as ground truth. No provider mocks in the smoke and parity tests. This
 module is excluded from the released Go modules, absent from go.work,
-and none of its packages are loaded or executed by `task ci`; every
-file carries the `validation` build tag (parity additionally
-`parity`), so nothing here executes by accident. (Repository-wide
+and never pulled by `go get`. Every file carries a build tag
+(`validation`, plus `parity` for parity files; `interop` for the
+credential-free baggage corpus), so nothing here executes by accident.
+The credentialed suites never run in `task ci`; the credential-free
+interop corpus is the one deliberate exception and runs there as a
+cross-SDK gate. (Repository-wide
 source-format checks still inspect these files; that is the precise
 boundary.)
 
@@ -19,6 +22,7 @@ boundary.)
 | `task parity` | Langfuse + Azure credentials, committed golden | 1 inference call |
 | `task parity:regen` | above + `uv` | 1 Python + 1 Go inference call; `ACCEPT=accept` replaces the golden |
 | `task matrix` | nothing (credential-free) | 0 provider calls; runs the synthetic suite per SDK version |
+| `task interop` | `uv` only (credential-free) | 0 provider calls; baggage corpus + cross-language smokes against the uv-locked Python SDK, sealed in `testdata/interop/`; `ACCEPT=accept` reseals. Unlike everything else here, this one DOES run in `task ci` and gates core releases |
 
 ## Environment
 

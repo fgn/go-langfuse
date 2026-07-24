@@ -21,6 +21,18 @@ recording every other field. The privacy boundary is deliberately narrow:
 | OpenTelemetry resource attributes (`resource.Default`/`OTEL_RESOURCE_ATTRIBUTES` in isolated mode; caller resource in borrowed mode) | No | No |
 | Third-party OTel span attributes and events | No | No |
 
+**Cross-process propagation sends attributes to every destination.**
+`WithBaggagePropagation` places user ID, session ID, trace name, version,
+request-scoped environment, and string metadata values into W3C baggage on
+its context branch. Baggage is delivered by whatever propagator the
+application has installed, so these values travel with **every** outbound
+request that carries the context — third-party APIs and services that have
+nothing to do with Langfuse included — until the branch ends. Inbound
+metadata accepted by `WithTraceAttributesFromBaggage` passes through the
+configured `Mask` exactly once, like local trace metadata; the other
+propagated fields are identifiers and are never masked. Enable propagation
+only on paths where that disclosure is intended.
+
 Disabling content capture does not make metadata, model parameters, status
 messages, or errors safe. `RecordError` exports `err.Error()` as the OTel
 status description, Langfuse status message, and exception-event message. Use
