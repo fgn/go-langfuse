@@ -99,7 +99,41 @@ const (
 	// TerminalError is a protocol-level error event on an otherwise
 	// successful HTTP response.
 	TerminalError
+	// TerminalIncomplete is a hard protocol terminal declaring the
+	// response unfinished, such as the Responses API's
+	// response.incomplete event. It freezes parsing like the other hard
+	// terminals and finalizes the incomplete lifecycle.
+	TerminalIncomplete
 )
+
+// ChunkedCall is implemented by parsers that can salvage bounded
+// control-plane facts from payloads exceeding the buffering caps. For
+// SSE, FeedOversized receives the normalized joined data payload of
+// one over-cap event exactly as FeedEvent would have seen it, in
+// successive segments; for unary, it receives raw body bytes starting
+// with the full retained prefix at the first cap crossing.
+// Implementations must retain only bounded state.
+type ChunkedCall interface {
+	Call
+	// FeedOversized receives successive segments of one over-cap
+	// payload.
+	FeedOversized(p []byte)
+	// FinishOversizedEvent ends an over-cap SSE event and returns its
+	// verdict exactly as FeedEvent would have.
+	FinishOversizedEvent() EventVerdict
+	// BeginOversizedUnary is called exactly once, at the first unary
+	// cap crossing, before the retained prefix is replayed, so the
+	// parser can select its unary scan shape.
+	BeginOversizedUnary()
+	// FinishOversizedUnary ends an over-cap unary body at clean EOF or
+	// at a Close whose byte history UnaryComplete proved complete.
+	FinishOversizedUnary(httpStatus int)
+	// UnaryComplete reports whether the unary byte history fed so far
+	// forms exactly one complete top-level JSON value plus trailing
+	// whitespace; the body wrapper consults it for the decoder-close
+	// pattern once the retained-bytes path is unavailable.
+	UnaryComplete() bool
+}
 
 // Result is the provider-parsed contribution to one observation.
 type Result struct {
@@ -120,6 +154,12 @@ type Result struct {
 	// ErrorCategory is a fixed adapter-owned status such as
 	// "provider error"; empty means no protocol error was proven.
 	ErrorCategory string
+	// Incomplete reports a body-level incomplete outcome for a unary
+	// response (e.g. a Responses body with status "incomplete"). Like
+	// ErrorCategory it refines ONLY a finalization that would otherwise
+	// be StateComplete; canceled, closed-early, transport-failed, and
+	// incomplete lifecycle states are never reclassified by it.
+	Incomplete bool
 	// TelemetryPartial reports that parsing degraded and telemetry is
 	// incomplete, without implying an application failure.
 	TelemetryPartial bool
