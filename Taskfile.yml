@@ -126,7 +126,7 @@ tasks:
         tid=$(cd validation/parity && uv run --locked python log_call.py "$marker")
         rtid=$(cd validation/parity && uv run --locked python log_responses.py "$marker-responses")
         echo "python traces: $tid $rtid"
-        cd validation && PARITY_PYTHON_TRACE="$tid" PARITY_PYTHON_TRACE_RESPONSES="$rtid" PARITY_REGEN="${ACCEPT:-diff}" GOWORK=off go test -tags="validation parity" -count=1 -v -run 'TestParityRegen' .
+        cd validation && PARITY_PYTHON_TRACE="$tid" PARITY_PYTHON_TRACE_RESPONSES="$rtid" PARITY_MARKER_RESPONSES="$marker-responses" PARITY_REGEN="${ACCEPT:-diff}" GOWORK=off go test -tags="validation parity" -count=1 -v -run 'TestParityRegen' .
 
   matrix:
     desc: Regenerate the provider-SDK transport compatibility matrix (credential-free)

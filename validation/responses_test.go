@@ -137,10 +137,19 @@ func expectedResponsesOutput(t *testing.T, response *responses.Response) any {
 			items = append(items, map[string]any{"type": kind, "omitted": true})
 		}
 	}
-	if len(items) == 1 {
-		return items[0]
-	}
+	// The route's output is always an item array, singletons included.
 	return items
+}
+
+// assertNoClassicAzureMetadata proves the GA v1 route carries neither
+// the classic deployment segment nor a legacy api-version.
+func assertNoClassicAzureMetadata(t *testing.T, got observation) {
+	t.Helper()
+	for _, key := range []string{"azure.deployment", "api_version"} {
+		if _, present := got.Metadata[key]; present {
+			t.Errorf("GA v1 observation must not carry %s metadata", key)
+		}
+	}
 }
 
 func runResponsesUnary(t *testing.T, r *run, client openaigo.Client, model, caseName string) {
@@ -174,6 +183,7 @@ func runResponsesUnary(t *testing.T, r *run, client openaigo.Client, model, case
 		Output:      expectedResponsesOutput(t, response),
 		InputMarker: r.marker,
 	})
+	assertNoClassicAzureMetadata(t, got)
 }
 
 func runResponsesStreaming(t *testing.T, r *run, client openaigo.Client, model, caseName string) {
@@ -219,6 +229,7 @@ func runResponsesStreaming(t *testing.T, r *run, client openaigo.Client, model, 
 		InputMarker: r.marker,
 		Stream:      true,
 	})
+	assertNoClassicAzureMetadata(t, got)
 }
 
 func TestAzureResponsesUnary(t *testing.T) {
@@ -240,6 +251,30 @@ func TestOpenRouterResponsesUnary(t *testing.T) {
 	env := requireEnv(t, "OPENROUTER_API_KEY", "OPENROUTER_RESPONSES_MODEL")
 	client := openRouterClient(r, env["OPENROUTER_API_KEY"])
 	runResponsesUnary(t, r, client, env["OPENROUTER_RESPONSES_MODEL"], "openrouter-responses-unary")
+}
+
+// TestOpenRouterResponsesCost preserves the hard usage/cost
+// attribution check for the Responses route, driven by the SDK's own
+// raw usage exactly like the chat smoke.
+func TestOpenRouterResponsesCost(t *testing.T) {
+	r := newRun(t)
+	env := requireEnv(t, "OPENROUTER_API_KEY", "OPENROUTER_RESPONSES_MODEL")
+	client := openRouterClient(r, env["OPENROUTER_API_KEY"])
+	var response *responses.Response
+	traceID, err := r.call(t, "openrouter-responses-cost", func(ctx context.Context) error {
+		var callErr error
+		response, callErr = client.Responses.New(ctx, responses.ResponseNewParams{
+			Model:           shared.ResponsesModel(env["OPENROUTER_RESPONSES_MODEL"]),
+			Input:           responses.ResponseNewParamsInputUnion{OfString: openaigo.String("Say ok. Marker: " + r.marker)},
+			MaxOutputTokens: openaigo.Int(256),
+		})
+		return callErr
+	})
+	if err != nil {
+		t.Fatalf("responses call failed: %v", err)
+	}
+	got := r.observation(t, traceID, "openai.responses", ingested)
+	wantCostAttribution(t, got, response.Usage.RawJSON())
 }
 
 func TestOpenRouterResponsesStreaming(t *testing.T) {

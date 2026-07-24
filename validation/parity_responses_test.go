@@ -188,9 +188,14 @@ func canonicalizeResponses(obs observation, stream bool) (canonical, error) {
 	}, nil
 }
 
+// goParityMarker records the marker of the last Go parity call so the
+// regeneration flow can normalize it out of value comparisons.
+var goParityMarker string
+
 func goResponsesParityObservation(t *testing.T) observation {
 	t.Helper()
 	r := newRun(t)
+	goParityMarker = r.marker
 	env := requireEnv(t, "AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_RESPONSES_DEPLOYMENT")
 	client := azureResponsesClient(r, env["AZURE_OPENAI_ENDPOINT"], env["AZURE_OPENAI_API_KEY"])
 	traceID, err := r.call(t, "parity-azure-responses", func(ctx context.Context) error {
@@ -280,6 +285,12 @@ func TestParityRegenResponses(t *testing.T) {
 		t.Fatalf("canonicalize Go observation: %v", err)
 	}
 	diffCanonical(t, goCanonical, pythonCanonical)
+	// Shapes alone cannot catch a wrong model or content value; the
+	// live regeneration also compares exact values across the two SDKs
+	// (marker-normalized), which the sealed shape golden deliberately
+	// cannot hold.
+	compareResponsesValues(t, pythonObs, goObs,
+		os.Getenv("PARITY_MARKER_RESPONSES"), goParityMarker)
 	if t.Failed() {
 		t.Fatal("Python and Go projections disagree; candidate rejected")
 	}
@@ -422,6 +433,149 @@ func TestResponsesCanonicalizerFixtures(t *testing.T) {
 	t.Run("unknown-operation-rejected", func(t *testing.T) {
 		if _, err := canonicalizeResponses(obs("OpenAI-generation", goInput, `null`), false); err == nil {
 			t.Error("the chat alias must not canonicalize as responses")
+		}
+	})
+}
+
+// responsesValueRecord is the value-preserving side of the parity
+// evidence: the sealed golden deliberately holds only shapes (no
+// deployments, models, or content can leak into the repository), so
+// exact values are compared LIVE at regeneration time, Python against
+// Go, before any candidate is accepted. Marker text differs by
+// construction between the two oracle calls and is normalized; model
+// output text is nondeterministic across separate live calls and is
+// compared structurally by the shape document instead.
+type responsesValueRecord struct {
+	Model string
+	Input any
+}
+
+func responsesValueRecordOf(obs observation, marker string) (responsesValueRecord, error) {
+	record := responsesValueRecord{}
+	if obs.Model != nil {
+		record.Model = *obs.Model
+	}
+	if len(obs.Input) != 0 {
+		var value any
+		if err := json.Unmarshal(obs.Input, &value); err != nil {
+			return record, err
+		}
+		projected, err := responsesParityInput(value)
+		if err != nil {
+			return record, err
+		}
+		record.Input = normalizeMarker(projected, marker)
+	}
+	return record, nil
+}
+
+func normalizeMarker(value any, marker string) any {
+	switch typed := value.(type) {
+	case string:
+		if marker == "" {
+			return typed
+		}
+		return strings.ReplaceAll(typed, marker, "<marker>")
+	case []any:
+		result := make([]any, 0, len(typed))
+		for _, item := range typed {
+			result = append(result, normalizeMarker(item, marker))
+		}
+		return result
+	case map[string]any:
+		result := make(map[string]any, len(typed))
+		for key, item := range typed {
+			result[key] = normalizeMarker(item, marker)
+		}
+		return result
+	default:
+		return value
+	}
+}
+
+// compareResponsesValues rejects a candidate whose exact model or
+// marker-normalized input values disagree between the two SDKs, and
+// requires each side's usage to be internally consistent.
+func compareResponsesValues(t *testing.T, python, goSide observation, pythonMarker, goMarker string) {
+	t.Helper()
+	pythonRecord, err := responsesValueRecordOf(python, pythonMarker)
+	if err != nil {
+		t.Fatalf("python value record: %v", err)
+	}
+	goRecord, err := responsesValueRecordOf(goSide, goMarker)
+	if err != nil {
+		t.Fatalf("go value record: %v", err)
+	}
+	if pythonRecord.Model == "" || pythonRecord.Model != goRecord.Model {
+		t.Errorf("model values differ: python %q, go %q", pythonRecord.Model, goRecord.Model)
+	}
+	if !reflect.DeepEqual(pythonRecord.Input, goRecord.Input) {
+		pythonJSON, _ := json.Marshal(pythonRecord.Input)
+		goJSON, _ := json.Marshal(goRecord.Input)
+		t.Errorf("normalized input values differ:\npython %s\ngo     %s", pythonJSON, goJSON)
+	}
+	for side, obs := range map[string]observation{"python": python, "go": goSide} {
+		input, output := obs.UsageDetails["input"], obs.UsageDetails["output"]
+		if total, present := obs.UsageDetails["total"]; present {
+			cached := obs.UsageDetails["input_cached_tokens"]
+			reasoning := obs.UsageDetails["output_reasoning_tokens"]
+			if input+cached+output+reasoning != total {
+				t.Errorf("%s usage internally inconsistent: %v", side, obs.UsageDetails)
+			}
+		}
+	}
+}
+
+// TestResponsesValueComparisonFixtures proves each one-sided scalar
+// mutation fails the value comparison, credential-free.
+func TestResponsesValueComparisonFixtures(t *testing.T) {
+	model := "gpt-test"
+	baseInput := `{"instructions":"be terse","input":[{"role":"user","content":[{"type":"input_text","text":"q marker-a"}]}]}`
+	pythonInput := `[{"role":"system","content":"be terse"},{"role":"user","content":[{"type":"input_text","text":"q marker-b"}]}]`
+	base := func() (observation, observation) {
+		python := observation{Name: "OpenAI-responses-parity", Type: "GENERATION",
+			Model: &model, Input: json.RawMessage(pythonInput),
+			UsageDetails: map[string]int64{"input": 3, "output": 2, "total": 5}}
+		goSide := observation{Name: "openai.responses", Type: "GENERATION",
+			Model: &model, Input: json.RawMessage(baseInput),
+			UsageDetails: map[string]int64{"input": 3, "output": 2, "total": 5}}
+		return python, goSide
+	}
+
+	t.Run("agreeing-baseline", func(t *testing.T) {
+		python, goSide := base()
+		probe := &testing.T{}
+		compareResponsesValues(probe, python, goSide, "marker-b", "marker-a")
+		if probe.Failed() {
+			t.Fatal("baseline must agree")
+		}
+	})
+	t.Run("model-mutation-fails", func(t *testing.T) {
+		python, goSide := base()
+		other := "different-model"
+		goSide.Model = &other
+		probe := &testing.T{}
+		compareResponsesValues(probe, python, goSide, "marker-b", "marker-a")
+		if !probe.Failed() {
+			t.Fatal("a wrong model must fail the value comparison")
+		}
+	})
+	t.Run("input-text-mutation-fails", func(t *testing.T) {
+		python, goSide := base()
+		goSide.Input = json.RawMessage(strings.ReplaceAll(baseInput, "be terse", "be VERBOSE"))
+		probe := &testing.T{}
+		compareResponsesValues(probe, python, goSide, "marker-b", "marker-a")
+		if !probe.Failed() {
+			t.Fatal("a wrong instruction value must fail the value comparison")
+		}
+	})
+	t.Run("usage-inconsistency-fails", func(t *testing.T) {
+		python, goSide := base()
+		goSide.UsageDetails = map[string]int64{"input": 3, "output": 2, "total": 9}
+		probe := &testing.T{}
+		compareResponsesValues(probe, python, goSide, "marker-b", "marker-a")
+		if !probe.Failed() {
+			t.Fatal("an inconsistent usage total must fail the value comparison")
 		}
 	})
 }

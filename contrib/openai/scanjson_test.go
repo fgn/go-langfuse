@@ -102,15 +102,15 @@ func TestScannerFieldRetentionAndDecoding(t *testing.T) {
 			t.Fatalf("chunk %d: payload rejected", chunk)
 		}
 		// Escaped selected values decode with encoding/json semantics.
-		eventType, ok := decodeScannedString(scanner.fields["type"])
+		eventType, ok := decodeScannedField(scanner, "type")
 		if !ok || eventType != "response.completed" {
 			t.Fatalf("chunk %d: type = %q (%v)", chunk, eventType, ok)
 		}
-		status, _ := decodeScannedString(scanner.fields["status"])
+		status, _ := decodeScannedField(scanner, "status")
 		if status != "completed" {
 			t.Fatalf("chunk %d: status = %q", chunk, status)
 		}
-		model, _ := decodeScannedString(scanner.fields["model"])
+		model, _ := decodeScannedField(scanner, "model")
 		if model != "gpt-5-mini" {
 			t.Fatalf("chunk %d: model = %q", chunk, model)
 		}
@@ -128,7 +128,7 @@ func TestScannerUnaryModeSelectsRootFields(t *testing.T) {
 	if !scanner.documentUsable() {
 		t.Fatal("payload rejected")
 	}
-	status, _ := decodeScannedString(scanner.fields["status"])
+	status, _ := decodeScannedField(scanner, "status")
 	if status != "incomplete" {
 		t.Fatalf("root status = %q", status)
 	}
@@ -153,10 +153,10 @@ func TestScannerFieldCapDropsFieldAndSalvagesLater(t *testing.T) {
 	if _, found := scanner.fields["usage"]; found {
 		t.Fatal("over-cap field must be dropped whole, never truncated")
 	}
-	if status, _ := decodeScannedString(scanner.fields["status"]); status != "completed" {
+	if status, _ := decodeScannedField(scanner, "status"); status != "completed" {
 		t.Fatalf("later fields must be salvaged; status = %q", status)
 	}
-	if model, _ := decodeScannedString(scanner.fields["model"]); model != "m" {
+	if model, _ := decodeScannedField(scanner, "model"); model != "m" {
 		t.Fatalf("model = %q", model)
 	}
 }
@@ -247,8 +247,8 @@ func FuzzControlScanner(f *testing.F) {
 			t.Fatalf("fragmentation changed usability for %q", payload)
 		}
 		if whole.documentUsable() {
-			wholeType, _ := decodeScannedString(whole.fields["type"])
-			splitType, _ := decodeScannedString(split.fields["type"])
+			wholeType, _ := decodeScannedField(whole, "type")
+			splitType, _ := decodeScannedField(split, "type")
 			if wholeType != splitType {
 				t.Fatalf("fragmentation changed type: %q vs %q", wholeType, splitType)
 			}
@@ -268,5 +268,72 @@ func TestScannerChunkIndependence(t *testing.T) {
 		if fmt.Sprintf("%v", scanner.fields) != fmt.Sprintf("%v", baseline.fields) {
 			t.Fatalf("chunk %d changed retained fields", chunk)
 		}
+	}
+}
+
+func TestScannerDecodedKeySemantics(t *testing.T) {
+	// An escaped spelling of a selected key decodes to the same
+	// selection encoding/json would make.
+	scanner := scan(scanSSEEnvelope, `{"\u0074ype":"response.completed"}`, 1)
+	if !scanner.documentUsable() {
+		t.Fatal("payload rejected")
+	}
+	if eventType, ok := decodeScannedField(scanner, "type"); !ok || eventType != "response.completed" {
+		t.Fatalf("escaped key not selected: %q (%v)", eventType, ok)
+	}
+
+	// Plain-plus-escaped spellings of one selected key are duplicates.
+	scanner = scan(scanSSEEnvelope, `{"type":"a","\u0074ype":"b"}`, 1)
+	if !scanner.duplicates {
+		t.Fatal("plain/escaped key collision must be a duplicate")
+	}
+
+	// Two root response members are schema-invalid even though the
+	// member itself is not retained.
+	scanner = scan(scanSSEEnvelope, `{"response":{"status":"completed"},"response":{"status":"failed"}}`, 1)
+	if !scanner.duplicates {
+		t.Fatal("duplicate terminal response object must be rejected")
+	}
+}
+
+func TestScannerDecodedValueCaps(t *testing.T) {
+	atCap := strings.Repeat("s", scanFieldCaps["status"])
+	scanner := scan(scanUnaryRoot, `{"status":"`+atCap+`"}`, 1)
+	if value, ok := decodeScannedField(scanner, "status"); !ok || value != atCap {
+		t.Fatalf("at-cap decoded value rejected: %v", ok)
+	}
+	overCap := atCap + "x"
+	scanner = scan(scanUnaryRoot, `{"status":"`+overCap+`"}`, 1)
+	if _, ok := decodeScannedField(scanner, "status"); ok {
+		t.Fatal("over-cap decoded value must be dropped")
+	}
+	if !scanner.droppedFields["status"] {
+		t.Fatal("the drop must be projected for the buffered path")
+	}
+
+	// An escaped spelling cannot smuggle an over-cap value past the
+	// raw bound.
+	escaped := strings.Repeat(`\u0073`, scanFieldCaps["status"]+1)
+	scanner = scan(scanUnaryRoot, `{"status":"`+escaped+`"}`, 7)
+	if _, ok := decodeScannedField(scanner, "status"); ok {
+		t.Fatal("escaped over-cap value must be dropped")
+	}
+
+	// Colon and whitespace are structural and never charged: a value
+	// exactly at cap survives arbitrary surrounding whitespace.
+	scanner = scan(scanUnaryRoot, `{"status"  :   "`+atCap+`"}`, 1)
+	if value, ok := decodeScannedField(scanner, "status"); !ok || value != atCap {
+		t.Fatalf("whitespace was charged against the value cap: %v", ok)
+	}
+}
+
+func TestScannerDepthBoundExact(t *testing.T) {
+	atLimit := strings.Repeat(`{"a":`, maxScanDepth) + `1` + strings.Repeat(`}`, maxScanDepth)
+	if scanner := scan(scanUnaryRoot, atLimit, 1); scanner.invalid {
+		t.Fatalf("nesting depth %d must be valid", maxScanDepth)
+	}
+	overLimit := strings.Repeat(`{"a":`, maxScanDepth+1) + `1` + strings.Repeat(`}`, maxScanDepth+1)
+	if scanner := scan(scanUnaryRoot, overLimit, 1); !scanner.invalid {
+		t.Fatalf("nesting depth %d must be invalid", maxScanDepth+1)
 	}
 }

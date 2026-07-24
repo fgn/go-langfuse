@@ -556,3 +556,156 @@ func TestResponsesTombstoneForOversizedDoneItem(t *testing.T) {
 		t.Fatalf("status %q", got)
 	}
 }
+
+func TestResponsesTerminalFirstOutputStampsCompletionStart(t *testing.T) {
+	receiver, flushFn := runResponsesStream(t, sseBody(
+		`{"type":"response.created","response":{"id":"r","status":"in_progress"}}`,
+		responsesTerminal,
+	))
+	flushFn()
+	span := receiver.nextSpan(t)
+	if !hasAttr(span, "langfuse.observation.completion_start_time") {
+		t.Fatal("a terminal carrying the first visible output must stamp completion start")
+	}
+	if got := attrString(t, span, "langfuse.observation.status_message"); got != "" {
+		t.Fatalf("status %q, want clean", got)
+	}
+}
+
+func TestResponsesRejectedContentNeverStampsCompletionStart(t *testing.T) {
+	receiver, flushFn := runResponsesStream(t, sseBody(
+		`{"type":"response.output_text.delta","output_index":-1,"content_index":0,"item_id":"x","delta":"REJECTED"}`,
+		`{"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"a","delta":""}`,
+		`{"type":"response.reasoning_summary_text.delta","output_index":0,"item_id":"a","delta":"thoughts"}`,
+	))
+	flushFn()
+	span := receiver.nextSpan(t)
+	if hasAttr(span, "langfuse.observation.completion_start_time") {
+		t.Fatal("rejected, empty, and reasoning content must never stamp completion start")
+	}
+}
+
+func TestResponsesTerminalSeverityMismatch(t *testing.T) {
+	receiver, flushFn := runResponsesStream(t, sseBody(
+		`{"type":"response.completed","response":{"id":"r","status":"failed","model":"m","output":[]}}`,
+	))
+	flushFn()
+	span := receiver.nextSpan(t)
+	// The embedded class outranks the milder event type; the mismatch
+	// itself degrades telemetry but failed wins the status.
+	if got := attrString(t, span, "langfuse.observation.status_message"); got != "provider error" {
+		t.Fatalf("status %q, want the more severe provider error", got)
+	}
+}
+
+func TestResponsesDuplicateResponseMemberIsNotATerminal(t *testing.T) {
+	receiver, flushFn := runResponsesStream(t, sseBody(
+		`{"type":"response.completed","response":{"status":"completed"},"response":{"status":"failed"}}`,
+	))
+	flushFn()
+	span := receiver.nextSpan(t)
+	if got := attrString(t, span, "langfuse.observation.status_message"); got != "incomplete" {
+		t.Fatalf("status %q, want incomplete (duplicate terminal response is schema-invalid)", got)
+	}
+}
+
+func TestResponsesSchemaInvalidTerminalFieldsAreNotTerminals(t *testing.T) {
+	for name, terminal := range map[string]string{
+		"status-number":    `{"type":"response.completed","response":{"status":123}}`,
+		"response-string":  `{"type":"response.completed","response":"done"}`,
+		"missing-response": `{"type":"response.completed"}`,
+		"usage-array":      `{"type":"response.completed","response":{"status":"completed","usage":[1]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			receiver, flushFn := runResponsesStream(t, sseBody(terminal))
+			flushFn()
+			span := receiver.nextSpan(t)
+			if got := attrString(t, span, "langfuse.observation.status_message"); got != "incomplete" {
+				t.Fatalf("status %q, want incomplete (schema-invalid payloads yield no hard verdict)", got)
+			}
+		})
+	}
+}
+
+func TestResponsesBufferedFieldCapDropMatchesSalvage(t *testing.T) {
+	// A under-cap event whose usage exceeds its 4 KiB field cap: the
+	// buffered parse must omit exactly what salvage would, with partial
+	// telemetry, while status still lands.
+	hugeUsage := `{"input_tokens":1,"output_tokens":2,"total_tokens":3,"pad":"` + strings.Repeat("u", 8<<10) + `"}`
+	receiver, flushFn := runResponsesStream(t, sseBody(
+		`{"type":"response.completed","response":{"id":"r","status":"completed","model":"m","usage":`+hugeUsage+`,"output":[]}}`,
+	))
+	flushFn()
+	span := receiver.nextSpan(t)
+	if got := attrString(t, span, "langfuse.observation.status_message"); got != "telemetry_partial" {
+		t.Fatalf("status %q, want telemetry_partial", got)
+	}
+	if hasAttr(span, "langfuse.observation.usage_details") {
+		t.Fatal("an over-cap usage field must be dropped whole from the buffered parse too")
+	}
+	if got := attrString(t, span, "langfuse.observation.model.name"); got != "m" {
+		t.Fatalf("later fields must survive the drop; model %q", got)
+	}
+}
+
+func TestResponsesNestedItemIdentityConflictRejected(t *testing.T) {
+	receiver, flushFn := runResponsesStream(t, sseBody(
+		`{"type":"response.output_text.delta","output_index":0,"content_index":0,"item_id":"m1","delta":"kept"}`,
+		// The real done event carries its ID inside the item; a
+		// conflicting nested identity must not replace state.
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"m2","role":"assistant","content":[{"type":"output_text","text":"HIJACKED"}]}}`,
+	))
+	flushFn()
+	span := receiver.nextSpan(t)
+	output := attrString(t, span, "langfuse.observation.output")
+	if strings.Contains(output, "HIJACKED") || !strings.Contains(output, "kept") {
+		t.Fatalf("conflicting nested identity replaced state: %q", output)
+	}
+	if got := attrString(t, span, "langfuse.observation.status_message"); got != "incomplete" {
+		t.Fatalf("status %q", got)
+	}
+}
+
+func TestResponsesNoDeltaOversizedDoneKeepsDiscriminator(t *testing.T) {
+	bigItem := `{"type":"message","id":"m1","role":"assistant","content":[{"type":"output_text","text":"` +
+		strings.Repeat("w", 80<<10) + `"}]}`
+	receiver, flushFn := runResponsesStream(t, sseBody(
+		`{"type":"response.output_item.done","output_index":0,"item":`+bigItem+`}`,
+	))
+	flushFn()
+	span := receiver.nextSpan(t)
+	output := attrString(t, span, "langfuse.observation.output")
+	if !strings.Contains(output, `"message"`) || !strings.Contains(output, "omitted") {
+		t.Fatalf("tombstone must keep the real discriminator without prior stream state: %q", output)
+	}
+	if strings.Contains(output, "wwww") {
+		t.Fatalf("tombstoned content leaked: %q", output)
+	}
+}
+
+func TestResponsesEasyAssistantMessageIsNotTombstoned(t *testing.T) {
+	receiver := newOTLPReceiver(t)
+	lf := newTestClient(t, receiver, nil)
+	provider := chatServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"r","status":"completed","model":"m","output":[]}`)
+	})
+	httpClient := &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
+	// An EasyInputMessage assistant item with explicit type and scalar
+	// content is a pinned wire shape and must survive sanitization.
+	resp := postResponses(t, httpClient, provider.URL,
+		`{"model":"m","input":[
+		  {"type":"message","role":"assistant","content":"earlier scalar answer"},
+		  {"type":"message","role":"developer","content":[{"type":"input_text","text":"dev note"}]},
+		  {"type":"message","role":"invalid-role","content":"x"}]}`)
+	drainAndClose(t, resp)
+	flush(t, lf)
+	span := receiver.nextSpan(t)
+	input := attrString(t, span, "langfuse.observation.input")
+	if !strings.Contains(input, "earlier scalar answer") || !strings.Contains(input, "dev note") {
+		t.Fatalf("pinned Easy message forms lost: %q", input)
+	}
+	if strings.Contains(input, "invalid-role") {
+		t.Fatalf("an unpinned role must tombstone, not copy through: %q", input)
+	}
+}

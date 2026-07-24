@@ -119,6 +119,20 @@ func (f *sseFramer) drain(emit func(data []byte) bool) bool {
 			continue
 		}
 		if len(event) > f.maxEvent {
+			// The delimiter slack admits complete events a few bytes
+			// over the cap; they take the same salvage path as streamed
+			// ones so a barely-over-cap terminal is never lost.
+			if f.chunked != nil {
+				lexer := oversizedLexer{}
+				lexer.feed(event, f.chunked)
+				lexer.feed([]byte{'\n'}, f.chunked)
+				if lexer.sawData && f.finishOversized != nil && !f.finishOversized() {
+					f.stopped = true
+					f.buf = nil
+					return false
+				}
+				continue
+			}
 			f.discarded = true
 			continue
 		}

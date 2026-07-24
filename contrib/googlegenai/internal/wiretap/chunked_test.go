@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // chunkedStub implements ChunkedCall, recording the streamed payload
@@ -22,9 +24,9 @@ type chunkedStub struct {
 	unaryCompletion bool
 }
 
-func (c *chunkedStub) FeedOversized(p []byte)  { c.streamed.Write(p) }
-func (c *chunkedStub) BeginOversizedUnary()    { c.beganUnary++ }
-func (c *chunkedStub) UnaryComplete() bool     { return c.unaryCompletion }
+func (c *chunkedStub) FeedOversized(p []byte) { c.streamed.Write(p) }
+func (c *chunkedStub) BeginOversizedUnary()   { c.beganUnary++ }
+func (c *chunkedStub) UnaryComplete() bool    { return c.unaryCompletion }
 func (c *chunkedStub) FinishOversizedUnary(status int) {
 	c.finishedUnary++
 	c.unaryStatus = status
@@ -53,8 +55,6 @@ func driveChunked(
 		})
 	return got, wrapper
 }
-
-
 
 func TestSSEIncompleteTerminalFreezesAndCloseIsNoOp(t *testing.T) {
 	stream := "data: INCOMPLETE\n\ndata: drained-after\n\n"
@@ -286,4 +286,117 @@ func (r *neverEOFReader) Read(p []byte) (int, error) {
 	n := copy(p, r.data[r.pos:])
 	r.pos += n
 	return n, nil
+}
+
+func TestBarelyOverCapCompleteEventsStillSalvage(t *testing.T) {
+	// The delimiter slack admits complete events a few bytes over the
+	// cap into the buffered path; they must salvage exactly like
+	// streamed ones, for every size in the slack window, both framings,
+	// and every read split.
+	const maxEvent = 64
+	for over := 1; over <= delimiterSlack; over++ {
+		for _, framing := range []string{"\n\n", "\r\n\r\n"} {
+			payload := strings.Repeat("x", maxEvent+over-6) // "data: " is 6 bytes
+			raw := "data: " + payload + framing
+			if len(raw)-len(framing) <= maxEvent {
+				t.Fatalf("test construction: event not over cap")
+			}
+			stream := raw + "data: after" + framing
+			for _, chunk := range []int{1, 5, len(stream)} {
+				call := &chunkedStub{}
+				got, wrapper := driveChunked(t, io.NopCloser(strings.NewReader(stream)), call, modeSSE, 1<<16, maxEvent)
+				buf := make([]byte, chunk)
+				for {
+					if _, err := wrapper.Read(buf); err != nil {
+						break
+					}
+				}
+				if call.finishedEvents != 1 {
+					t.Fatalf("over=%d framing=%q chunk=%d: finishes = %d, want 1",
+						over, framing, chunk, call.finishedEvents)
+				}
+				if call.streamed.String() != payload {
+					t.Fatalf("over=%d framing=%q chunk=%d: payload %q, want %q",
+						over, framing, chunk, call.streamed.String(), payload)
+				}
+				if got.outcome.CaptureDegraded {
+					t.Fatalf("over=%d framing=%q chunk=%d: parser owns the degradation bit", over, framing, chunk)
+				}
+				if len(call.events) != 1 || call.events[0] != "after" {
+					t.Fatalf("over=%d framing=%q chunk=%d: following event lost: %v",
+						over, framing, chunk, call.events)
+				}
+			}
+		}
+	}
+}
+
+// panickingChunked panics in its oversized hooks: the wrapper must
+// degrade telemetry without retaining the self-referential callback,
+// so the GC abandonment safety net still fires.
+type panickingChunked struct {
+	chunkedStub
+	panicOnFeed bool
+}
+
+func (c *panickingChunked) FeedOversized(p []byte) {
+	if c.panicOnFeed {
+		panic("feed")
+	}
+	c.chunkedStub.FeedOversized(p)
+}
+
+func (c *panickingChunked) FinishOversizedEvent() EventVerdict {
+	panic("finish")
+}
+
+func TestAbandonSafetyNetSurvivesOversizedPanics(t *testing.T) {
+	const maxEvent = 32
+	for name, call := range map[string]Call{
+		"panic-on-feed":   &panickingChunked{panicOnFeed: true},
+		"panic-on-finish": &panickingChunked{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			finalized := make(chan Outcome, 1)
+			wrapper := newBodyWrapper(t.Context(),
+				io.NopCloser(strings.NewReader("data: "+strings.Repeat("p", 4*maxEvent)+"\n\ndata: x\n\n")),
+				call, modeSSE, 1<<16, 200, maxEvent, &atomic.Bool{},
+				func(outcome Outcome) { finalized <- outcome })
+			buf := make([]byte, 7)
+			for {
+				if _, err := wrapper.Read(buf); err != nil {
+					break
+				}
+			}
+			select {
+			case outcome := <-finalized:
+				// EOF finalized normally despite the panic; the panic
+				// downgraded telemetry.
+				if !outcome.CaptureDegraded {
+					t.Error("a parser panic must degrade capture")
+				}
+			default:
+				// Not finalized by EOF (panic happened first): the
+				// abandoned wrapper must still be caught by the GC
+				// safety net, which a retained self-referential
+				// callback would defeat.
+				_ = wrapper
+				wrapper = nil
+				_ = wrapper
+				deadline := time.Now().Add(5 * time.Second)
+				for {
+					runtime.GC()
+					select {
+					case <-finalized:
+						return
+					default:
+					}
+					if time.Now().After(deadline) {
+						t.Fatal("abandoned wrapper never finalized; the oversized callback pinned it")
+					}
+					time.Sleep(10 * time.Millisecond)
+				}
+			}
+		})
+	}
 }

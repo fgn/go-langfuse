@@ -1,41 +1,53 @@
 package langfuseopenai
 
-// controlScanner is a bounded push-mode JSON lexer used for payloads
-// that exceed the buffering caps. It proves structural validity of the
-// WHOLE document (container-kind stack, full number grammar, string
-// escapes, one top-level value plus trailing whitespace), retains only
-// a fixed set of small control-plane fields as raw JSON (decoded later
-// with encoding/json, so escape and Unicode semantics match the
-// ordinary parser exactly), detects duplicate selected keys, and tracks
-// presence of non-empty output-bearing values without retaining them.
-// Memory is bounded by the per-field caps and maxScanDepth regardless
-// of input size.
+import (
+	"strconv"
+	"unicode/utf8"
+)
+
+// controlScanner is a bounded push-mode JSON lexer used as the grammar
+// authority for BOTH buffered and over-cap payloads. It proves
+// structural validity of the WHOLE document (container-kind stack,
+// full number grammar, string escapes, one top-level value plus
+// trailing whitespace), retains only a fixed set of small
+// control-plane fields as raw JSON (decoded later with encoding/json,
+// so escape and Unicode semantics match the ordinary parser exactly),
+// detects duplicate selected keys by their DECODED spelling, and
+// tracks presence of non-empty output-bearing values at exact
+// path-qualified positions without retaining them. Memory is bounded
+// by the per-field caps and maxScanDepth regardless of input size.
 
 // maxScanDepth bounds the container-kind stack, far above any pinned
 // Responses schema path; over-depth marks the document invalid.
 const maxScanDepth = 64
 
-// scanFieldCaps bound each retained raw field (bytes of raw JSON).
+// scanFieldCaps bound each retained field. String fields are capped on
+// the DECODED value (checked at read time via decodeScannedString);
+// object fields are capped on raw JSON bytes of the value. The raw
+// retention buffer allows escape expansion for string fields.
 var scanFieldCaps = map[string]int{
-	"type":               80,
-	"status":             80,
-	"model":              300,
+	"type":               64,
+	"status":             64,
+	"model":              256,
 	"usage":              4096,
 	"error":              4096,
 	"incomplete_details": 1024,
 }
 
-// presenceKeys are the output-bearing field names tracked for TTFT:
-// top-level delta/done payload fields plus the nested names inside
-// item, part, and response.output subtrees. Values are checked for
-// string non-emptiness only; nothing is retained.
-var presenceKeys = map[string]bool{
-	"delta":             true,
-	"text":              true,
-	"refusal":           true,
-	"arguments":         true,
-	"partial_image_b64": true,
-	"result":            true,
+// scanFieldIsString marks fields whose cap applies to the decoded
+// string value rather than raw object bytes.
+var scanFieldIsString = map[string]bool{
+	"type": true, "status": true, "model": true,
+}
+
+// rawCapFor is the raw retention bound: string fields may expand every
+// byte to a six-byte escape, plus quotes.
+func rawCapFor(name string) int {
+	limit := scanFieldCaps[name]
+	if scanFieldIsString[name] {
+		return limit*6 + 2
+	}
+	return limit
 }
 
 type scanMode int
@@ -76,13 +88,14 @@ const (
 
 type scanFrame struct {
 	isObject bool
-	// key is the bounded current member key (empty for arrays or keys
-	// longer than the bound; long keys are never selected or
-	// presence-relevant).
+	// key is the current DECODED member key being parsed inside this
+	// object (empty for arrays or keys longer than the bound; long keys
+	// are never selected or presence-relevant).
 	key string
-	// presence marks a subtree whose nested output-bearing names count
-	// toward presence tracking (item, part, output, response.output).
-	presence bool
+	// enteredAs is the decoded key under which this container was
+	// entered in its parent object ("" for array elements and the
+	// root), giving presence tracking its exact path.
+	enteredAs string
 }
 
 type controlScanner struct {
@@ -97,48 +110,51 @@ type controlScanner struct {
 	complete   bool // one full top-level value consumed
 	started    bool
 
-	// key assembly (bounded); isKey marks the current string as a key.
-	isKey   bool
-	keyBuf  []byte
-	keyOver bool
+	// droppedFields names selected fields whose cap was breached; the
+	// buffered parse applies the same whole-field omission.
+	droppedFields map[string]bool
 
-	// unicodeLeft counts remaining \uXXXX hex digits.
+	// key assembly (bounded, DECODED); isKey marks the current string
+	// as a key.
+	isKey      bool
+	keyBuf     []byte
+	keyOver    bool
+	unicodeAcc []byte // pending \uXXXX hex digits for key decoding
+
 	unicodeLeft int
-	// literalLeft counts remaining bytes of true/false/null.
 	literal     string
 	literalLeft int
 
-	// capture state: while captureName != "", consumed bytes append to
-	// fields[captureName] until captureDepth is restored.
+	// capture state: while captureName != "", value bytes append to
+	// fields[captureName] until captureDepth is restored. Leading
+	// colon and whitespace are never charged or retained.
 	fields       map[string][]byte
-	seen         map[string]bool // selected keys already seen (per owner)
+	seen         map[string]bool // decoded selected keys already seen per owner
 	captureName  string
 	captureDepth int
 	captureOver  bool
 
 	// presence: a non-empty string value observed at a recognized
-	// (top-level or presence-subtree) output-bearing key. valueBytes
-	// counts content bytes of the current string value.
+	// path-qualified output-bearing position.
 	presentTop    map[string]bool
 	presentNested bool
-	valueKey      string
-	valuePresence bool
+	valueTopKey   string
+	valueNested   bool
 	valueBytes    int
 }
 
 func newControlScanner(mode scanMode) *controlScanner {
 	return &controlScanner{
-		mode:       mode,
-		fields:     make(map[string][]byte),
-		seen:       make(map[string]bool),
-		presentTop: make(map[string]bool),
+		mode:          mode,
+		fields:        make(map[string][]byte),
+		seen:          make(map[string]bool),
+		presentTop:    make(map[string]bool),
+		droppedFields: make(map[string]bool),
 	}
 }
 
-// selectedOwner reports whether the CURRENT container is one whose
-// member keys are selected control fields: the root object in unary
-// mode; the root object (type only) and the root "response" object in
-// SSE mode.
+// selectedKeyName reports whether the key just completed selects a
+// retained control field in the current mode.
 func (s *controlScanner) selectedKeyName() (string, bool) {
 	if len(s.stack) == 0 || !s.stack[len(s.stack)-1].isObject {
 		return "", false
@@ -157,8 +173,6 @@ func (s *controlScanner) selectedKeyName() (string, bool) {
 			return key, true
 		}
 		if len(s.stack) == 2 && s.stack[0].key == "response" && key != "type" && scanFieldCaps[key] > 0 {
-			// Note: stack[0].key is the key under which the CURRENT
-			// container was entered; see push().
 			return key, true
 		}
 	}
@@ -171,16 +185,18 @@ func (s *controlScanner) feed(p []byte) {
 	for index := range p {
 		b := p[index]
 		if s.captureName != "" && !s.captureOver {
-			// Raw capture appends every byte of the selected value as it
-			// is consumed, including this one (append before the state
-			// machine so string closers and container ends are kept).
 			field := s.fields[s.captureName]
-			if len(field)+1 > scanFieldCaps[s.captureName] {
-				s.captureOver = true
-				s.fieldOver = true
-				delete(s.fields, s.captureName)
-			} else {
-				s.fields[s.captureName] = append(field, b)
+			// Structural colon and whitespace before the value's first
+			// byte are neither charged nor retained.
+			if len(field) != 0 || (b != ':' && !isJSONSpace(b)) {
+				if len(field)+1 > rawCapFor(s.captureName) {
+					s.captureOver = true
+					s.fieldOver = true
+					s.droppedFields[s.captureName] = true
+					delete(s.fields, s.captureName)
+				} else {
+					s.fields[s.captureName] = append(field, b)
+				}
 			}
 		}
 		s.step(b)
@@ -207,13 +223,7 @@ func (s *controlScanner) step(b byte) {
 		case '"', '\\', '/', 'b', 'f', 'n', 'r', 't':
 			s.state = scanString
 			if s.isKey && !s.keyOver {
-				// Escaped key bytes keep raw form; decoding happens only
-				// for comparison below via json.Unmarshal at finish. For
-				// key MATCHING we require the raw spelling; an escaped
-				// spelling of a selected key cannot match and therefore
-				// selects nothing — conservative, and the whole-document
-				// validity rule still holds. Presence keys likewise.
-				s.keyBuf = append(s.keyBuf, '\\', b)
+				s.keyBuf = append(s.keyBuf, decodedEscape(b))
 				s.boundKey()
 			}
 			if !s.isKey {
@@ -222,10 +232,7 @@ func (s *controlScanner) step(b byte) {
 		case 'u':
 			s.state = scanStringUnicode
 			s.unicodeLeft = 4
-			if s.isKey && !s.keyOver {
-				s.keyBuf = append(s.keyBuf, '\\', 'u')
-				s.boundKey()
-			}
+			s.unicodeAcc = s.unicodeAcc[:0]
 			if !s.isKey {
 				s.valueBytes++
 			}
@@ -237,9 +244,23 @@ func (s *controlScanner) step(b byte) {
 			s.fail()
 			return
 		}
+		s.unicodeAcc = append(s.unicodeAcc, b)
 		s.unicodeLeft--
 		if s.unicodeLeft == 0 {
 			s.state = scanString
+			if s.isKey && !s.keyOver {
+				// Decode the escape so key comparison uses
+				// encoding/json's spelling. Surrogate pairs cannot spell
+				// any selected ASCII key, so a lone surrogate yields a
+				// non-matching rune, which is conservative and correct.
+				value, err := strconv.ParseUint(string(s.unicodeAcc), 16, 32)
+				if err != nil {
+					s.fail()
+					return
+				}
+				s.keyBuf = utf8.AppendRune(s.keyBuf, rune(value))
+				s.boundKey()
+			}
 		}
 	case scanNumberSign:
 		switch {
@@ -359,6 +380,23 @@ func (s *controlScanner) step(b byte) {
 	}
 }
 
+func decodedEscape(b byte) byte {
+	switch b {
+	case 'b':
+		return '\b'
+	case 'f':
+		return '\f'
+	case 'n':
+		return '\n'
+	case 'r':
+		return '\r'
+	case 't':
+		return '\t'
+	default:
+		return b // '"', '\\', '/'
+	}
+}
+
 func (s *controlScanner) stepValue(b byte) {
 	switch {
 	case isJSONSpace(b):
@@ -374,7 +412,7 @@ func (s *controlScanner) stepValue(b byte) {
 		s.state = scanValueOrArrayEnd
 	case b == '"':
 		s.isKey = false
-		s.valueKey, s.valuePresence = s.currentPresenceKey()
+		s.valueTopKey, s.valueNested = s.currentPresencePosition()
 		s.valueBytes = 0
 		s.state = scanString
 		s.started = true
@@ -411,7 +449,7 @@ func (s *controlScanner) stepString(b byte) {
 			s.endKey()
 			return
 		}
-		if s.valuePresence && s.valueBytes > 0 {
+		if s.valueBytes > 0 {
 			s.markPresence()
 		}
 		s.endScalarAfterString()
@@ -475,6 +513,16 @@ func (s *controlScanner) endKey() {
 	s.isKey = false
 	s.state = scanObjectColon
 
+	// The root "response" member itself is duplicate-tracked in
+	// envelope mode: two terminal response objects are schema-invalid
+	// even though the member is not retained as one bounded field.
+	if s.mode == scanSSEEnvelope && len(s.stack) == 1 && key == "response" {
+		if s.seen["response"] {
+			s.duplicates = true
+		}
+		s.seen["response"] = true
+	}
+
 	if name, selected := s.selectedKeyName(); selected {
 		if s.seen[s.seenKey(name)] {
 			s.duplicates = true
@@ -483,12 +531,11 @@ func (s *controlScanner) endKey() {
 		s.captureName = name
 		s.captureDepth = len(s.stack)
 		s.captureOver = false
-		delete(s.fields, name) // capture appends from the value start
+		delete(s.fields, name)
 	}
 }
 
-// seenKey namespaces duplicate detection per owning object so a
-// "status" inside response and a "status" inside usage never collide.
+// seenKey namespaces duplicate detection per owning object.
 func (s *controlScanner) seenKey(name string) string {
 	if s.mode == scanSSEEnvelope && len(s.stack) == 2 {
 		return "response." + name
@@ -496,35 +543,82 @@ func (s *controlScanner) seenKey(name string) string {
 	return name
 }
 
-// currentPresenceKey reports whether a string value about to be read
-// sits at a recognized output-bearing position: a presence key at the
-// event's top level, or a presence key anywhere inside a presence
-// subtree (item, part, output, response.output).
-func (s *controlScanner) currentPresenceKey() (string, bool) {
+// currentPresencePosition matches the exact path-qualified
+// output-bearing positions of the v5 table. Top-level positions are
+// reported by key (the event type decides later whether they bear);
+// nested positions cover ONLY the closed item/part/output shapes:
+//
+//	part.text, part.refusal
+//	item.arguments, item.result, item.content[].text|refusal
+//	response.output[].arguments|result,
+//	response.output[].content[].text|refusal
+//	and the same output[] shapes at the root in unary mode.
+func (s *controlScanner) currentPresencePosition() (string, bool) {
 	if len(s.stack) == 0 || !s.stack[len(s.stack)-1].isObject {
 		return "", false
 	}
 	key := s.stack[len(s.stack)-1].key
-	if !presenceKeys[key] {
+	if len(s.stack) == 1 && s.mode == scanSSEEnvelope {
+		switch key {
+		case "delta", "text", "refusal", "arguments", "partial_image_b64":
+			return key, true
+		}
 		return "", false
 	}
-	if len(s.stack) == 1 && s.mode == scanSSEEnvelope {
-		return key, true
-	}
-	for _, frame := range s.stack {
-		if frame.presence {
-			return key, true
+	frames := s.stack
+	entered := func(index int) string { return frames[index].enteredAs }
+	object := func(index int) bool { return frames[index].isObject }
+	array := func(index int) bool { return !frames[index].isObject }
+	textual := key == "text" || key == "refusal"
+	direct := key == "arguments" || key == "result"
+
+	switch s.mode {
+	case scanSSEEnvelope:
+		switch len(frames) {
+		case 2:
+			if entered(1) == "part" && object(1) && textual {
+				return "", true
+			}
+			if entered(1) == "item" && object(1) && direct {
+				return "", true
+			}
+		case 4:
+			if entered(1) == "item" && object(1) && entered(2) == "content" && array(2) && object(3) && textual {
+				return "", true
+			}
+			if entered(1) == "response" && object(1) && entered(2) == "output" && array(2) && object(3) && direct {
+				return "", true
+			}
+		case 6:
+			if entered(1) == "response" && object(1) && entered(2) == "output" && array(2) && object(3) &&
+				entered(4) == "content" && array(4) && object(5) && textual {
+				return "", true
+			}
+		}
+	case scanUnaryRoot:
+		switch len(frames) {
+		case 3:
+			if entered(1) == "output" && array(1) && object(2) && direct {
+				return "", true
+			}
+		case 5:
+			if entered(1) == "output" && array(1) && object(2) &&
+				entered(3) == "content" && array(3) && object(4) && textual {
+				return "", true
+			}
 		}
 	}
 	return "", false
 }
 
 func (s *controlScanner) markPresence() {
-	if len(s.stack) == 1 && s.mode == scanSSEEnvelope {
-		s.presentTop[s.valueKey] = true
+	if s.valueTopKey != "" {
+		s.presentTop[s.valueTopKey] = true
 		return
 	}
-	s.presentNested = true
+	if s.valueNested {
+		s.presentNested = true
+	}
 }
 
 func (s *controlScanner) push(isObject bool) bool {
@@ -535,22 +629,11 @@ func (s *controlScanner) push(isObject bool) bool {
 	if len(s.stack) == 0 {
 		s.rootObject = isObject
 	}
-	presence := false
-	if len(s.stack) > 0 {
-		if s.stack[len(s.stack)-1].presence {
-			presence = true // arrays and objects both propagate the subtree
-		} else if s.stack[len(s.stack)-1].isObject {
-			switch s.stack[len(s.stack)-1].key {
-			case "item", "part":
-				presence = s.mode == scanSSEEnvelope && len(s.stack) == 1
-			case "output":
-				// response.output in SSE mode; root output in unary mode.
-				presence = (s.mode == scanSSEEnvelope && len(s.stack) == 2 && s.stack[0].key == "response") ||
-					(s.mode == scanUnaryRoot && len(s.stack) == 1)
-			}
-		}
+	enteredAs := ""
+	if len(s.stack) > 0 && s.stack[len(s.stack)-1].isObject {
+		enteredAs = s.stack[len(s.stack)-1].key
 	}
-	s.stack = append(s.stack, scanFrame{isObject: isObject, presence: presence})
+	s.stack = append(s.stack, scanFrame{isObject: isObject, enteredAs: enteredAs})
 	s.started = true
 	return true
 }
@@ -565,21 +648,16 @@ func (s *controlScanner) pop() {
 	s.afterValue()
 }
 
-// endScalar completes a number or literal value.
 func (s *controlScanner) endScalar() {
 	s.finishCapture()
 	s.afterValue()
 }
 
-// endScalarAfterString completes a string VALUE (the closing quote was
-// already consumed by capture).
 func (s *controlScanner) endScalarAfterString() {
 	s.finishCapture()
 	s.afterValue()
 }
 
-// finishCapture closes raw retention when the captured value's depth
-// is restored.
 func (s *controlScanner) finishCapture() {
 	if s.captureName != "" && len(s.stack) == s.captureDepth {
 		s.captureName = ""
@@ -601,7 +679,7 @@ func (s *controlScanner) afterValue() {
 
 // documentUsable reports whether hard verdicts may be derived: one
 // complete top-level value, no structural failure, no duplicate
-// selected keys.
+// selected keys, an object root.
 func (s *controlScanner) documentUsable() bool {
 	return s.complete && !s.invalid && !s.duplicates && s.rootObject
 }

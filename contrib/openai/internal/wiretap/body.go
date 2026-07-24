@@ -247,14 +247,17 @@ func (w *bodyWrapper) process(p []byte) {
 		// The callback is set only for the duration of this feed: a
 		// persistently stored closure over w would make the wrapper
 		// reachable from itself and defeat the GC abandonment safety
-		// net, and the completion-start clock must be this read's.
+		// net, and the completion-start clock must be this read's. The
+		// deferred clear survives parser panics, which unwind past the
+		// plain clear into recoverParse and would otherwise leave the
+		// self-referential closure stored forever.
 		if w.chunked != nil {
 			w.framer.finishOversized = func() bool { return apply(w.chunked.FinishOversizedEvent()) }
+			defer func() { w.framer.finishOversized = nil }()
 		}
 		w.framer.feed(p, func(data []byte) bool {
 			return apply(w.call.FeedEvent(data))
 		})
-		w.framer.finishOversized = nil
 	}
 }
 
