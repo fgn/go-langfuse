@@ -942,13 +942,22 @@ func TestReImportUpdatesAcceptedValuesWhileLocalWins(t *testing.T) {
 		t.Errorf("re-imported metadata = %q, want n2", state.metadata["note"])
 	}
 
-	// A valid-to-invalid transition retires too: hop 3 carries the
-	// session member again but out of domain.
-	ctx = client.WithTraceAttributesFromBaggage(
-		extractBaggage(t, ctx, "langfuse_user_id=bob,langfuse_session_id=s%2B1"))
-	state, _ = ctx.Value(traceStateContextKey{client: client}).(traceState)
-	if state.sessionID != "" {
-		t.Errorf("invalid member must retire the accepted session; got %q", state.sessionID)
+	// A TRUE valid-to-invalid transition: a fresh sequence accepts a
+	// valid session, then the next namespace carries the same member
+	// out of domain, which must retire the still-held accepted value.
+	fresh := client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, context.Background(), "langfuse_session_id=s-good"))
+	if got, _ := fresh.Value(traceStateContextKey{client: client}).(traceState); got.sessionID != "s-good" {
+		t.Fatalf("setup: accepted session = %q", got.sessionID)
+	}
+	fresh = client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, fresh, "langfuse_session_id=s%2B1"))
+	freshState, _ := fresh.Value(traceStateContextKey{client: client}).(traceState)
+	if freshState.sessionID != "" {
+		t.Errorf("an invalid member must retire the held accepted session; got %q", freshState.sessionID)
+	}
+	if members := injectedMembers(client.WithBaggagePropagation(fresh)); members[baggageKeySessionID] != "" {
+		t.Errorf("retired session must leave the wire; members: %v", members)
 	}
 
 	// A local value set between imports keeps winning over hop 3.
@@ -967,14 +976,32 @@ func TestImportTwiceOnConsumedContextIsStable(t *testing.T) {
 	client := newInteropClient(t, receiver, Config{})
 	t.Cleanup(func() { shutdownClient(t, client) })
 
+	traceHex := "0123456789abcdef0123456789abcdef"
+	remote := remoteSpanContext(t, traceHex)
+	base := oteltrace.ContextWithRemoteSpanContext(context.Background(), remote)
 	once := client.WithTraceAttributesFromBaggage(
-		extractBaggage(t, context.Background(), "langfuse_user_id=alice"))
+		extractBaggage(t, base, "langfuse_user_id=alice,langfuse_trace_id="+traceHex))
 	twice := client.WithTraceAttributesFromBaggage(once)
 	stateOnce, _ := once.Value(traceStateContextKey{client: client}).(traceState)
 	stateTwice, _ := twice.Value(traceStateContextKey{client: client}).(traceState)
 	if stateTwice.userID != stateOnce.userID {
 		t.Errorf("second import on a consumed context changed state: %q -> %q",
 			stateOnce.userID, stateTwice.userID)
+	}
+	// The no-namespace no-op covers claim authority too: downstream
+	// spans on the continued remote trace stay claim-suppressed.
+	if !client.hasTraceClaim(twice, remote.TraceID()) {
+		t.Error("re-import on a consumed context must not clear imported claim authority")
+	}
+	_, observation := client.StartObservation(twice, "continued-after-reimport", TypeSpan, ObservationAttributes{})
+	observation.End()
+	flushClient(t, client)
+	span := interopSpanMap(t, receiver)["continued-after-reimport"]
+	if span == nil {
+		t.Fatal("span not exported")
+	}
+	if _, isRoot := interopProtoAttribute(span, lfattr.AppRootKey); isRoot {
+		t.Error("the continued trace must not gain an app root after a consumed-context re-import")
 	}
 }
 
@@ -1292,5 +1319,57 @@ func TestMarkingReportsReplacedClaim(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("marking away an inbound claim must be named; diagnostics: %v", *diagnostics)
+	}
+}
+
+func TestReImportReleasesAcceptedMetadataCapacity(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	client := newInteropClient(t, receiver, Config{})
+	t.Cleanup(func() { shutdownClient(t, client) })
+
+	// Hop 1 fills the entire 32-key metadata budget with accepted keys;
+	// hop 2's disjoint namespace must still land, because unconfirmed
+	// accepted capacity is released, not counted against the cap.
+	parts := make([]string, 0, 32)
+	for index := range 32 {
+		parts = append(parts, fmt.Sprintf("langfuse_metadata_old%02d=v", index))
+	}
+	ctx := client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, context.Background(), strings.Join(parts, ",")))
+	state, _ := ctx.Value(traceStateContextKey{client: client}).(traceState)
+	if len(state.metadata) != 32 {
+		t.Fatalf("setup: accepted %d keys, want 32", len(state.metadata))
+	}
+
+	ctx = client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, ctx, "langfuse_metadata_fresh=current"))
+	state, _ = ctx.Value(traceStateContextKey{client: client}).(traceState)
+	if state.metadata["fresh"] != "current" {
+		t.Errorf("fresh key = %q, want current (accepted capacity must be released)", state.metadata["fresh"])
+	}
+	if len(state.metadata) != 1 {
+		t.Errorf("state holds %d keys, want only the current namespace's projection", len(state.metadata))
+	}
+	if members := injectedMembers(client.WithBaggagePropagation(ctx)); members[baggageMetadataPrefix+"fresh"] != "current" ||
+		len(members) != 1 {
+		t.Errorf("wire members = %v, want only the fresh projection", members)
+	}
+
+	// Partial-to-disjoint with a LOCAL key present: local capacity and
+	// content survive every re-import.
+	local := client.WithTraceAttributes(context.Background(), TraceAttributes{
+		Metadata: map[string]any{"pinned": "local"},
+	})
+	local = client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, local, "langfuse_metadata_a=1,langfuse_metadata_b=2"))
+	local = client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, local, "langfuse_metadata_c=3"))
+	state, _ = local.Value(traceStateContextKey{client: client}).(traceState)
+	if state.metadata["pinned"] != "local" || state.metadata["c"] != "3" {
+		t.Errorf("state = %v, want pinned local plus the current projection", state.metadata)
+	}
+	if _, stale := state.metadata["a"]; stale {
+		t.Error("retired accepted key survived the re-import")
 	}
 }

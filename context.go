@@ -272,7 +272,20 @@ func (s *traceState) merge(values TraceAttributes, mask func(any) any) {
 // re-marked, so a later import updates earlier imports while local
 // values keep winning.
 func (s *traceState) mergeImportedMetadata(imported map[string]any, mask func(any) any, hasNamespace bool) {
-	normalized, stringKeys := lfattr.TraceMetadataWithExisting(imported, mask, s.metadata)
+	// Normalize against the locally originated entries only: capacity
+	// held by unconfirmed accepted keys from earlier hops must not
+	// starve the current namespace's replacement projection (those keys
+	// are about to be retired below).
+	staged := s.metadata
+	if hasNamespace && len(s.accepted) != 0 {
+		staged = make(map[string]string, len(s.metadata))
+		for key, value := range s.metadata {
+			if !s.isAccepted(acceptedMetadata + key) {
+				staged[key] = value
+			}
+		}
+	}
+	normalized, stringKeys := lfattr.TraceMetadataWithExisting(imported, mask, staged)
 	if hasNamespace {
 		// Retire accepted metadata keys the current namespace does not
 		// re-confirm (post-mask identity): the accepted layer is a

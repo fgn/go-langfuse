@@ -231,6 +231,9 @@ func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Con
 	// started root is never cleared by an import.
 	prior := c.traceClaimState(ctx)
 	switch {
+	case !hasNamespace:
+		// A consumed context observes no namespace: the no-op rule
+		// covers claim authority too.
 	case haveClaim && prior.id == claimID && !prior.imported:
 		// Keep the stronger local origin.
 	case haveClaim:

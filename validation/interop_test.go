@@ -802,6 +802,12 @@ func TestInteropSmokes(t *testing.T) {
 		if receiver.TraceID == "0123456789abcdef0123456789abcdef" {
 			t.Error("python must never seed trace identity from the claim")
 		}
+		if len(receiver.TraceID) != 32 || receiver.TraceID == strings.Repeat("0", 32) {
+			t.Errorf("python trace ID must be a fresh nonzero 32-hex ID, got %q", receiver.TraceID)
+		}
+		if receiver.ParentSpanID != "" {
+			t.Errorf("a claim without a traceparent must leave the receiver parentless, got parent %q", receiver.ParentSpanID)
+		}
 		if _, isRoot := receiver.Attributes["langfuse.internal.is_app_root"]; !isRoot {
 			t.Errorf("a parentless rejected claim leaves python as its own app root: %v", receiver.Attributes)
 		}
