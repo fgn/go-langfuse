@@ -32,13 +32,18 @@ type (
 )
 
 type traceState struct {
-	name      string
-	userID    string
-	sessionID string
-	tags      []string
-	tagBytes  int
-	metadata  map[string]string
-	version   string
+	name        string
+	userID      string
+	sessionID   string
+	tags        []string
+	tagBytes    int
+	metadata    map[string]string
+	version     string
+	environment string
+	// wireMetadata marks metadata keys whose caller-supplied value was a
+	// string; only those are eligible for baggage export, because
+	// JSON-encoded non-string values have no cross-SDK wire contract.
+	wireMetadata map[string]struct{}
 }
 
 // WithTraceAttributes returns a context that propagates request-scoped trace
@@ -68,7 +73,13 @@ func (c *Client) WithTraceAttributes(ctx context.Context, values TraceAttributes
 			observation.applyTraceState(next)
 		}
 	}
-	return result
+	if values.Environment != "" && next.environment == values.Environment {
+		// The request-scoped environment also updates the current recording
+		// span — an already-started borrowed server span included — matching
+		// the official SDKs' propagate-attributes semantics.
+		stampEnvironmentAttribute(ctx, next.environment)
+	}
+	return c.syncBaggage(result, false, false)
 }
 
 // WithSampleRate returns a context that overrides the configured sample rate
@@ -114,6 +125,10 @@ func (s traceState) clone() traceState {
 		result.metadata = make(map[string]string, len(s.metadata))
 		maps.Copy(result.metadata, s.metadata)
 	}
+	if s.wireMetadata != nil {
+		result.wireMetadata = make(map[string]struct{}, len(s.wireMetadata))
+		maps.Copy(result.wireMetadata, s.wireMetadata)
+	}
 	return result
 }
 
@@ -129,6 +144,13 @@ func (s *traceState) merge(values TraceAttributes, mask func(any) any) {
 	}
 	if value := propagatedString("version", values.Version); value != "" {
 		s.version = value
+	}
+	if values.Environment != "" {
+		if err := validateEnvironment(values.Environment); err != nil {
+			diagnostic.Report("propagated environment is invalid; value ignored")
+		} else {
+			s.environment = values.Environment
+		}
 	}
 	if len(values.Tags) != 0 {
 		seenCapacity := len(s.tags) + min(len(values.Tags), maxTraceTags-len(s.tags))
@@ -174,10 +196,58 @@ func (s *traceState) merge(values TraceAttributes, mask func(any) any) {
 				continue
 			}
 			s.metadata[key] = metadata[key]
+			if _, isString := values.Metadata[key].(string); isString {
+				if s.wireMetadata == nil {
+					s.wireMetadata = make(map[string]struct{})
+				}
+				s.wireMetadata[key] = struct{}{}
+			} else {
+				delete(s.wireMetadata, key)
+			}
 		}
 		if truncated {
 			diagnostic.Report("trace metadata exceeds the lifetime entry limit; new entries omitted")
 		}
+	}
+}
+
+// mergeImportedMetadata inserts baggage-accepted metadata values, which
+// are strings by wire construction, through the same normalization and
+// mask path as local metadata. Keys already present keep their local
+// values; the caller filters those before building imported.
+func (s *traceState) mergeImportedMetadata(imported map[string]any, mask func(any) any) {
+	if len(imported) == 0 {
+		return
+	}
+	normalized := lfattr.TraceMetadataWithExisting(imported, mask, s.metadata)
+	if len(normalized) == 0 {
+		return
+	}
+	if s.metadata == nil {
+		s.metadata = make(map[string]string, len(normalized))
+	}
+	keys := make([]string, 0, len(normalized))
+	for key := range normalized {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	truncated := false
+	for _, key := range keys {
+		if _, exists := s.metadata[key]; exists {
+			continue
+		}
+		if len(s.metadata) >= lfattr.MaxMetadataEntries {
+			truncated = true
+			continue
+		}
+		s.metadata[key] = normalized[key]
+		if s.wireMetadata == nil {
+			s.wireMetadata = make(map[string]struct{})
+		}
+		s.wireMetadata[key] = struct{}{}
+	}
+	if truncated {
+		diagnostic.Report("trace metadata exceeds the lifetime entry limit; imported entries omitted")
 	}
 }
 
@@ -228,6 +298,9 @@ func (s traceState) attributes() []attribute.KeyValue {
 	}
 	if s.version != "" {
 		result = append(result, attribute.String(lfattr.VersionKey, s.version))
+	}
+	if s.environment != "" {
+		result = append(result, attribute.String(lfattr.EnvironmentKey, s.environment))
 	}
 	return result
 }

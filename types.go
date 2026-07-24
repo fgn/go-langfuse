@@ -89,6 +89,12 @@ type TraceAttributes struct {
 	// OpenTelemetry span limits. Keys are limited to 200 bytes.
 	Metadata map[string]any
 	Version  string
+	// Environment is a request-scoped override of Config.Environment for
+	// spans exported on this context path, validated with the same rule. It
+	// is also the only source of the langfuse_environment baggage member
+	// under [Client.WithBaggagePropagation]; the client-wide default is
+	// never propagated cross-process.
+	Environment string
 }
 
 // ObservationType identifies how Langfuse presents an observation.
