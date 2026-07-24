@@ -608,12 +608,16 @@ func TestResponsesValueComparisonFixtures(t *testing.T) {
 	baseInput := `{"instructions":"be terse","input":[{"role":"user","content":[{"type":"input_text","text":"q marker-a"}]}]}`
 	pythonInput := `[{"role":"system","content":"be terse"},{"role":"user","content":[{"type":"input_text","text":"q marker-b"}]}]`
 	base := func() (observation, observation) {
-		python := observation{Name: "OpenAI-responses-parity", Type: "GENERATION",
+		python := observation{
+			Name: "OpenAI-responses-parity", Type: "GENERATION",
 			Model: &model, Input: json.RawMessage(pythonInput),
-			UsageDetails: map[string]int64{"input": 3, "output": 2, "total": 5}}
-		goSide := observation{Name: "openai.responses", Type: "GENERATION",
+			UsageDetails: map[string]int64{"input": 3, "output": 2, "total": 5},
+		}
+		goSide := observation{
+			Name: "openai.responses", Type: "GENERATION",
 			Model: &model, Input: json.RawMessage(baseInput),
-			UsageDetails: map[string]int64{"input": 3, "output": 2, "total": 5}}
+			UsageDetails: map[string]int64{"input": 3, "output": 2, "total": 5},
+		}
 		return python, goSide
 	}
 
@@ -667,9 +671,11 @@ func TestResponsesValueComparisonFixtures(t *testing.T) {
 		}
 	})
 	t.Run("go-map-output-rejected", func(t *testing.T) {
-		obs := observation{Name: "openai.responses", Type: "GENERATION",
+		obs := observation{
+			Name: "openai.responses", Type: "GENERATION",
 			Input:  json.RawMessage(baseInput),
-			Output: json.RawMessage(`{"type":"message","role":"assistant","content":[]}`)}
+			Output: json.RawMessage(`{"type":"message","role":"assistant","content":[]}`),
+		}
 		if _, err := canonicalizeResponses(obs, false); err == nil {
 			t.Fatal("a Go singleton object output violates the array contract and must be rejected")
 		}
