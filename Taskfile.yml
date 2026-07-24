@@ -133,6 +133,11 @@ tasks:
     cmds:
       - cd validation && GOWORK=off go run -tags=validation ./cmd/matrix -out ../docs/support-matrix.md
 
+  interop:
+    desc: Baggage interop corpus against the uv-locked Python oracle (credential-free; ACCEPT=accept to reseal)
+    cmds:
+      - cd validation && INTEROP_REGEN="{{.ACCEPT}}" GOWORK=off go test -tags=interop -count=1 -timeout=10m -run 'TestInterop' .
+
   ci:
     desc: Run all continuous-integration checks
     cmds:
@@ -147,6 +152,7 @@ tasks:
       - task: contrib:sync:check
       - task: contrib:test
       - task: contrib:purity:check
+      - task: interop
       - task: vuln:check
       - task: policy:check
 

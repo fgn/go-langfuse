@@ -277,9 +277,13 @@ func (c *Client) StartObservation(
 	values ObservationAttributes,
 ) (context.Context, *Observation)
 
+func (c *Client) WithBaggagePropagation(ctx context.Context) context.Context
+
 func (c *Client) WithSampleRate(ctx context.Context, fraction float64) context.Context
 
 func (c *Client) WithTraceAttributes(ctx context.Context, values TraceAttributes) context.Context
+
+func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Context
 
 func (o *Observation) End()
 
@@ -420,6 +424,7 @@ type TraceAttributes struct {
 	Tags []string
 	Metadata map[string]any
 	Version string
+	Environment string
 }
 
 type Usage struct {

@@ -5,6 +5,22 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+- Add opt-in cross-process trace-attribute propagation over W3C baggage,
+  interoperable with the official SDKs. `Client.WithBaggagePropagation`
+  marks a context branch for export and keeps the closed `langfuse_*`
+  member set (user, session, trace name, version, request-scoped
+  environment, string metadata, and the application-root claim) rebuilt
+  at every synchronizing call; `Client.WithTraceAttributesFromBaggage`
+  applies authenticated inbound members through a per-field precedence
+  allowlist and always consumes the `langfuse_*` namespace on its
+  returned branch. Values are validated against the cross-SDK wire
+  domain, W3C member/byte budgets are enforced deterministically with
+  foreign baggage preserved first, and `TraceAttributes` gains a
+  request-scoped `Environment` that is the only value ever serialized
+  (never `Config.Environment`). A credential-free interop corpus and
+  cross-language process smokes against the uv-locked Python SDK run in
+  ordinary CI (`task interop`) and gate core releases.
+
 ## [0.5.0] - 2026-07-23
 
 - Add the opt-in `validation/` module (never released, excluded from

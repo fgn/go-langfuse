@@ -134,6 +134,10 @@ func (c *Client) StartObservation(
 	if span.IsRecording() && span.SpanContext().IsSampled() {
 		spanCtx = c.withTraceClaim(spanCtx, span.SpanContext().TraceID())
 	}
+	// On a propagation-marked path the returned context's baggage is
+	// rebuilt so a new sampled root replaces the outbound trace claim and a
+	// sampled-out root stops exporting one that no longer matches.
+	spanCtx = c.syncBaggage(spanCtx, false, false)
 	return spanCtx, observation
 }
 
