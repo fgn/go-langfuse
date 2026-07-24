@@ -82,6 +82,12 @@ type bodyWrapper struct {
 	capBytes   int
 	status     int
 
+	// chunked is the parser's optional over-cap salvage surface;
+	// unaryChunked marks a unary body that crossed the cap and is now
+	// streaming through it (the retained prefix was replayed first).
+	chunked      ChunkedCall
+	unaryChunked bool
+
 	completionStart time.Time
 	cancelObserved  *atomic.Bool
 	ctxDone         func() bool
@@ -115,6 +121,8 @@ func newBodyWrapper(
 		finalize:       finalize,
 	}
 	w.framer.maxEvent = maxEvent
+	w.chunked, _ = call.(ChunkedCall)
+	w.framer.chunked = w.chunked
 	// Some SDK retry loops abandon a failed attempt's response body
 	// without reading or closing it (the official openai-go does).
 	// Without a safety net that attempt's observation would never end
@@ -191,11 +199,25 @@ func (w *bodyWrapper) process(p []byte) {
 	switch w.mode {
 	case modeUnary:
 		if w.unaryOver {
+			if w.unaryChunked {
+				w.chunked.FeedOversized(p)
+			}
 			return
 		}
 		if len(w.unary)+len(p) > w.capBytes {
-			// Drop, never truncate; scanning cannot continue for a
-			// unary body, so telemetry for content degrades.
+			if w.chunked != nil {
+				// Streamed salvage: replay the full retained prefix so
+				// the scanner sees the complete byte history, then this
+				// read and every later one. Content capture still
+				// degrades (the parser owns its partial declaration).
+				w.chunked.BeginOversizedUnary()
+				w.chunked.FeedOversized(w.unary)
+				w.chunked.FeedOversized(p)
+				w.unaryChunked = true
+			}
+			// Drop, never truncate; the retained-bytes path cannot
+			// continue for a unary body, so telemetry for content
+			// degrades.
 			w.unary = nil
 			w.unaryOver = true
 			return
@@ -204,8 +226,7 @@ func (w *bodyWrapper) process(p []byte) {
 	case modeUndecided, modeIgnore:
 	case modeSSE:
 		readTime := time.Now()
-		w.framer.feed(p, func(data []byte) bool {
-			verdict := w.call.FeedEvent(data)
+		apply := func(verdict EventVerdict) bool {
 			if verdict.Output && w.completionStart.IsZero() {
 				w.completionStart = readTime
 			}
@@ -216,10 +237,24 @@ func (w *bodyWrapper) process(p []byte) {
 			case TerminalError:
 				w.finalizeLocked(StateFailed)
 				return false
+			case TerminalIncomplete:
+				w.finalizeLocked(StateIncomplete)
+				return false
 			case TerminalNone:
 			}
 			return true
+		}
+		// The callback is set only for the duration of this feed: a
+		// persistently stored closure over w would make the wrapper
+		// reachable from itself and defeat the GC abandonment safety
+		// net, and the completion-start clock must be this read's.
+		if w.chunked != nil {
+			w.framer.finishOversized = func() bool { return apply(w.chunked.FinishOversizedEvent()) }
+		}
+		w.framer.feed(p, func(data []byte) bool {
+			return apply(w.call.FeedEvent(data))
 		})
+		w.framer.finishOversized = nil
 	}
 }
 
@@ -241,6 +276,10 @@ func (w *bodyWrapper) terminalRead(err error) {
 					body = w.sniff // short body that never left sniffing
 				}
 				w.call.FinishUnary(body, w.status)
+			} else if w.unaryChunked {
+				// Clean EOF finishes the salvage scan regardless of JSON
+				// validity, preserving the clean-wire lifecycle rule.
+				w.chunked.FinishOversizedUnary(w.status)
 			}
 			w.finalizeLocked(StateComplete)
 			return
@@ -293,6 +332,16 @@ func (w *bodyWrapper) closeTelemetry() {
 			w.finalizeLocked(StateComplete)
 			return
 		}
+		if w.unaryChunked && w.chunked.UnaryComplete() {
+			// The salvage scanner owns the completeness proof once the
+			// retained bytes are gone: exactly one complete top-level
+			// value plus trailing whitespace makes Close the
+			// decoder-close completion pattern, same as json.Valid above.
+			defer w.recoverParse()
+			w.chunked.FinishOversizedUnary(w.status)
+			w.finalizeLocked(StateComplete)
+			return
+		}
 	}
 	w.finalizeLocked(StateClosedEarly)
 }
@@ -317,10 +366,12 @@ func (w *bodyWrapper) finalizeLocked(state FinalState) {
 	if w.finalized {
 		return
 	}
-	if state == StateComplete || state == StateFailed {
+	if state == StateComplete || state == StateFailed || state == StateIncomplete {
 		// Hard terminals freeze telemetry while the body keeps
 		// serving reads transparently (official openai-go drains
-		// after [DONE]); Close after a terminal is a no-op.
+		// after [DONE]); Close after a terminal is a no-op. A hard
+		// protocol-incomplete terminal freezes identically; the
+		// EOF-derived incomplete path has no further reads to freeze.
 		w.frozen = true
 	}
 	w.finalized = true

@@ -16,6 +16,23 @@ type sseFramer struct {
 	discarded bool // at least one event was dropped for size
 	dropping  bool // currently skipping an over-cap event
 	stopped   bool // terminal reached; the framer is permanently done
+
+	// chunked, when non-nil, replaces the discard path for over-cap
+	// events: the framer lexes the raw event incrementally and streams
+	// the normalized joined data payload to the sink, so control-plane
+	// facts survive events that cannot be buffered. The parser owns the
+	// degradation bit for these events (every oversized data-bearing
+	// event must set TelemetryPartial), so discarded stays false here.
+	chunked ChunkedCall
+	// finishOversized is invoked when a chunk-lexed over-cap event
+	// ends; like emit, returning false stops parsing permanently. Set
+	// together with chunked by the body wrapper.
+	finishOversized func() bool
+	lexer           oversizedLexer
+	// chunking marks an over-cap event currently streaming through the
+	// lexer; it counts as pending (an EOF mid-event is not an event
+	// boundary).
+	chunking bool
 }
 
 // feed appends p and emits each completed event's joined data payload.
@@ -25,7 +42,7 @@ type sseFramer struct {
 // partially discarded one: a stream that ends with pending bytes did
 // not close on an event boundary.
 func (f *sseFramer) pending() bool {
-	return len(f.buf) > 0 || f.dropping
+	return len(f.buf) > 0 || f.dropping || f.chunking
 }
 
 // delimiterSlack covers a maximal CRLF event delimiter beyond the
@@ -40,7 +57,24 @@ func (f *sseFramer) feed(p []byte, emit func(data []byte) bool) {
 	if f.stopped {
 		return
 	}
-	for len(p) > 0 {
+	for len(p) > 0 || f.chunking {
+		if f.chunking {
+			consumed, done := f.lexer.feed(p, f.chunked)
+			p = p[consumed:]
+			if !done {
+				return // the event continues in a later read
+			}
+			f.chunking = false
+			// A control-only over-cap event carried no data payload:
+			// nothing reached the sink and there is nothing to finish.
+			if f.lexer.sawData && !f.finishOversized() {
+				f.stopped = true
+				f.buf = nil
+				return
+			}
+			f.lexer = oversizedLexer{}
+			continue
+		}
 		room := max(f.maxEvent+delimiterSlack-len(f.buf), 1)
 		chunk := p
 		if len(chunk) > room {
@@ -61,6 +95,18 @@ func (f *sseFramer) drain(emit func(data []byte) bool) bool {
 		event, rest, ok := nextEvent(f.buf)
 		if !ok {
 			if len(f.buf) > f.maxEvent {
+				if f.chunked != nil && !f.dropping {
+					// Switch this event to streamed salvage: the buffer
+					// holds the raw event from its start, so the lexer
+					// begins line-aligned; feed returns with the whole
+					// buffer consumed because no event boundary exists
+					// in it (nextEvent just failed).
+					f.chunking = true
+					f.lexer = oversizedLexer{}
+					f.lexer.feed(f.buf, f.chunked)
+					f.buf = f.buf[:0]
+					return true
+				}
 				f.discardKeepingDelimiterState()
 			}
 			return true
@@ -177,4 +223,151 @@ func sseField(line []byte, name string) (value []byte, ok bool) {
 		rest = rest[1:]
 	}
 	return rest, true
+}
+
+// oversizedLexer incrementally lexes ONE raw SSE event that exceeded
+// the buffering cap, streaming its normalized joined data payload to a
+// ChunkedCall exactly as eventData would have produced it: field names,
+// comments, ids, retry fields, and CR/LF delimiters never reach the
+// sink, successive data lines are joined with a single newline, and one
+// optional leading space per data value is stripped. State is a few
+// bytes regardless of event size.
+type oversizedLexer struct {
+	state   lexState
+	field   []byte // bounded partial field-name buffer
+	sawData bool   // at least one data field seen in this event
+	heldCR  bool   // a \r inside a data value awaiting \n lookahead
+}
+
+type lexState int
+
+const (
+	lexLineStart lexState = iota
+	lexLineStartCR
+	lexFieldName
+	lexFieldCR
+	lexDataValueStart
+	lexDataValue
+	lexSkipLine
+)
+
+// maxFieldName bounds field-name buffering: "data" and every other SSE
+// field name fit well below it, and anything longer is not data.
+const maxFieldName = 8
+
+// feed consumes bytes of the raw event block and returns how many were
+// consumed plus whether the event's terminating blank line was reached.
+// Data-value content is forwarded to sink in contiguous runs.
+func (l *oversizedLexer) feed(p []byte, sink ChunkedCall) (consumed int, done bool) {
+	index := 0
+	for index < len(p) {
+		b := p[index]
+		switch l.state {
+		case lexLineStart:
+			switch b {
+			case '\n':
+				return index + 1, true // blank line: event ends
+			case '\r':
+				l.state = lexLineStartCR
+			case ':':
+				l.state = lexSkipLine
+			default:
+				l.field = append(l.field[:0], b)
+				l.state = lexFieldName
+			}
+			index++
+		case lexLineStartCR:
+			if b == '\n' {
+				return index + 1, true // \r\n blank line: event ends
+			}
+			// A stray \r starts an ordinary (non-data) line.
+			l.state = lexSkipLine
+		case lexFieldName:
+			switch b {
+			case ':':
+				if string(l.field) == "data" {
+					l.state = lexDataValueStart
+				} else {
+					l.state = lexSkipLine
+				}
+				index++
+			case '\n':
+				l.endFieldOnlyLine(sink)
+				index++
+			case '\r':
+				l.state = lexFieldCR
+				index++
+			default:
+				if len(l.field) >= maxFieldName {
+					l.state = lexSkipLine
+				} else {
+					l.field = append(l.field, b)
+					index++
+				}
+			}
+		case lexFieldCR:
+			if b == '\n' {
+				l.endFieldOnlyLine(sink)
+				index++
+			} else {
+				l.state = lexSkipLine
+			}
+		case lexDataValueStart:
+			l.beginDataValue(sink)
+			l.state = lexDataValue
+			if b == ' ' {
+				index++ // one optional leading space per the SSE spec
+			}
+		case lexDataValue:
+			if l.heldCR {
+				l.heldCR = false
+				if b == '\n' {
+					l.state = lexLineStart
+					index++
+					continue
+				}
+				sink.FeedOversized([]byte{'\r'})
+			}
+			run := index
+			for run < len(p) && p[run] != '\n' && p[run] != '\r' {
+				run++
+			}
+			if run > index {
+				sink.FeedOversized(p[index:run])
+				index = run
+				continue
+			}
+			if b == '\r' {
+				l.heldCR = true
+				index++
+				continue
+			}
+			l.state = lexLineStart // b == '\n'
+			index++
+		case lexSkipLine:
+			if b == '\n' {
+				l.state = lexLineStart
+			}
+			index++
+		}
+	}
+	return len(p), false
+}
+
+// endFieldOnlyLine handles a line consisting of a bare field name: a
+// bare "data" line contributes an empty data value per the SSE
+// specification; every other bare field is ignored.
+func (l *oversizedLexer) endFieldOnlyLine(sink ChunkedCall) {
+	if string(l.field) == "data" {
+		l.beginDataValue(sink)
+	}
+	l.state = lexLineStart
+}
+
+// beginDataValue joins successive data lines with a single newline.
+func (l *oversizedLexer) beginDataValue(sink ChunkedCall) {
+	if l.sawData {
+		sink.FeedOversized([]byte{'\n'})
+	}
+	l.sawData = true
 }

@@ -8,11 +8,11 @@ import (
 	"github.com/fgn/go-langfuse/contrib/openai/internal/wiretap"
 )
 
-// protocol recognizes the OpenAI wire format's v0.1 route scope: chat
-// completions, legacy completions, and embeddings, in both plain and
-// Azure path shapes. Suffix matching tolerates reverse-proxy path
-// prefixes. The Responses API is deliberately unrecognized in v0.1 and
-// passes through unobserved.
+// protocol recognizes the OpenAI wire routes: chat completions, legacy
+// completions, embeddings, and (since v0.2) the Responses API, in both
+// plain and Azure path shapes. Suffix matching tolerates reverse-proxy
+// path prefixes. Response retrieval (/responses/{id}), input-items
+// listing, and background polling pass through unobserved.
 type protocol struct {
 	captureCap int
 }
@@ -21,6 +21,8 @@ func (p protocol) Recognize(u *url.URL) (wiretap.Route, bool) {
 	path := u.EscapedPath()
 	var route wiretap.Route
 	switch {
+	case strings.HasSuffix(path, "/responses"):
+		route = wiretap.Route{Name: "openai.responses", Type: langfuse.TypeGeneration}
 	case strings.HasSuffix(path, "/chat/completions"):
 		route = wiretap.Route{Name: "openai.chat.completions", Type: langfuse.TypeGeneration}
 	case strings.HasSuffix(path, "/embeddings"):
@@ -42,6 +44,9 @@ func (p protocol) Recognize(u *url.URL) (wiretap.Route, bool) {
 }
 
 func (p protocol) NewCall(route wiretap.Route) wiretap.Call {
+	if route.Name == "openai.responses" {
+		return newResponsesCall(route, p.captureCap)
+	}
 	return &call{route: route, captureCap: p.captureCap}
 }
 
