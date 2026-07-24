@@ -84,13 +84,36 @@ Receipt is **never** automatic. Inbound baggage is caller-controlled, so
 `WithTraceAttributesFromBaggage` must run only after the application has
 authenticated the request — this is a deliberate security divergence from the
 Python SDK, whose processor reads baggage for every span. Import applies the
-allowlisted members into propagated trace state with local values taking
-precedence per field, honors the trace claim only when it names the ambient
-trace ID, and always strips the entire `langfuse_*` namespace from the
-returned branch's baggage: a standard inject after import forwards nothing of
-Langfuse's unless `WithBaggagePropagation` re-enables export. Import before
-marking; marking first replaces un-imported inbound members from local state
-(and says so in a diagnostic).
+allowlisted members into propagated trace state; per field, an explicit local
+value always wins, while a later import replaces values an earlier import
+accepted (and replaces or clears imported trace-claim authority from the
+current namespace — a claim installed by a locally started root is never
+cleared). Import always strips the entire `langfuse_*` namespace from the
+returned branch's baggage: on an unmarked branch a standard inject then
+forwards nothing of Langfuse's, while an already marked branch is rebuilt
+from the accepted and local state and keeps exporting. Import before
+marking: marking replaces existing members from local state, and the
+diagnostic it emits names only fixed protocol members (it cannot tell
+inbound members from another writer's, so it states the replacement and the
+required ordering rather than guessing provenance). When several clients
+share one context path, the langfuse_* namespace belongs to the last writer;
+each client's private state is unaffected.
+
+Because contexts are immutable, only the latest returned context carries the
+current members. The stale paths all share one shape — using a context from
+before a synchronizing call:
+
+```go
+marked := lf.WithBaggagePropagation(ctx)
+aliceCtx := lf.WithTraceAttributes(marked, langfuse.TraceAttributes{UserID: "alice"})
+bobCtx := lf.WithTraceAttributes(aliceCtx, langfuse.TraceAttributes{UserID: "bob"})
+inject(aliceCtx) // WRONG: still exports alice
+inject(bobCtx)   // correct: the latest returned context
+```
+
+The same rule covers marking before importing, injecting from the input of
+`StartObservation` instead of its returned context, and holding a pre-import
+alias after authentication.
 
 The `langfuse_trace_id` member is application-root suppression, not trace
 continuation — the W3C `traceparent` header continues the trace. A root
@@ -108,10 +131,12 @@ crowded header degrades to absent fields rather than corrupt ones. Every
 propagation guarantee is conditional on that budget.
 
 `TraceAttributes.Environment` is the request-scoped environment: it overrides
-`Config.Environment` for spans on its context path, updates the current
-recording span, and is the **only** source of `langfuse_environment` — the
-client-wide default is never serialized, so an unset request environment lets
-the downstream service's own default apply.
+`Config.Environment` for spans on its context path and is the **only** source
+of `langfuse_environment` — the client-wide default is never serialized, so an
+unset request environment lets the downstream service's own default apply.
+Both a local `Environment` set and an accepted `langfuse_environment` import
+also update the current recording span, an already-started borrowed server
+span included, overwriting a previously stamped default.
 
 Work that outlives its request, such as a goroutine started from an HTTP
 handler with `context.WithoutCancel`, should not attach observations to
@@ -128,8 +153,8 @@ jobCtx, job := lf.StartObservation(jobCtx, "background-job", langfuse.TypeChain,
 
 Clearing the span context makes the next observation the root of a new trace,
 marked as an application root, while trace attributes already set through
-`WithTraceAttributes` (user, session, tags, metadata, version) continue to
-propagate. Session and user grouping in Langfuse therefore survive the
+`WithTraceAttributes` (trace name, user, session, tags, metadata, version,
+and environment) continue to propagate. Session and user grouping in Langfuse therefore survive the
 handoff even though the background work is a separate trace. This contract is
 locked by the SDK's tests. The span-context reset is shared OpenTelemetry
 state: other tracers using the detached context also start new traces.

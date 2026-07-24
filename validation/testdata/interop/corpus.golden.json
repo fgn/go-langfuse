@@ -1,7 +1,8 @@
 {
   "pins": {
     "langfuse": "4.14.1",
-    "opentelemetry-sdk": "1.44.0"
+    "opentelemetry-api": "1.40.0",
+    "opentelemetry-sdk": "1.40.0"
   },
   "fixtures": {
     "duplicate-member-keys": {
@@ -11,6 +12,9 @@
         "langfuse.observation.type": "span",
         "user.id": "second"
       },
+      "go_reinjected_marked": [
+        "langfuse_user_id=second"
+      ],
       "python_attributes_from_header": {
         "langfuse.internal.is_app_root": true,
         "langfuse.observation.type": "span",
@@ -24,6 +28,9 @@
         "langfuse.observation.type": "span",
         "session.id": "s-3"
       },
+      "go_reinjected_marked": [
+        "langfuse_session_id=s-3"
+      ],
       "python_attributes_from_header": {
         "langfuse.internal.is_app_root": true,
         "langfuse.observation.type": "span",
@@ -38,6 +45,9 @@
         "langfuse.observation.type": "span",
         "langfuse.trace.metadata.ok": "v"
       },
+      "go_reinjected_marked": [
+        "langfuse_metadata_ok=v"
+      ],
       "python_attributes_from_header": {
         "langfuse.internal.is_app_root": true,
         "langfuse.observation.type": "span",
@@ -52,6 +62,9 @@
         "langfuse.observation.type": "span",
         "session.id": "ok"
       },
+      "go_reinjected_marked": [
+        "langfuse_session_id=ok"
+      ],
       "python_attributes_from_header": {
         "langfuse.internal.is_app_root": true,
         "langfuse.observation.type": "span",
@@ -66,6 +79,9 @@
         "langfuse.observation.type": "span",
         "user.id": "alice"
       },
+      "go_reinjected_marked": [
+        "langfuse_user_id=alice"
+      ],
       "python_attributes_from_header": {
         "langfuse.internal.is_app_root": true,
         "langfuse.observation.prompt.name": "greet",
@@ -84,6 +100,10 @@
       },
       "go_reinjected_after_import": [
         "foo=bar;prop=1"
+      ],
+      "go_reinjected_marked": [
+        "foo=bar;prop=1",
+        "langfuse_user_id=alice"
       ],
       "python_attributes_from_header": {
         "langfuse.internal.is_app_root": true,
@@ -287,6 +307,10 @@
         "session.id": "s-2",
         "user.id": "alice"
       },
+      "go_reinjected_marked": [
+        "langfuse_session_id=s-2",
+        "langfuse_user_id=alice"
+      ],
       "python_attributes_from_header": {
         "langfuse.internal.is_app_root": true,
         "langfuse.observation.type": "span",
@@ -331,6 +355,40 @@
         "langfuse.trace.metadata.k30": "v30",
         "langfuse.trace.metadata.k31": "v31"
       },
+      "go_reinjected_marked": [
+        "langfuse_metadata_k00=v00",
+        "langfuse_metadata_k01=v01",
+        "langfuse_metadata_k02=v02",
+        "langfuse_metadata_k03=v03",
+        "langfuse_metadata_k04=v04",
+        "langfuse_metadata_k05=v05",
+        "langfuse_metadata_k06=v06",
+        "langfuse_metadata_k07=v07",
+        "langfuse_metadata_k08=v08",
+        "langfuse_metadata_k09=v09",
+        "langfuse_metadata_k10=v10",
+        "langfuse_metadata_k11=v11",
+        "langfuse_metadata_k12=v12",
+        "langfuse_metadata_k13=v13",
+        "langfuse_metadata_k14=v14",
+        "langfuse_metadata_k15=v15",
+        "langfuse_metadata_k16=v16",
+        "langfuse_metadata_k17=v17",
+        "langfuse_metadata_k18=v18",
+        "langfuse_metadata_k19=v19",
+        "langfuse_metadata_k20=v20",
+        "langfuse_metadata_k21=v21",
+        "langfuse_metadata_k22=v22",
+        "langfuse_metadata_k23=v23",
+        "langfuse_metadata_k24=v24",
+        "langfuse_metadata_k25=v25",
+        "langfuse_metadata_k26=v26",
+        "langfuse_metadata_k27=v27",
+        "langfuse_metadata_k28=v28",
+        "langfuse_metadata_k29=v29",
+        "langfuse_metadata_k30=v30",
+        "langfuse_metadata_k31=v31"
+      ],
       "python_attributes_from_header": {
         "langfuse.internal.is_app_root": true,
         "langfuse.observation.type": "span",
@@ -413,6 +471,9 @@
         "langfuse.observation.type": "span",
         "user.id": "alice"
       },
+      "go_reinjected_marked": [
+        "langfuse_user_id=alice"
+      ],
       "python_attributes_from_header": {
         "langfuse.internal.is_app_root": true,
         "langfuse.observation.type": "span",
@@ -503,6 +564,10 @@
       },
       "go_reinjected_after_import": [
         "foo=bar"
+      ],
+      "go_reinjected_marked": [
+        "foo=bar",
+        "langfuse_user_id=alice"
       ],
       "python_attributes_from_header": {
         "langfuse.internal.is_app_root": true,

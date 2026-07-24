@@ -3,6 +3,7 @@ package langfuse
 import (
 	"context"
 	"sort"
+	"strconv"
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -123,13 +124,17 @@ func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Con
 		importedMetadata    map[string]any
 		ignored             []string
 	)
-	acceptScalar := func(target *string, key, value string) {
+	// A field is replaceable when it is empty or its current value came
+	// from an earlier import: each import updates the accepted layer
+	// from the CURRENT namespace, while local values keep winning.
+	acceptScalar := func(target *string, originKey, memberKey, value string) {
 		if !wireBaggageValue(value) {
-			ignored = append(ignored, key)
+			ignored = append(ignored, memberKey)
 			return
 		}
-		if *target == "" {
+		if *target == "" || state.isAccepted(originKey) {
 			*target = value
+			state.markAccepted(originKey)
 		}
 	}
 	for _, member := range bag.Members() {
@@ -148,29 +153,30 @@ func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Con
 			}
 		case key == baggageKeyEnvironment:
 			if wireBaggageValue(value) && validateEnvironment(value) == nil {
-				if state.environment == "" {
+				if state.environment == "" || state.isAccepted(acceptedEnvironment) {
 					state.environment = value
+					state.markAccepted(acceptedEnvironment)
 					environmentAccepted = true
 				}
 			} else {
 				ignored = append(ignored, key)
 			}
 		case key == baggageKeySessionID:
-			acceptScalar(&state.sessionID, key, value)
+			acceptScalar(&state.sessionID, acceptedSessionID, key, value)
 		case key == baggageKeyUserID:
-			acceptScalar(&state.userID, key, value)
+			acceptScalar(&state.userID, acceptedUserID, key, value)
 		case key == baggageKeyTraceName:
-			acceptScalar(&state.name, key, value)
+			acceptScalar(&state.name, acceptedName, key, value)
 		case key == baggageKeyVersion:
-			acceptScalar(&state.version, key, value)
+			acceptScalar(&state.version, acceptedVersion, key, value)
 		case strings.HasPrefix(key, baggageMetadataPrefix):
 			suffix := key[len(baggageMetadataPrefix):]
 			if !wireBaggageMetadataKey(suffix) || !wireBaggageValue(value) {
 				ignored = append(ignored, key)
 				continue
 			}
-			if _, exists := state.metadata[suffix]; exists {
-				continue
+			if _, exists := state.metadata[suffix]; exists && !state.isAccepted(acceptedMetadata+suffix) {
+				continue // local metadata wins
 			}
 			if importedMetadata == nil {
 				importedMetadata = make(map[string]any)
@@ -188,8 +194,15 @@ func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Con
 	}
 
 	result := context.WithValue(ctx, traceStateContextKey{client: c}, state)
-	if haveClaim {
-		result = c.withTraceClaim(result, claimID)
+	// Claim replacement: a matching claim in the current namespace
+	// installs imported authority; anything else (absent, invalid, or
+	// mismatched) clears authority a PREVIOUS import installed. A claim
+	// from a locally started root is never cleared by an import.
+	switch {
+	case haveClaim:
+		result = c.withImportedTraceClaim(result, claimID)
+	case c.traceClaimState(ctx).imported:
+		result = c.withClearedTraceClaim(result)
 	}
 	result = c.syncBaggage(result, true, false)
 	if environmentAccepted {
@@ -239,28 +252,40 @@ func (c *Client) wireBaggageMembers(
 	rebuild bool,
 	reportReplaced bool,
 ) ([]otelbaggage.Member, bool) {
-	var foreign []otelbaggage.Member
+	type sizedMember struct {
+		member otelbaggage.Member
+		size   int
+	}
+	var foreign []sizedMember
 	hadLangfuse := false
 	for _, member := range bag.Members() {
 		if strings.HasPrefix(member.Key(), baggageKeyPrefix) {
 			hadLangfuse = true
 			continue
 		}
-		foreign = append(foreign, member)
+		rendered := member.String()
+		if rendered == "" {
+			// Not W3C-serializable (e.g. a NewMemberRaw Unicode name):
+			// no wire can carry it, so it must not consume budget or a
+			// member slot either.
+			continue
+		}
+		foreign = append(foreign, sizedMember{member: member, size: len(rendered)})
 	}
-	sort.Slice(foreign, func(i, j int) bool { return foreign[i].Key() < foreign[j].Key() })
+	sort.Slice(foreign, func(i, j int) bool {
+		return foreign[i].member.Key() < foreign[j].member.Key()
+	})
 
 	members := make([]otelbaggage.Member, 0, len(foreign)+8)
 	totalBytes := 0
-	fits := func(member otelbaggage.Member) bool {
-		need := len(member.String())
+	fits := func(size int) bool {
+		need := size
 		if len(members) > 0 {
 			need++ // the comma separating adjacent members
 		}
 		return len(members) < maxBaggageMembers && totalBytes+need <= maxBaggageBytes
 	}
-	add := func(member otelbaggage.Member) {
-		size := len(member.String())
+	add := func(member otelbaggage.Member, size int) {
 		if len(members) > 0 {
 			size++
 		}
@@ -268,19 +293,17 @@ func (c *Client) wireBaggageMembers(
 		members = append(members, member)
 	}
 
-	var droppedForeign []string
-	for index, member := range foreign {
-		if !fits(member) {
-			for _, remaining := range foreign[index:] {
-				droppedForeign = append(droppedForeign, remaining.Key())
-			}
+	droppedForeign := 0
+	for index, item := range foreign {
+		if !fits(item.size) {
+			droppedForeign = len(foreign) - index
 			break
 		}
-		add(member)
+		add(item.member, item.size)
 	}
-	if len(droppedForeign) != 0 {
-		diagnostic.Report("foreign baggage members exceed the W3C budget; dropped: " +
-			joinMemberKeys(droppedForeign))
+	if droppedForeign != 0 {
+		diagnostic.Report("foreign baggage members exceed the W3C budget; dropped " +
+			itoa(droppedForeign) + " member(s)")
 	}
 
 	added := false
@@ -301,21 +324,26 @@ func (c *Client) wireBaggageMembers(
 				return
 			}
 			member, err := otelbaggage.NewMemberRaw(key, value)
-			if err != nil || !fits(member) {
+			if err != nil {
+				droppedDomain = append(droppedDomain, key)
+				return
+			}
+			size := len(member.String())
+			if !fits(size) {
 				budgetExhausted = true
 				droppedBudget = append(droppedBudget, key)
 				return
 			}
-			add(member)
+			add(member, size)
 			emitted[key] = value
 			added = true
 		}
 
 		state, _ := ctx.Value(traceStateContextKey{client: c}).(traceState)
 		ambient := oteltrace.SpanFromContext(ctx).SpanContext()
-		if claim, ok := ctx.Value(traceClaimContextKey{client: c}).(oteltrace.TraceID); ok &&
-			ambient.IsValid() && claim == ambient.TraceID() {
-			emit(baggageKeyTraceID, claim.String())
+		if claim := c.traceClaimState(ctx); claim.id.IsValid() &&
+			ambient.IsValid() && claim.id == ambient.TraceID() {
+			emit(baggageKeyTraceID, claim.id.String())
 		}
 		emit(baggageKeyEnvironment, state.environment)
 		emit(baggageKeySessionID, state.sessionID)
@@ -336,11 +364,11 @@ func (c *Client) wireBaggageMembers(
 		}
 		if len(droppedDomain) != 0 {
 			diagnostic.Report("trace attributes outside the baggage wire domain propagate locally only; dropped from baggage: " +
-				joinMemberKeys(droppedDomain))
+				summarizeMemberKeys(droppedDomain))
 		}
 		if len(droppedBudget) != 0 {
 			diagnostic.Report("baggage members exceed the W3C budget; dropped: " +
-				joinMemberKeys(droppedBudget))
+				summarizeMemberKeys(droppedBudget))
 		}
 		// A rebuild replaces the langfuse_* namespace wholesale. At marking
 		// time, members that were present but are not re-emitted are
@@ -354,7 +382,10 @@ func (c *Client) wireBaggageMembers(
 		}
 		for _, member := range bag.Members() {
 			key := member.Key()
-			if !strings.HasPrefix(key, baggageKeyPrefix) {
+			if !strings.HasPrefix(key, baggageKeyPrefix) || key == baggageKeyTraceID {
+				// Claim replacement is routine synchronization (detached
+				// re-marks legitimately drop a stale claim), never an
+				// ordering mistake worth a diagnostic.
 				continue
 			}
 			if value, kept := emitted[key]; !kept || value != member.Value() {
@@ -363,12 +394,13 @@ func (c *Client) wireBaggageMembers(
 		}
 		if len(droppedInbound) != 0 {
 			sort.Strings(droppedInbound)
-			diagnostic.Report("un-imported inbound langfuse_* baggage members were replaced by this client's state (import with WithTraceAttributesFromBaggage before enabling propagation to accept them): " +
-				joinMemberKeys(droppedInbound))
+			diagnostic.Report("existing langfuse_* baggage members were replaced from this client's state (" +
+				summarizeMemberKeys(droppedInbound) +
+				"); if they were inbound, import with WithTraceAttributesFromBaggage before enabling propagation")
 		}
 	}
 
-	return members, hadLangfuse || added || len(droppedForeign) != 0
+	return members, hadLangfuse || added || droppedForeign != 0
 }
 
 // wireBaggageValue reports whether value lies in the protocol v1 value
@@ -438,12 +470,48 @@ func stampEnvironmentAttribute(ctx context.Context, environment string) {
 
 func reportIgnoredBaggageMembers(keys []string) {
 	diagnostic.Report("inbound langfuse_* baggage members ignored (invalid or outside protocol v1): " +
-		joinMemberKeys(keys))
+		summarizeMemberKeys(keys))
 }
 
-func joinMemberKeys(keys []string) string {
-	if len(keys) > diagnosticMemberLimit {
-		return strings.Join(keys[:diagnosticMemberLimit], ", ") + ", ..."
+// summarizeMemberKeys renders a payload-free summary: the seven fixed
+// protocol member names appear literally; metadata suffixes, unknown
+// langfuse_* members, and anything else are user- or wire-controlled
+// text and are reported as bounded counts only.
+func summarizeMemberKeys(keys []string) string {
+	fixed := map[string]bool{
+		baggageKeyTraceID: true, baggageKeyEnvironment: true,
+		baggageKeySessionID: true, baggageKeyUserID: true,
+		baggageKeyTraceName: true, baggageKeyVersion: true,
+		"langfuse_tags": true, "langfuse_prompt_name": true,
+		"langfuse_prompt_version": true,
 	}
-	return strings.Join(keys, ", ")
+	var named []string
+	metadataCount, otherCount := 0, 0
+	for _, key := range keys {
+		switch {
+		case fixed[key]:
+			named = append(named, key)
+		case strings.HasPrefix(key, baggageMetadataPrefix):
+			metadataCount++
+		default:
+			otherCount++
+		}
+	}
+	sort.Strings(named)
+	if len(named) > diagnosticMemberLimit {
+		otherCount += len(named) - diagnosticMemberLimit
+		named = named[:diagnosticMemberLimit]
+	}
+	parts := named
+	if metadataCount > 0 {
+		parts = append(parts, itoa(metadataCount)+" metadata member(s)")
+	}
+	if otherCount > 0 {
+		parts = append(parts, itoa(otherCount)+" other member(s)")
+	}
+	return strings.Join(parts, ", ")
+}
+
+func itoa(value int) string {
+	return strconv.Itoa(value)
 }

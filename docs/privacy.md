@@ -23,15 +23,18 @@ recording every other field. The privacy boundary is deliberately narrow:
 
 **Cross-process propagation sends attributes to every destination.**
 `WithBaggagePropagation` places user ID, session ID, trace name, version,
-request-scoped environment, and string metadata values into W3C baggage on
-its context branch. Baggage is delivered by whatever propagator the
+request-scoped environment, string metadata values, and the 32-hex trace ID
+of the current application root into W3C baggage on its context branch. Baggage is delivered by whatever propagator the
 application has installed, so these values travel with **every** outbound
 request that carries the context — third-party APIs and services that have
 nothing to do with Langfuse included — until the branch ends. Inbound
 metadata accepted by `WithTraceAttributesFromBaggage` passes through the
 configured `Mask` exactly once, like local trace metadata; the other
 propagated fields are identifiers and are never masked. Enable propagation
-only on paths where that disclosure is intended.
+only on paths where that disclosure is intended. Baggage diagnostics name
+fixed protocol members only; metadata key suffixes and unknown member names
+are user- or wire-controlled and appear in diagnostics as counts, never as
+text.
 
 Disabling content capture does not make metadata, model parameters, status
 messages, or errors safe. `RecordError` exports `err.Error()` as the OTel

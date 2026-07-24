@@ -40,10 +40,35 @@ type traceState struct {
 	metadata    map[string]string
 	version     string
 	environment string
-	// wireMetadata marks metadata keys whose caller-supplied value was a
-	// string; only those are eligible for baggage export, because
+	// wireMetadata marks metadata keys whose value was a string AFTER
+	// masking; only those are eligible for baggage export, because
 	// JSON-encoded non-string values have no cross-SDK wire contract.
 	wireMetadata map[string]struct{}
+	// accepted marks fields and metadata keys whose CURRENT value came
+	// from imported baggage rather than a local call. A later import may
+	// replace an accepted value with the current namespace's value, but
+	// never a local one: local > accepted baggage, per field, across
+	// repeated imports.
+	accepted map[string]struct{}
+}
+
+// Origin keys for traceState.accepted.
+const (
+	acceptedName        = "name"
+	acceptedUserID      = "user"
+	acceptedSessionID   = "session"
+	acceptedVersion     = "version"
+	acceptedEnvironment = "environment"
+	acceptedMetadata    = "metadata:"
+)
+
+// traceClaim is the client-scoped application-root claim state. The
+// imported origin bit lets a later import replace or clear authority
+// that arrived in older baggage without ever touching a claim
+// installed by a locally started root.
+type traceClaim struct {
+	id       oteltrace.TraceID
+	imported bool
 }
 
 // WithTraceAttributes returns a context that propagates request-scoped trace
@@ -129,27 +154,50 @@ func (s traceState) clone() traceState {
 		result.wireMetadata = make(map[string]struct{}, len(s.wireMetadata))
 		maps.Copy(result.wireMetadata, s.wireMetadata)
 	}
+	if s.accepted != nil {
+		result.accepted = make(map[string]struct{}, len(s.accepted))
+		maps.Copy(result.accepted, s.accepted)
+	}
 	return result
+}
+
+// markAccepted records baggage origin for a field; clearAccepted
+// restores local precedence when a local call sets it.
+func (s *traceState) markAccepted(key string) {
+	if s.accepted == nil {
+		s.accepted = make(map[string]struct{})
+	}
+	s.accepted[key] = struct{}{}
+}
+
+func (s *traceState) isAccepted(key string) bool {
+	_, found := s.accepted[key]
+	return found
 }
 
 func (s *traceState) merge(values TraceAttributes, mask func(any) any) {
 	if value := propagatedString("trace name", values.Name); value != "" {
 		s.name = value
+		delete(s.accepted, acceptedName)
 	}
 	if value := propagatedString("user ID", values.UserID); value != "" {
 		s.userID = value
+		delete(s.accepted, acceptedUserID)
 	}
 	if value := propagatedString("session ID", values.SessionID); value != "" {
 		s.sessionID = value
+		delete(s.accepted, acceptedSessionID)
 	}
 	if value := propagatedString("version", values.Version); value != "" {
 		s.version = value
+		delete(s.accepted, acceptedVersion)
 	}
 	if values.Environment != "" {
 		if err := validateEnvironment(values.Environment); err != nil {
 			diagnostic.Report("propagated environment is invalid; value ignored")
 		} else {
 			s.environment = values.Environment
+			delete(s.accepted, acceptedEnvironment)
 		}
 	}
 	if len(values.Tags) != 0 {
@@ -179,7 +227,7 @@ func (s *traceState) merge(values TraceAttributes, mask func(any) any) {
 			diagnostic.Report("trace tags exceed the lifetime count or byte limit; remaining tags omitted")
 		}
 	}
-	metadata := lfattr.TraceMetadataWithExisting(values.Metadata, mask, s.metadata)
+	metadata, stringKeys := lfattr.TraceMetadataWithExisting(values.Metadata, mask, s.metadata)
 	if len(metadata) != 0 {
 		if s.metadata == nil {
 			s.metadata = make(map[string]string, len(metadata))
@@ -196,7 +244,11 @@ func (s *traceState) merge(values TraceAttributes, mask func(any) any) {
 				continue
 			}
 			s.metadata[key] = metadata[key]
-			if _, isString := values.Metadata[key].(string); isString {
+			delete(s.accepted, acceptedMetadata+key)
+			// Wire eligibility follows the POST-mask value type: a mask
+			// that turns a string into a structured value removes the
+			// cross-SDK wire representation.
+			if stringKeys[key] {
 				if s.wireMetadata == nil {
 					s.wireMetadata = make(map[string]struct{})
 				}
@@ -211,15 +263,18 @@ func (s *traceState) merge(values TraceAttributes, mask func(any) any) {
 	}
 }
 
-// mergeImportedMetadata inserts baggage-accepted metadata values, which
+// mergeImportedMetadata applies baggage-accepted metadata values, which
 // are strings by wire construction, through the same normalization and
-// mask path as local metadata. Keys already present keep their local
-// values; the caller filters those before building imported.
+// mask path as local metadata, exactly once. The caller passes only
+// keys that are absent locally or whose current value is itself
+// baggage-accepted; those are replaced from the current namespace and
+// re-marked, so a later import updates earlier imports while local
+// values keep winning.
 func (s *traceState) mergeImportedMetadata(imported map[string]any, mask func(any) any) {
 	if len(imported) == 0 {
 		return
 	}
-	normalized := lfattr.TraceMetadataWithExisting(imported, mask, s.metadata)
+	normalized, stringKeys := lfattr.TraceMetadataWithExisting(imported, mask, s.metadata)
 	if len(normalized) == 0 {
 		return
 	}
@@ -233,18 +288,20 @@ func (s *traceState) mergeImportedMetadata(imported map[string]any, mask func(an
 	sort.Strings(keys)
 	truncated := false
 	for _, key := range keys {
-		if _, exists := s.metadata[key]; exists {
-			continue
-		}
-		if len(s.metadata) >= lfattr.MaxMetadataEntries {
+		if _, exists := s.metadata[key]; !exists && len(s.metadata) >= lfattr.MaxMetadataEntries {
 			truncated = true
 			continue
 		}
 		s.metadata[key] = normalized[key]
-		if s.wireMetadata == nil {
-			s.wireMetadata = make(map[string]struct{})
+		s.markAccepted(acceptedMetadata + key)
+		if stringKeys[key] {
+			if s.wireMetadata == nil {
+				s.wireMetadata = make(map[string]struct{})
+			}
+			s.wireMetadata[key] = struct{}{}
+		} else {
+			delete(s.wireMetadata, key)
 		}
-		s.wireMetadata[key] = struct{}{}
 	}
 	if truncated {
 		diagnostic.Report("trace metadata exceeds the lifetime entry limit; imported entries omitted")
@@ -309,13 +366,29 @@ func (c *Client) hasTraceClaim(ctx context.Context, traceID oteltrace.TraceID) b
 	if c == nil || ctx == nil || !traceID.IsValid() {
 		return false
 	}
-	claim, _ := ctx.Value(traceClaimContextKey{client: c}).(oteltrace.TraceID)
-	return claim == traceID
+	claim, _ := ctx.Value(traceClaimContextKey{client: c}).(traceClaim)
+	return claim.id == traceID
 }
 
 func (c *Client) withTraceClaim(ctx context.Context, traceID oteltrace.TraceID) context.Context {
 	if ctx == nil || !traceID.IsValid() {
 		return ctx
 	}
-	return context.WithValue(ctx, traceClaimContextKey{client: c}, traceID)
+	return context.WithValue(ctx, traceClaimContextKey{client: c}, traceClaim{id: traceID})
+}
+
+func (c *Client) traceClaimState(ctx context.Context) traceClaim {
+	claim, _ := ctx.Value(traceClaimContextKey{client: c}).(traceClaim)
+	return claim
+}
+
+func (c *Client) withImportedTraceClaim(ctx context.Context, traceID oteltrace.TraceID) context.Context {
+	return context.WithValue(ctx, traceClaimContextKey{client: c},
+		traceClaim{id: traceID, imported: true})
+}
+
+// withClearedTraceClaim removes previously imported claim authority; a
+// claim installed by a locally started root is never cleared this way.
+func (c *Client) withClearedTraceClaim(ctx context.Context) context.Context {
+	return context.WithValue(ctx, traceClaimContextKey{client: c}, traceClaim{})
 }

@@ -180,33 +180,39 @@ func ObservationMetadataWithExisting(
 // representation: one string value per top-level key, each at most 200
 // characters.
 func TraceMetadata(metadata map[string]any, mask func(any) any) map[string]string {
-	return TraceMetadataWithExisting(metadata, mask, nil)
+	result, _ := TraceMetadataWithExisting(metadata, mask, nil)
+	return result
 }
 
 // TraceMetadataWithExisting gives retained keys priority over new keys; see
 // ObservationMetadataWithExisting.
+// TraceMetadataWithExisting also reports which retained keys held a
+// string value AFTER masking: only those have a cross-SDK wire
+// representation, so baggage export eligibility must be decided on the
+// post-mask value, never the caller's input.
 func TraceMetadataWithExisting(
 	metadata map[string]any,
 	mask func(any) any,
 	existing map[string]string,
-) map[string]string {
+) (map[string]string, map[string]bool) {
 	if len(metadata) == 0 {
-		return nil
+		return nil, nil
 	}
 	masked, ok := applyMask(metadata, mask, "trace metadata")
 	if !ok || isNil(masked) {
-		return nil
+		return nil, nil
 	}
 	values, ok := masked.(map[string]any)
 	if !ok {
 		diagnostic.Report("masker changed trace metadata to an unsupported type; field omitted")
-		return nil
+		return nil, nil
 	}
 	keys := boundedMetadataKeys(values, "trace", func(key string) bool {
 		_, found := existing[key]
 		return found
 	}, len(existing))
 	result := make(map[string]string, len(keys))
+	stringKeys := make(map[string]bool, len(keys))
 	for _, key := range keys {
 		raw := values[key]
 		value, ok := Encode(raw, nil, "trace metadata value")
@@ -218,11 +224,14 @@ func TraceMetadataWithExisting(
 			continue
 		}
 		result[key] = value
+		if _, isString := raw.(string); isString {
+			stringKeys[key] = true
+		}
 	}
 	if len(result) == 0 {
-		return nil
+		return nil, nil
 	}
-	return result
+	return result, stringKeys
 }
 
 // boundedMetadataKeys returns the lexicographically smallest valid keys using

@@ -912,3 +912,270 @@ func TestBaggageCrossProcessGoToGo(t *testing.T) {
 	assertInteropStringAttribute(t, consume, lfattr.VersionKey, "consumer-v2")
 	assertInteropStringAttribute(t, consume, lfattr.EnvironmentKey, "staging")
 }
+
+func TestReImportUpdatesAcceptedValuesWhileLocalWins(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	client := newInteropClient(t, receiver, Config{})
+	t.Cleanup(func() { shutdownClient(t, client) })
+
+	// Hop 1 accepts alice/s-1; hop 2 must replace the ACCEPTED user with
+	// bob (old accepted baggage has no local precedence) while the
+	// session, absent from hop 2, keeps its earlier accepted value.
+	ctx := client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, context.Background(), "langfuse_user_id=alice,langfuse_session_id=s-1,langfuse_metadata_note=n1,langfuse_environment=staging"))
+	ctx = client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, ctx, "langfuse_user_id=bob,langfuse_metadata_note=n2,langfuse_environment=canary"))
+
+	state, _ := ctx.Value(traceStateContextKey{client: client}).(traceState)
+	if state.userID != "bob" {
+		t.Errorf("re-imported user = %q, want bob (stale accepted value must not win)", state.userID)
+	}
+	if state.sessionID != "s-1" {
+		t.Errorf("session = %q, want the earlier accepted s-1", state.sessionID)
+	}
+	if state.metadata["note"] != "n2" {
+		t.Errorf("re-imported metadata = %q, want n2", state.metadata["note"])
+	}
+	if state.environment != "canary" {
+		t.Errorf("re-imported environment = %q, want canary", state.environment)
+	}
+
+	// A local value set between imports keeps winning over hop 3.
+	ctx = client.WithTraceAttributes(ctx, TraceAttributes{UserID: "local-user"})
+	ctx = client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, ctx, "langfuse_user_id=carol"))
+	state, _ = ctx.Value(traceStateContextKey{client: client}).(traceState)
+	if state.userID != "local-user" {
+		t.Errorf("user after local set = %q, want local-user", state.userID)
+	}
+}
+
+func TestImportTwiceOnConsumedContextIsStable(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	client := newInteropClient(t, receiver, Config{})
+	t.Cleanup(func() { shutdownClient(t, client) })
+
+	once := client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, context.Background(), "langfuse_user_id=alice"))
+	twice := client.WithTraceAttributesFromBaggage(once)
+	stateOnce, _ := once.Value(traceStateContextKey{client: client}).(traceState)
+	stateTwice, _ := twice.Value(traceStateContextKey{client: client}).(traceState)
+	if stateTwice.userID != stateOnce.userID {
+		t.Errorf("second import on a consumed context changed state: %q -> %q",
+			stateOnce.userID, stateTwice.userID)
+	}
+}
+
+func TestImportedClaimIsReplacedAndLocalClaimSurvives(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	client := newInteropClient(t, receiver, Config{})
+	t.Cleanup(func() { shutdownClient(t, client) })
+
+	traceHex := "0123456789abcdef0123456789abcdef"
+	remote := remoteSpanContext(t, traceHex)
+
+	// Import 1 installs the matching claim; import 2, whose namespace
+	// carries a mismatched claim, must clear that imported authority.
+	ctx := oteltrace.ContextWithRemoteSpanContext(context.Background(), remote)
+	ctx = client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, ctx, "langfuse_trace_id="+traceHex))
+	if !client.hasTraceClaim(ctx, remote.TraceID()) {
+		t.Fatal("first import must install the matching claim")
+	}
+	ctx = client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, ctx, "langfuse_trace_id=ffffffffffffffffffffffffffffffff"))
+	if client.hasTraceClaim(ctx, remote.TraceID()) {
+		t.Error("a later import with a mismatched claim must clear imported authority")
+	}
+
+	// An import whose namespace has NO claim also clears imported
+	// authority.
+	ctx = client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, oteltrace.ContextWithRemoteSpanContext(context.Background(), remote),
+			"langfuse_trace_id="+traceHex))
+	ctx = client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, ctx, "langfuse_user_id=alice"))
+	if client.hasTraceClaim(ctx, remote.TraceID()) {
+		t.Error("an import without a claim member must clear imported authority")
+	}
+
+	// A claim installed by a locally started root is never cleared by a
+	// later import.
+	marked := client.WithBaggagePropagation(context.Background())
+	rootCtx, root := client.StartObservation(marked, "root", TypeSpan, ObservationAttributes{})
+	defer root.End()
+	imported := client.WithTraceAttributesFromBaggage(
+		extractBaggage(t, rootCtx, "langfuse_user_id=alice"))
+	if got := injectedMembers(imported)[baggageKeyTraceID]; got != root.TraceID() {
+		t.Errorf("local root claim = %q, want %q (imports must not clear local claims)", got, root.TraceID())
+	}
+}
+
+func TestUnserializableForeignMembersConsumeNoBudget(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	client := newInteropClient(t, receiver, Config{})
+	t.Cleanup(func() { shutdownClient(t, client) })
+
+	// OTel accepts Unicode member names through NewMemberRaw, but W3C
+	// cannot serialize them: Member.String() is empty. They must consume
+	// neither member slots nor bytes.
+	bag := otelbaggage.FromContext(context.Background())
+	phantoms := 0
+	for index := range 64 {
+		member, err := otelbaggage.NewMemberRaw(fmt.Sprintf("kéy-%02d", index), "v")
+		if err != nil {
+			continue
+		}
+		if member.String() != "" {
+			t.Skip("this OTel version serializes Unicode names; phantom case not constructible")
+		}
+		next, err := bag.SetMember(member)
+		if err != nil {
+			continue
+		}
+		bag = next
+		phantoms++
+	}
+	if phantoms == 0 {
+		t.Skip("no phantom members constructible on this OTel version")
+	}
+	ctx := otelbaggage.ContextWithBaggage(context.Background(), bag)
+	ctx = client.WithTraceAttributes(ctx, TraceAttributes{UserID: "alice"})
+	ctx = client.WithBaggagePropagation(ctx)
+	if got := injectedMembers(ctx)[baggageKeyUserID]; got != "alice" {
+		t.Errorf("phantom foreign members must not crowd out real members; got %v", keysOf(injectedMembers(ctx)))
+	}
+}
+
+func TestBaggageBudgetExactByteBoundary(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	client := newInteropClient(t, receiver, Config{})
+	t.Cleanup(func() { shutdownClient(t, client) })
+
+	// The langfuse_user_id member serializes as "langfuse_user_id=" + v
+	// (17+N bytes); one foreign member "f=" + x*M is 2+M bytes; total
+	// header = foreign + comma + member. Solve for exactly 8192.
+	user := strings.Repeat("u", 100) // member size 117
+	for _, boundary := range []struct {
+		total int
+		kept  bool
+	}{
+		{8192, true},
+		{8193, false},
+	} {
+		foreignSize := boundary.total - 1 - (17 + len(user))
+		foreign := "f=" + strings.Repeat("x", foreignSize-2)
+		ctx := extractBaggage(t, context.Background(), foreign)
+		ctx = client.WithTraceAttributes(ctx, TraceAttributes{UserID: user})
+		ctx = client.WithBaggagePropagation(ctx)
+
+		carrier := propagation.MapCarrier{}
+		propagation.Baggage{}.Inject(ctx, carrier)
+		header := carrier.Get("baggage")
+		_, kept := injectedMembers(ctx)[baggageKeyUserID]
+		if kept != boundary.kept {
+			t.Errorf("total %d: user kept = %v, want %v (header %d bytes)",
+				boundary.total, kept, boundary.kept, len(header))
+		}
+		if boundary.kept && len(header) != boundary.total {
+			t.Errorf("exact header = %d bytes, want %d", len(header), boundary.total)
+		}
+	}
+}
+
+func TestBaggageMemberCountMatrix(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	client := newInteropClient(t, receiver, Config{})
+	t.Cleanup(func() { shutdownClient(t, client) })
+
+	// Foreign-only 65 members (built through SetMember, which permits
+	// exceeding the parse limits): the lexicographic tail is dropped.
+	bag := otelbaggage.FromContext(context.Background())
+	for index := range 65 {
+		member, err := otelbaggage.NewMemberRaw(fmt.Sprintf("f%02d", index), "v")
+		if err != nil {
+			t.Fatalf("NewMemberRaw: %v", err)
+		}
+		if next, err := bag.SetMember(member); err == nil {
+			bag = next
+		}
+	}
+	if bag.Len() < 65 {
+		t.Skipf("SetMember capped at %d members on this OTel version", bag.Len())
+	}
+	ctx := otelbaggage.ContextWithBaggage(context.Background(), bag)
+	ctx = client.WithTraceAttributes(ctx, TraceAttributes{UserID: "alice"})
+	ctx = client.WithBaggagePropagation(ctx)
+	members := injectedMembers(ctx)
+	if len(members) != 64 {
+		t.Fatalf("member count = %d, want 64", len(members))
+	}
+	if _, exists := members["f64"]; exists {
+		t.Error("the lexicographic tail must drop first")
+	}
+	if _, exists := members[baggageKeyUserID]; exists {
+		t.Error("foreign members are preserved ahead of Langfuse members")
+	}
+
+	// Langfuse-heavy: 60 foreign leave four slots; the priority order
+	// (claim absent here) fills environment, session, user, name and
+	// drops version and metadata.
+	parts := make([]string, 0, 60)
+	for index := range 60 {
+		parts = append(parts, fmt.Sprintf("g%02d=v", index))
+	}
+	ctx = extractBaggage(t, context.Background(), strings.Join(parts, ","))
+	ctx = client.WithTraceAttributes(ctx, TraceAttributes{
+		Environment: "staging", SessionID: "s-1", UserID: "alice",
+		Name: "checkout", Version: "v1",
+		Metadata: map[string]any{"k": "v"},
+	})
+	ctx = client.WithBaggagePropagation(ctx)
+	members = injectedMembers(ctx)
+	if len(members) != 64 {
+		t.Fatalf("langfuse-heavy count = %d, want 64", len(members))
+	}
+	for _, want := range []string{baggageKeyEnvironment, baggageKeySessionID, baggageKeyUserID, baggageKeyTraceName} {
+		if _, exists := members[want]; !exists {
+			t.Errorf("priority member %s missing", want)
+		}
+	}
+	for _, dropped := range []string{baggageKeyVersion, baggageMetadataPrefix + "k"} {
+		if _, exists := members[dropped]; exists {
+			t.Errorf("member %s must drop with the tail", dropped)
+		}
+	}
+}
+
+func TestBaggageDiagnosticsNeverNameUserControlledKeys(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	client := newInteropClient(t, receiver, Config{})
+	t.Cleanup(func() { shutdownClient(t, client) })
+	diagnostics := captureBaggageDiagnostics(t)
+
+	secret := "sk-hunter2-topsecret"
+	inbound := extractBaggage(t, context.Background(),
+		"langfuse_metadata_"+secret+"=x,langfuse_"+secret+"=y")
+	_ = client.WithTraceAttributesFromBaggage(inbound)
+
+	ctx := client.WithTraceAttributes(context.Background(), TraceAttributes{
+		Metadata: map[string]any{secret: "value with spaces"},
+	})
+	_ = client.WithBaggagePropagation(ctx)
+
+	for _, message := range *diagnostics {
+		if strings.Contains(message, secret) {
+			t.Fatalf("diagnostic leaked a user-controlled key: %s", message)
+		}
+	}
+	if len(*diagnostics) == 0 {
+		t.Fatal("expected diagnostics for the rejected members")
+	}
+}

@@ -52,9 +52,10 @@ type fixtureResult struct {
 	GoAcceptedFromPython   map[string]any `json:"go_accepted_from_python,omitempty"`
 	PythonAttributesFromGo map[string]any `json:"python_attributes_from_go,omitempty"`
 
-	// Inbound-only raw-header fixtures.
+	// Inbound-only raw-header fixtures, on unmarked and marked branches.
 	GoAcceptedFromHeader       map[string]any `json:"go_accepted_from_header,omitempty"`
 	GoReinjectedAfterImport    []string       `json:"go_reinjected_after_import,omitempty"`
+	GoReinjectedMarked         []string       `json:"go_reinjected_marked,omitempty"`
 	PythonAttributesFromHeader map[string]any `json:"python_attributes_from_header,omitempty"`
 }
 
@@ -258,7 +259,9 @@ func oraclePins(t *testing.T) map[string]string {
 		t.Fatalf("read uv.lock: %v", err)
 	}
 	pins := make(map[string]string)
-	for _, name := range []string{"langfuse", "opentelemetry-sdk"} {
+	// opentelemetry-api carries the baggage codec under audit;
+	// opentelemetry-sdk drives span processing. Both are pinned.
+	for _, name := range []string{"langfuse", "opentelemetry-api", "opentelemetry-sdk"} {
 		pattern := regexp.MustCompile(`name = "` + name + `"\nversion = "([^"]+)"`)
 		match := pattern.FindSubmatch(lock)
 		if match == nil {
@@ -331,20 +334,30 @@ func anyMetadata(values map[string]string) map[string]any {
 	return result
 }
 
-func extractHeaders(headers []string) context.Context {
-	httpHeader := http.Header{}
-	for _, value := range headers {
-		httpHeader.Add("Baggage", value)
-	}
-	return propagation.Baggage{}.Extract(context.Background(), propagation.HeaderCarrier(httpHeader))
-}
-
 // goAcceptedAttributes imports the given headers and returns the
 // receiver span's langfuse-owned attributes, plus the raw members a
 // standard inject would forward after import (namespace consumption).
 func (h *interopGoClient) goAcceptedAttributes(t *testing.T, name string, headers []string) (map[string]any, []string) {
+	return h.goAcceptedAttributesOn(t, context.Background(), name, headers)
+}
+
+// goReinjectedMarked runs extract-import-inject on an already marked
+// branch and returns the rebuilt members: accepted values reappear,
+// while invalid, excluded, and unknown members stay terminated.
+func (h *interopGoClient) goReinjectedMarked(t *testing.T, name string, headers []string) []string {
 	t.Helper()
-	ctx := extractHeaders(headers)
+	marked := h.client.WithBaggagePropagation(context.Background())
+	_, reinjected := h.goAcceptedAttributesOn(t, marked, name, headers)
+	return reinjected
+}
+
+func (h *interopGoClient) goAcceptedAttributesOn(t *testing.T, base context.Context, name string, headers []string) (map[string]any, []string) {
+	t.Helper()
+	httpHeader := http.Header{}
+	for _, value := range headers {
+		httpHeader.Add("Baggage", value)
+	}
+	ctx := propagation.Baggage{}.Extract(base, propagation.HeaderCarrier(httpHeader))
 	ctx = h.client.WithTraceAttributesFromBaggage(ctx)
 
 	carrier := propagation.MapCarrier{}
@@ -482,6 +495,7 @@ func TestInteropCorpus(t *testing.T) {
 		document.Fixtures[fixture.name] = &fixtureResult{
 			GoAcceptedFromHeader:       accepted,
 			GoReinjectedAfterImport:    reinjected,
+			GoReinjectedMarked:         importClient.goReinjectedMarked(t, "hdrm-"+fixture.name, fixture.headers),
 			PythonAttributesFromHeader: results["pyattr-header:"+fixture.name].Attributes,
 		}
 		for _, member := range reinjected {
@@ -639,7 +653,11 @@ func renderCorpusDiff(sealed, rendered []byte) string {
 // non-authority, and exactly one application root.
 func TestInteropSmokes(t *testing.T) {
 	t.Run("PythonToGo", func(t *testing.T) {
-		attrs := interopAttributes{UserID: "py-user", SessionID: "py-session", Environment: "staging"}
+		attrs := interopAttributes{
+			UserID: "py-user", SessionID: "py-session", Environment: "staging",
+			TraceName: "py-flow", Version: "v7",
+			Metadata: map[string]string{"tenant": "acme"},
+		}
 		results := runOracle(t, []oracleCase{
 			{ID: "root", Op: "inject", Attributes: &attrs},
 		})
@@ -649,6 +667,11 @@ func TestInteropSmokes(t *testing.T) {
 		}
 		if value, found := memberValue(splitMembers(root.Baggage), "langfuse_trace_id"); !found || value != root.TraceID {
 			t.Fatalf("python must claim its root trace; members: %v", splitMembers(root.Baggage))
+		}
+		// The Python producer's exported root carries the single
+		// app-root marker for this trace.
+		if _, isRoot := root.Attributes["langfuse.internal.is_app_root"]; !isRoot {
+			t.Fatalf("python root must be the app root; attributes: %v", root.Attributes)
 		}
 
 		harness := newInteropGoClient(t, "pk-interop-pygo")
@@ -682,8 +705,67 @@ func TestInteropSmokes(t *testing.T) {
 		if attributes["langfuse.environment"] != "staging" {
 			t.Errorf("environment = %v, want the propagated staging", attributes["langfuse.environment"])
 		}
+		if attributes["langfuse.trace.name"] != "py-flow" || attributes["langfuse.version"] != "v7" {
+			t.Errorf("trace name/version missing: %v", attributes)
+		}
+		if attributes["langfuse.trace.metadata.tenant"] != "acme" {
+			t.Errorf("metadata missing: %v", attributes)
+		}
 		if _, isRoot := attributes["langfuse.internal.is_app_root"]; isRoot {
 			t.Error("the python-claimed trace must not gain a second app root in Go")
+		}
+	})
+
+	// The claim never seeds trace identity: with a mismatched claim the
+	// traceparent still decides, and without a traceparent a fresh trace
+	// ID is generated; both make the Go receiver the app root.
+	t.Run("MismatchedClaimIsNotAuthority", func(t *testing.T) {
+		harness := newInteropGoClient(t, "pk-interop-claim1")
+		httpHeader := http.Header{}
+		httpHeader.Set("Baggage", "langfuse_trace_id=ffffffffffffffffffffffffffffffff,langfuse_user_id=alice")
+		httpHeader.Set("Traceparent", "00-0123456789abcdef0123456789abcdef-00f067aa0ba902b7-01")
+		ctx := propagation.NewCompositeTextMapPropagator(
+			propagation.TraceContext{}, propagation.Baggage{},
+		).Extract(context.Background(), propagation.HeaderCarrier(httpHeader))
+		ctx = harness.client.WithTraceAttributesFromBaggage(ctx)
+		harness.exporter.Reset()
+		_, observation := harness.client.StartObservation(ctx, "mismatch", langfuse.TypeSpan, langfuse.ObservationAttributes{})
+		observation.End()
+		if observation.TraceID() != "0123456789abcdef0123456789abcdef" {
+			t.Errorf("trace ID must come from traceparent, got %s", observation.TraceID())
+		}
+		spans := harness.exporter.GetSpans()
+		if len(spans) != 1 {
+			t.Fatalf("expected one span, got %d", len(spans))
+		}
+		attributes := langfuseOwnedAttributes(spans[0])
+		if _, isRoot := attributes["langfuse.internal.is_app_root"]; !isRoot {
+			t.Error("a rejected claim must leave the receiver as the app root")
+		}
+		if attributes["user.id"] != "alice" {
+			t.Error("attribute acceptance is independent of the claim outcome")
+		}
+	})
+	t.Run("ClaimWithoutTraceparentIsNotAuthority", func(t *testing.T) {
+		harness := newInteropGoClient(t, "pk-interop-claim2")
+		httpHeader := http.Header{}
+		httpHeader.Set("Baggage", "langfuse_trace_id=0123456789abcdef0123456789abcdef")
+		ctx := propagation.NewCompositeTextMapPropagator(
+			propagation.TraceContext{}, propagation.Baggage{},
+		).Extract(context.Background(), propagation.HeaderCarrier(httpHeader))
+		ctx = harness.client.WithTraceAttributesFromBaggage(ctx)
+		harness.exporter.Reset()
+		_, observation := harness.client.StartObservation(ctx, "no-parent", langfuse.TypeSpan, langfuse.ObservationAttributes{})
+		observation.End()
+		if observation.TraceID() == "0123456789abcdef0123456789abcdef" {
+			t.Error("a claim must never seed the trace ID")
+		}
+		spans := harness.exporter.GetSpans()
+		if len(spans) != 1 {
+			t.Fatalf("expected one span, got %d", len(spans))
+		}
+		if _, isRoot := langfuseOwnedAttributes(spans[0])["langfuse.internal.is_app_root"]; !isRoot {
+			t.Error("a fresh trace under a rejected claim is its own app root")
 		}
 	})
 

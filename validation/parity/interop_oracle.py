@@ -23,8 +23,13 @@ import logging
 import sys
 
 from opentelemetry import context as context_api
-from opentelemetry import propagate, trace
+from opentelemetry import trace
+from opentelemetry.baggage.propagation import W3CBaggagePropagator
+from opentelemetry.propagators.composite import CompositePropagator
 from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.trace.propagation.tracecontext import (
+    TraceContextTextMapPropagator,
+)
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
@@ -33,6 +38,12 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from langfuse import Langfuse, propagate_attributes
 
 logging.disable(logging.CRITICAL)
+
+# The standard W3C pair, instantiated explicitly so an ambient
+# OTEL_PROPAGATORS setting can never alter the oracle's behavior.
+PROPAGATOR = CompositePropagator(
+    [TraceContextTextMapPropagator(), W3CBaggagePropagator()]
+)
 
 INJECT_KEYS = (
     "user_id",
@@ -56,7 +67,7 @@ class ListGetter:
         return list(carrier.keys())
 
 
-def run_inject(client, case):
+def run_inject(client, exporter, case):
     kwargs = {
         key: case["attributes"][key]
         for key in INJECT_KEYS
@@ -65,15 +76,29 @@ def run_inject(client, case):
     carrier = {}
     result = {}
     if case.get("with_root", True):
+        exporter.clear()
         with client.start_as_current_observation(name="oracle-root"):
             span_context = trace.get_current_span().get_span_context()
             result["trace_id"] = f"{span_context.trace_id:032x}"
             result["span_id"] = f"{span_context.span_id:016x}"
             with propagate_attributes(as_baggage=True, **kwargs):
-                propagate.inject(carrier)
+                PROPAGATOR.inject(carrier)
+        # The producer root's exported attributes let the corpus assert
+        # exactly one app-root marker across both processes.
+        roots = [
+            span
+            for span in exporter.get_finished_spans()
+            if span.name == "oracle-root"
+        ]
+        if len(roots) == 1:
+            result["attributes"] = {
+                key: value
+                for key, value in sorted((roots[0].attributes or {}).items())
+                if key.startswith("langfuse.") or key in ("user.id", "session.id")
+            }
     else:
         with propagate_attributes(as_baggage=True, **kwargs):
-            propagate.inject(carrier)
+            PROPAGATOR.inject(carrier)
     result["baggage"] = carrier.get("baggage", "")
     result["traceparent"] = carrier.get("traceparent", "")
     return result
@@ -83,7 +108,7 @@ def run_extract(client, exporter, case):
     carrier = {"baggage": list(case["headers"])}
     if case.get("traceparent"):
         carrier["traceparent"] = [case["traceparent"]]
-    ctx = propagate.extract(carrier, getter=ListGetter())
+    ctx = PROPAGATOR.extract(carrier, getter=ListGetter())
 
     exporter.clear()
     token = context_api.attach(ctx)
@@ -133,7 +158,7 @@ def main():
     results = {}
     for case in request["cases"]:
         if case["op"] == "inject":
-            results[case["id"]] = run_inject(client, case)
+            results[case["id"]] = run_inject(client, exporter, case)
         elif case["op"] == "extract":
             results[case["id"]] = run_extract(client, exporter, case)
         else:
