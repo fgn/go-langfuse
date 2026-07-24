@@ -20,6 +20,7 @@ one-hour flush interval, no auth check).
 
 import json
 import logging
+import os
 import sys
 
 from opentelemetry import context as context_api
@@ -36,6 +37,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 )
 
 from langfuse import Langfuse, propagate_attributes
+from langfuse._utils.environment import common_release_envs
 
 logging.disable(logging.CRITICAL)
 
@@ -44,6 +46,20 @@ logging.disable(logging.CRITICAL)
 PROPAGATOR = CompositePropagator(
     [TraceContextTextMapPropagator(), W3CBaggagePropagator()]
 )
+
+# Ambient settings the pinned client would otherwise fold into span
+# attributes or span emission, scrubbed so the corpus is identical on
+# any machine. The release scrub reuses the SDK's own CI commit-var
+# list (GITHUB_SHA and friends), which would otherwise stamp
+# langfuse.release on every span produced under CI.
+for name in (
+    *common_release_envs,
+    "LANGFUSE_RELEASE",
+    "LANGFUSE_TRACING_ENVIRONMENT",
+    "LANGFUSE_SAMPLE_RATE",
+    "OTEL_SDK_DISABLED",
+):
+    os.environ.pop(name, None)
 
 INJECT_KEYS = (
     "user_id",
