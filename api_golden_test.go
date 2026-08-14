@@ -309,6 +309,14 @@ func (p Prompt) Ref() *PromptRef
 
 func ConfigFromEnv() Config
 
+func IsDefaultExportSpan(span sdktrace.ReadOnlySpan) bool
+
+func IsGenAISpan(span sdktrace.ReadOnlySpan) bool
+
+func IsKnownLLMInstrumentor(span sdktrace.ReadOnlySpan) bool
+
+func IsLangfuseSpan(span sdktrace.ReadOnlySpan) bool
+
 func New(ctx context.Context, cfg Config) (*Client, error)
 
 func TraceSampledAt(traceID string, fraction float64) (bool, error)
@@ -325,6 +333,7 @@ type Config struct {
 	SampleRate *float64
 	ServiceName string
 	TracerProvider *sdktrace.TracerProvider
+	ShouldExportSpan func(sdktrace.ReadOnlySpan) bool
 	MaxQueueSize int
 	BlockOnQueueFull bool
 	Disabled bool

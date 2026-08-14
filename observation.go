@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -93,13 +92,13 @@ func (c *Client) StartObservation(
 	// may span Tracer.Start, because processor callbacks are allowed to
 	// re-enter Shutdown, so admission is decided by the component being torn
 	// down.
-	token := &atomic.Bool{}
+	token := &observationAdmission{}
 	parentSpanContext := oteltrace.SpanFromContext(ctx).SpanContext()
 	spanCtx, span := c.tracer.Start(
 		context.WithValue(ctx, admissionTokenContextKey{client: c}, token), name, options...,
 	)
 	if span.IsRecording() {
-		if !token.Load() || c.stopped.Load() {
+		if !token.admitted.Load() || c.stopped.Load() {
 			// The processor was torn down mid-start, or Shutdown was re-entered
 			// from a later processor's OnStart after ours admitted the token.
 			// End the span so borrowed-provider processors see a balanced
@@ -131,7 +130,7 @@ func (c *Client) StartObservation(
 	spanCtx = context.WithValue(spanCtx, observationContextKey{client: c}, observation)
 	spanCtx = context.WithValue(spanCtx, traceDecisionContextKey{client: c},
 		c.nextTraceDecision(ctx, parentSpanContext, span.SpanContext()))
-	if span.IsRecording() && span.SpanContext().IsSampled() {
+	if span.IsRecording() && span.SpanContext().IsSampled() && token.expected.Load() {
 		spanCtx = c.withTraceClaim(spanCtx, span.SpanContext().TraceID())
 	}
 	// On a propagation-marked path the returned context's baggage is

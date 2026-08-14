@@ -30,6 +30,26 @@ processor from receiving unrelated spans. Attributes added at span end can make
 a span exportable, but cannot retroactively change its start-time application-
 root decision.
 
+`Config.ShouldExportSpan` replaces the smart filter when set. Set it before
+calling `New`. The callback can run at span start and end, must be
+concurrency-safe, side-effect-free, and non-blocking. A start-time panic omits
+application-root classification; an end-time panic rejects export. Compose
+with the exported default when extending the standard policy:
+
+```go
+cfg.ShouldExportSpan = func(span sdktrace.ReadOnlySpan) bool {
+	return langfuse.IsDefaultExportSpan(span) || span.InstrumentationScope().Name == "my.framework"
+}
+```
+
+To export only observations created by this go-langfuse client while retaining
+a borrowed provider, set `cfg.ShouldExportSpan = langfuse.IsLangfuseSpan`.
+This affects only the Langfuse processor. Other processors still receive SDK
+observations, and the Langfuse processor still adds propagated attributes at
+span start. A span accepted by the filter at start can also retain the internal
+application-root marker in other exporters even if the filter rejects it at
+end. Use an isolated provider when destination isolation is required.
+
 Content controls on `Config` are not provider-wide scrubbers.
 `DisableContentCapture` drops only SDK-supplied observation input/output.
 `Mask` receives only SDK-supplied observation input/output and observation or

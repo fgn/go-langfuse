@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/fgn/go-langfuse"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 // These assignments are compile-time checks for the complete v0.1 call shape.
@@ -37,6 +38,10 @@ var (
 	_ func(*langfuse.Observation) bool                            = (*langfuse.Observation).Sampled
 
 	_ func(string, float64) (bool, error) = langfuse.TraceSampledAt
+	_ func(sdktrace.ReadOnlySpan) bool    = langfuse.IsDefaultExportSpan
+	_ func(sdktrace.ReadOnlySpan) bool    = langfuse.IsLangfuseSpan
+	_ func(sdktrace.ReadOnlySpan) bool    = langfuse.IsGenAISpan
+	_ func(sdktrace.ReadOnlySpan) bool    = langfuse.IsKnownLLMInstrumentor
 
 	_ func(langfuse.Prompt) *langfuse.PromptRef                      = langfuse.Prompt.Ref
 	_ func(langfuse.Prompt, map[string]any) langfuse.Prompt          = langfuse.Prompt.Compile
@@ -92,6 +97,7 @@ func TestPublicStructSurface(t *testing.T) {
 		"SampleRate",
 		"ServiceName",
 		"TracerProvider",
+		"ShouldExportSpan",
 		"MaxQueueSize",
 		"BlockOnQueueFull",
 		"Disabled",

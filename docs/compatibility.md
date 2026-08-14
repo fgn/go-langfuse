@@ -1,12 +1,12 @@
 # Compatibility
 
-Last verified: 2026-07-17.
+Last verified: 2026-08-14.
 
 | Target | Status | Notes |
 | --- | --- | --- |
 | Langfuse Cloud observation-first/v4 UI | Primary target | OTLP/HTTP protobuf, trace endpoint, Basic auth, and ingestion header `4` are locked by wire tests and verified against a live Langfuse deployment before each release. |
-| Langfuse self-hosted OTLP endpoint | Protocol compatible | Langfuse documents the OTLP endpoint for self-hosted releases beginning with v3.22.0. Observation-first ingestion version 4 must be verified against the exact deployed release before production use. |
-| OpenTelemetry Go SDK v1.44 | Tested | Both isolated and caller-owned `*sdktrace.TracerProvider` modes are covered under the race detector. |
+| Langfuse self-hosted OTLP endpoint | Verified with v3.175.0 and v4.11.0 | The full synthetic ingestion and read-back gate passes against both upstream Compose images. Langfuse documents the OTLP endpoint for self-hosted releases beginning with v3.22.0; verify the exact deployed release before production use. |
+| OpenTelemetry Go SDK v1.45 | Tested | Both isolated and caller-owned `*sdktrace.TracerProvider` modes are covered under the race detector. |
 | OTLP/HTTP protobuf | Supported | This is the only transport emitted by this module. |
 | OTLP/HTTP JSON | Not emitted | Langfuse accepts it, but this SDK deliberately has one wire format. |
 | OTLP/gRPC | Unsupported | Langfuse's native endpoint does not support gRPC. |

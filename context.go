@@ -5,6 +5,7 @@ import (
 	"maps"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"unicode/utf8"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -51,6 +52,14 @@ type traceState struct {
 	// never a local one: local > accepted baggage, per field, across
 	// repeated imports.
 	accepted map[string]struct{}
+}
+
+// observationAdmission carries the synchronous processor result back through
+// Tracer.Start. admitted proves that the processor remained active; expected
+// records whether the span passed start-time export classification.
+type observationAdmission struct {
+	admitted atomic.Bool
+	expected atomic.Bool
 }
 
 // Origin keys for traceState.accepted.
