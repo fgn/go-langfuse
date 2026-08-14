@@ -5,6 +5,30 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-08-14
+
+- Add `Config.ShouldExportSpan`, a full span-export-filter override whose API
+  shape follows the official Langfuse Python and TypeScript SDKs, plus composable
+  `IsDefaultExportSpan`, `IsLangfuseSpan`, `IsGenAISpan`, and
+  `IsKnownLLMInstrumentor` helpers. The default continues to recognize the
+  OpenTelemetry `gen_ai.*` semantic-convention namespace with TypeScript's
+  strict namespace boundary and the union of both SDKs' known LLM
+  instrumentation scopes. A start-time filter panic omits root classification;
+  an end-time panic drops export. Both use payload-free diagnostics.
+- **Behavior**: align the default filter more closely with the official
+  TypeScript SDK. A raw `langfuse.observation.type` attribute no longer admits
+  a foreign span, and `ai` is now an exact instrumentation-scope match instead
+  of also admitting arbitrary `ai.*` scopes. Use `ShouldExportSpan` to retain
+  either policy explicitly.
+- Update the supported toolchain to Go 1.25.13, OpenTelemetry Go to v1.45.0,
+  protobuf to v1.36.12, and the release vulnerability scanner to v1.7.0.
+  Refresh the test-only provider compatibility matrix to openai-go/v3 v3.50.0,
+  go-openai v1.42.0, and google.golang.org/genai v1.68.0.
+- Update the live compatibility gate to use the Langfuse v4 observations API
+  with legacy observation, trace, and score read fallbacks. The full synthetic
+  ingestion, prompt, score, usage, timing, metadata, and read-back gate passes
+  against self-hosted Langfuse v3.175.0 and v4.11.0.
+
 ## [0.6.0] - 2026-07-24
 
 - Add opt-in cross-process trace-attribute propagation over W3C baggage,

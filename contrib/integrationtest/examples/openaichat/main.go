@@ -1,5 +1,5 @@
 // This example shows what the langfuseopenai adapter buys with the
-// official OpenAI Go SDK (github.com/openai/openai-go): a completely
+// official OpenAI Go SDK (github.com/openai/openai-go/v3): a completely
 // ordinary streaming chat call whose model, token usage, output,
 // time-to-first-token, and status land in Langfuse automatically,
 // nested under the application's logical span, with no call-site
@@ -26,8 +26,8 @@ import (
 	"os"
 	"time"
 
-	openai "github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
+	openai "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 
 	"github.com/fgn/go-langfuse"
 	langfuseopenai "github.com/fgn/go-langfuse/contrib/openai"

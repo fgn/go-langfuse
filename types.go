@@ -41,6 +41,18 @@ type Config struct {
 	// never replaces the global provider or shuts this provider down.
 	TracerProvider *sdktrace.TracerProvider
 
+	// ShouldExportSpan controls which recorded spans are exported to Langfuse.
+	// nil uses [IsDefaultExportSpan]. A non-nil filter is a full override of
+	// the default content filter; sampling, lifecycle, and SDK project-key
+	// isolation remain mandatory internal gates. The filter can run at span
+	// start, for application-root classification, and at end, for export. The
+	// start call sees creation-time attributes plus Langfuse configuration and
+	// propagated trace attributes, but not attributes added later. The callback
+	// must be concurrency-safe, side-effect-free, and non-blocking, and must not
+	// retain the span. A panic omits root classification at start and rejects
+	// export at end.
+	ShouldExportSpan func(sdktrace.ReadOnlySpan) bool
+
 	// MaxQueueSize bounds how many ended export-eligible spans the client
 	// buffers in memory while waiting for batch export. Zero selects the
 	// default of 2048; negative values are a validation error in [New].

@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	otelattr "go.opentelemetry.io/otel/attribute"
@@ -83,20 +84,21 @@ func TestSmartFilterUsesFinalAttributesAndExactModernSemconvPrefix(t *testing.T)
 		span.End()
 	}
 
-	startEnd("unknown", "observation", otelattr.String(lfattr.ObservationTypeKey, "generation"))
+	startEnd("unknown", "observation-marker", otelattr.String(lfattr.ObservationTypeKey, "generation"))
 	startEnd("unknown", "gen-ai", otelattr.String("gen_ai.request.model", "gpt-5"))
 	startEnd("unknown", "gen-ai-no-dot", otelattr.String("gen_ai", "value"))
 	startEnd("unknown", "gen-aix", otelattr.String("gen_aix.request.model", "value"))
 	startEnd("unknown", "other-ai", otelattr.String("other_ai.request", "sensitive"))
 	startEnd("unknown", "plain", otelattr.String("http.request.method", "GET"))
-	startEnd("ai.extra", "python-prefix-parity")
+	startEnd("ai", "vercel-ai")
+	startEnd("ai.extra", "ai-false-positive")
 
 	_, late := provider.Tracer("unknown").Start(context.Background(), "late")
 	late.SetAttributes(otelattr.String("gen_ai.response.model", "gpt-5"))
 	late.End()
 
 	got := next.endedNames()
-	want := []string{"gen-ai", "late", "observation", "python-prefix-parity"}
+	want := []string{"gen-ai", "late", "vercel-ai"}
 	sort.Strings(got)
 	sort.Strings(want)
 	if !slices.Equal(got, want) {
@@ -106,6 +108,199 @@ func TestSmartFilterUsesFinalAttributesAndExactModernSemconvPrefix(t *testing.T)
 	lateSpan := next.endedByName()["late"]
 	if _, found := lateSpan.attributes[lfattr.AppRootKey]; found {
 		t.Fatal("span that became exportable late was marked as an application root")
+	}
+}
+
+func TestCustomSpanFilterFullyOverridesDefault(t *testing.T) {
+	t.Parallel()
+
+	next := newRecordingProcessor()
+	processor, err := New(Config{
+		Next: next,
+		ShouldExportSpan: func(span sdktrace.ReadOnlySpan) bool {
+			return span.Name() == "keep"
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+
+	tracer := provider.Tracer("custom")
+	_, kept := tracer.Start(context.Background(), "keep")
+	kept.End()
+	_, droppedDefault := tracer.Start(
+		context.Background(),
+		"drop",
+		oteltrace.WithAttributes(otelattr.String("gen_ai.request.model", "gpt-5")),
+	)
+	droppedDefault.End()
+
+	if got := next.endedNames(); !slices.Equal(got, []string{"keep"}) {
+		t.Fatalf("exported names = %v, want [keep]", got)
+	}
+}
+
+func TestCustomSpanFilterComposesWithDefault(t *testing.T) {
+	t.Parallel()
+
+	next := newRecordingProcessor()
+	processor, err := New(Config{
+		Next: next,
+		ShouldExportSpan: func(span sdktrace.ReadOnlySpan) bool {
+			return IsDefaultExportSpan(span) || span.InstrumentationScope().Name == "custom.framework"
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+
+	_, genAI := provider.Tracer("unknown").Start(
+		context.Background(),
+		"default-gen-ai",
+		oteltrace.WithAttributes(otelattr.String("gen_ai.request.model", "gpt-5")),
+	)
+	genAI.End()
+	_, custom := provider.Tracer("custom.framework").Start(context.Background(), "custom")
+	custom.End()
+	_, unrelated := provider.Tracer("http.client").Start(context.Background(), "unrelated")
+	unrelated.End()
+
+	got := next.endedNames()
+	sort.Strings(got)
+	if want := []string{"custom", "default-gen-ai"}; !slices.Equal(got, want) {
+		t.Fatalf("exported names = %v, want %v", got, want)
+	}
+}
+
+func TestCustomSpanFilterPanicFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	next := newRecordingProcessor()
+	processor, err := New(Config{
+		Next: next,
+		ShouldExportSpan: func(sdktrace.ReadOnlySpan) bool {
+			panic("caller-controlled-payload")
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+
+	_, span := provider.Tracer("custom").Start(context.Background(), "panic")
+	span.End()
+	if got := next.endedNames(); len(got) != 0 {
+		t.Fatalf("exported names = %v, want none", got)
+	}
+}
+
+func TestCustomSpanFilterRunsAtStartAndEnd(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int64
+	var startSawConfigured, startSawPropagated, endSawLate atomic.Bool
+	next := newRecordingProcessor()
+	processor, err := New(Config{
+		Next:        next,
+		Environment: "filter-environment",
+		ContextAttributes: func(context.Context) []otelattr.KeyValue {
+			return []otelattr.KeyValue{otelattr.String(lfattr.TraceSessionIDKey, "propagated-session")}
+		},
+		ShouldExportSpan: func(span sdktrace.ReadOnlySpan) bool {
+			calls.Add(1)
+			reject := false
+			for _, item := range span.Attributes() {
+				switch {
+				case item.Key == lfattr.EnvironmentKey && item.Value.AsString() == "filter-environment":
+					startSawConfigured.Store(true)
+				case item.Key == lfattr.TraceSessionIDKey && item.Value.AsString() == "propagated-session":
+					startSawPropagated.Store(true)
+				case item.Key == "test.reject_at_end" && item.Value.AsBool():
+					endSawLate.Store(true)
+					reject = true
+				}
+			}
+			return !reject
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+
+	_, span := provider.Tracer("custom").Start(context.Background(), "start-only")
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("filter calls after start = %d, want 1", got)
+	}
+	if !startSawConfigured.Load() || !startSawPropagated.Load() {
+		t.Fatalf("start filter visibility: configured=%v propagated=%v, want both true",
+			startSawConfigured.Load(), startSawPropagated.Load())
+	}
+	span.SetAttributes(otelattr.Bool("test.reject_at_end", true))
+	span.End()
+
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("filter calls = %d, want start and end calls", got)
+	}
+	if got := next.endedNames(); len(got) != 0 {
+		t.Fatalf("exported names = %v, want none after final rejection", got)
+	}
+	if !endSawLate.Load() {
+		t.Fatal("end filter did not see the late attribute")
+	}
+	started := next.startedByName()["start-only"]
+	assertBoolAttribute(t, started, lfattr.AppRootKey, true)
+}
+
+func TestCustomSpanFilterCannotBypassMandatoryGates(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int64
+	next := newRecordingProcessor()
+	processor, err := New(Config{
+		Next:      next,
+		PublicKey: "pk-target",
+		ShouldExportSpan: func(sdktrace.ReadOnlySpan) bool {
+			calls.Add(1)
+			return true
+		},
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(nameSampler{}),
+		sdktrace.WithSpanProcessor(processor),
+	)
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+
+	foreignProjectTracer := provider.Tracer(
+		lfattr.TracerName,
+		oteltrace.WithInstrumentationAttributes(otelattr.String("public_key", "pk-other")),
+	)
+	_, foreignProject := foreignProjectTracer.Start(context.Background(), "foreign-project")
+	foreignProject.End()
+
+	_, recordOnly := provider.Tracer("custom").Start(context.Background(), "record-only")
+	recordOnly.End()
+
+	if err := processor.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	_, afterShutdown := provider.Tracer("custom").Start(context.Background(), "sampled-child")
+	afterShutdown.End()
+
+	if got := calls.Load(); got != 0 {
+		t.Fatalf("filter calls = %d, want none beyond mandatory gates", got)
+	}
+	if got := next.endedNames(); len(got) != 0 {
+		t.Fatalf("exported names = %v, want none", got)
 	}
 }
 
@@ -144,11 +339,10 @@ func TestOwnScopeIsIsolatedByPublicKey(t *testing.T) {
 	}
 }
 
-func TestKnownLLMInstrumentationScopesIncludeOwnAndPythonSnapshot(t *testing.T) {
+func TestKnownLLMInstrumentationScopesIncludeOfficialSDKUnion(t *testing.T) {
 	t.Parallel()
 
 	want := []string{
-		lfattr.TracerName,
 		"langfuse-sdk",
 		"agent_framework",
 		"autogen-core",
@@ -160,10 +354,13 @@ func TestKnownLLMInstrumentationScopesIncludeOwnAndPythonSnapshot(t *testing.T) 
 		"opentelemetry.instrumentation.agno",
 		"opentelemetry.instrumentation.alephalpha",
 		"opentelemetry.instrumentation.anthropic",
+		"opentelemetry.instrumentation.aws_bedrock",
 		"opentelemetry.instrumentation.bedrock",
 		"opentelemetry.instrumentation.cohere",
 		"opentelemetry.instrumentation.crewai",
+		"opentelemetry.instrumentation.gemini",
 		"opentelemetry.instrumentation.google_generativeai",
+		"opentelemetry.instrumentation.google_genai",
 		"opentelemetry.instrumentation.groq",
 		"opentelemetry.instrumentation.haystack",
 		"opentelemetry.instrumentation.langchain",
@@ -178,6 +375,7 @@ func TestKnownLLMInstrumentationScopesIncludeOwnAndPythonSnapshot(t *testing.T) 
 		"opentelemetry.instrumentation.together",
 		"opentelemetry.instrumentation.transformers",
 		"opentelemetry.instrumentation.vertexai",
+		"opentelemetry.instrumentation.vertex_ai",
 		"opentelemetry.instrumentation.voyageai",
 		"opentelemetry.instrumentation.watsonx",
 		"opentelemetry.instrumentation.writer",
@@ -588,7 +786,7 @@ func TestAdmitRunsOnlyForSDKScopeSpansWhileActive(t *testing.T) {
 	var admitted []string
 	processor, err := New(Config{
 		Next: newRecordingProcessor(),
-		Admit: func(ctx context.Context) {
+		Admit: func(ctx context.Context, _ bool) {
 			name, _ := ctx.Value(admitProbeKey{}).(string)
 			admitted = append(admitted, name)
 		},

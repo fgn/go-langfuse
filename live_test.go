@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -139,8 +141,8 @@ func TestLiveCompatibility(t *testing.T) {
 	if !strings.EqualFold(readBack.Type, "generation") {
 		t.Errorf("read-back observation type = %q, want generation", readBack.Type)
 	}
-	if readBack.Model != "synthetic-model" {
-		t.Errorf("read-back model = %q, want synthetic-model", readBack.Model)
+	if got := readBack.modelName(); got != "synthetic-model" {
+		t.Errorf("read-back model = %q, want synthetic-model", got)
 	}
 	assertSDKMetadata(t, "observation", readBack.Metadata)
 	// The SDK normalizes the inclusive Usage fields sent above (input 12 with
@@ -155,7 +157,7 @@ func TestLiveCompatibility(t *testing.T) {
 	assertLiveTime(t, "generation completion start", readBack.CompletionStartTime, completionStart)
 	assertLiveTime(t, "generation end", readBack.EndTime, generationEnd)
 
-	trace := api.awaitTrace(t, deadline, root.TraceID())
+	trace := api.awaitTrace(t, deadline, root.TraceID(), root.ID())
 	if got, want := trace.Input, any("synthetic question"); got != want {
 		t.Errorf("read-back trace input = %#v, want root observation input %#v", got, want)
 	}
@@ -179,10 +181,21 @@ type liveObservation struct {
 	Name                string             `json:"name"`
 	Type                string             `json:"type"`
 	Model               string             `json:"model"`
+	ProvidedModelName   string             `json:"providedModelName"`
 	CompletionStartTime string             `json:"completionStartTime"`
 	EndTime             string             `json:"endTime"`
 	UsageDetails        map[string]float64 `json:"usageDetails"`
 	Metadata            map[string]any     `json:"metadata"`
+	Input               any                `json:"input"`
+	Output              any                `json:"output"`
+	IsRootObservation   bool               `json:"isRootObservation"`
+}
+
+func (observation liveObservation) modelName() string {
+	if observation.ProvidedModelName != "" {
+		return observation.ProvidedModelName
+	}
+	return observation.Model
 }
 
 type liveScore struct {
@@ -219,12 +232,13 @@ func assertSDKMetadata(t *testing.T, subject string, metadata map[string]any) {
 	if _, duplicated := metadata["attributes"]; duplicated {
 		t.Errorf("read-back %s metadata redundantly contains semantic attributes", subject)
 	}
-	scope, ok := metadata["scope"].(map[string]any)
-	if !ok {
-		t.Errorf("read-back %s metadata scope = %#v, want object", subject, metadata["scope"])
+	if scope, ok := metadata["scope"].(map[string]any); ok {
+		if got := scope["name"]; got != "langfuse-sdk.go" {
+			t.Errorf("read-back %s metadata scope name = %#v, want langfuse-sdk.go", subject, got)
+		}
 		return
 	}
-	if got := scope["name"]; got != "langfuse-sdk.go" {
+	if got := metadata["scope.name"]; got != "langfuse-sdk.go" {
 		t.Errorf("read-back %s metadata scope name = %#v, want langfuse-sdk.go", subject, got)
 	}
 }
@@ -233,6 +247,7 @@ type liveAPI struct {
 	baseURL       string
 	authorization string
 	client        *http.Client
+	pollInterval  time.Duration
 }
 
 // newLiveAPI derives the REST base URL from the same configuration the
@@ -252,16 +267,23 @@ func newLiveAPI(t *testing.T, baseURL string) *liveAPI {
 	}
 }
 
-// awaitGeneration polls GET /api/public/observations?traceId=... until the
-// named generation is ingested or the deadline passes.
+// awaitGeneration polls the v4 observations API until the named generation is
+// ingested or the deadline passes. A 404 before the first successful v2 read
+// selects the legacy observation route for the rest of the poll.
 func (api *liveAPI) awaitGeneration(t *testing.T, deadline time.Time, traceID, name string) liveObservation {
 	t.Helper()
-	route := api.baseURL + "/api/public/observations?traceId=" + url.QueryEscape(traceID)
+	v2Route := api.observationsRoute(traceID)
+	legacyRoute := api.baseURL + "/api/public/observations?traceId=" + url.QueryEscape(traceID)
+	route := v2Route
+	routeSelected := false
 	for {
 		var page struct {
 			Data []liveObservation `json:"data"`
 		}
-		status, err := api.getJSON(route, &page)
+		status, err := api.getJSON(deadline, route, &page)
+		if route == v2Route && status == http.StatusOK {
+			routeSelected = true
+		}
 		if err == nil && status == http.StatusOK {
 			for _, observation := range page.Data {
 				if observation.Name == name {
@@ -269,33 +291,57 @@ func (api *liveAPI) awaitGeneration(t *testing.T, deadline time.Time, traceID, n
 				}
 			}
 		}
+		if err == nil && status == http.StatusNotFound && route == v2Route && !routeSelected {
+			route = legacyRoute
+			routeSelected = true
+			continue
+		}
 		if err == nil && status != http.StatusOK && status != http.StatusNotFound {
 			t.Fatalf("GET %s returned unexpected status %d; check credentials and deployment", route, status)
 		}
-		if time.Now().After(deadline) {
+		if !time.Now().Before(deadline) {
 			t.Fatalf("observation %q for trace %s was not visible through %s within the read-back deadline (last status %d, err %v)",
 				name, traceID, route, status, err)
 		}
-		time.Sleep(3 * time.Second)
+		api.waitForNextPoll()
 	}
 }
 
-// awaitScore polls GET /api/public/v3/scores?traceId=... until the named
-// score is ingested or the deadline passes.
+func (api *liveAPI) observationsRoute(traceID string) string {
+	query := url.Values{}
+	query.Set("traceId", traceID)
+	query.Set("fields", "core,basic,time,io,metadata,model,usage,prompt,trace_context")
+	return api.baseURL + "/api/public/v2/observations?" + query.Encode()
+}
+
+// awaitScore polls the current scores API until the named score is ingested or
+// the deadline passes. A 404 before the first successful v3 read selects the
+// legacy v2 route for the rest of the poll.
 func (api *liveAPI) awaitScore(t *testing.T, deadline time.Time, traceID, name string) liveScore {
 	t.Helper()
-	route := api.baseURL + "/api/public/v3/scores?traceId=" + url.QueryEscape(traceID)
+	v3Route := api.baseURL + "/api/public/v3/scores?traceId=" + url.QueryEscape(traceID)
+	v2Route := api.baseURL + "/api/public/v2/scores?traceId=" + url.QueryEscape(traceID)
+	route := v3Route
+	routeSelected := false
 	for {
 		var page struct {
 			Data []liveScore `json:"data"`
 		}
-		status, err := api.getJSON(route, &page)
+		status, err := api.getJSON(deadline, route, &page)
+		if route == v3Route && status == http.StatusOK {
+			routeSelected = true
+		}
 		if err == nil && status == http.StatusOK {
 			for _, score := range page.Data {
 				if score.Name == name {
 					return score
 				}
 			}
+		}
+		if err == nil && status == http.StatusNotFound && route == v3Route && !routeSelected {
+			route = v2Route
+			routeSelected = true
+			continue
 		}
 		if err == nil && status != http.StatusOK && status != http.StatusNotFound {
 			t.Fatalf("GET %s returned unexpected status %d; check credentials and deployment", route, status)
@@ -304,34 +350,260 @@ func (api *liveAPI) awaitScore(t *testing.T, deadline time.Time, traceID, name s
 			t.Fatalf("score %q for trace %s was not visible through %s within the read-back deadline (last status %d, err %v)",
 				name, traceID, route, status, err)
 		}
-		time.Sleep(3 * time.Second)
+		api.waitForNextPoll()
 	}
 }
 
-// awaitTrace polls GET /api/public/traces/{traceID} until the trace carries
-// the root observation's input and output as trace IO.
-func (api *liveAPI) awaitTrace(t *testing.T, deadline time.Time, traceID string) liveTrace {
+// awaitTrace reads trace IO from the root observation on v4. A 404 before the
+// first successful v2 read selects the legacy trace route for the rest of the
+// poll.
+func (api *liveAPI) awaitTrace(t *testing.T, deadline time.Time, traceID, rootID string) liveTrace {
 	t.Helper()
-	route := api.baseURL + "/api/public/traces/" + url.PathEscape(traceID)
+	observationRoute := api.observationsRoute(traceID)
+	legacyRoute := api.baseURL + "/api/public/traces/" + url.PathEscape(traceID)
+	v2Selected := false
+	legacySelected := false
 	for {
-		var trace liveTrace
-		status, err := api.getJSON(route, &trace)
-		if err == nil && status == http.StatusOK && trace.Input != nil && trace.Output != nil {
-			return trace
+		if legacySelected {
+			var trace liveTrace
+			status, err := api.getJSON(deadline, legacyRoute, &trace)
+			if err == nil && status == http.StatusOK && trace.Input != nil && trace.Output != nil {
+				return trace
+			}
+			if err == nil && status != http.StatusOK && status != http.StatusNotFound {
+				t.Fatalf("GET %s returned unexpected status %d; check credentials and deployment", legacyRoute, status)
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("trace %s IO was not visible through %s within the read-back deadline (last status %d, err %v)",
+					traceID, legacyRoute, status, err)
+			}
+			api.waitForNextPoll()
+			continue
 		}
-		if err == nil && status != http.StatusOK && status != http.StatusNotFound {
-			t.Fatalf("GET %s returned unexpected status %d; check credentials and deployment", route, status)
+
+		var page struct {
+			Data []liveObservation `json:"data"`
 		}
-		if time.Now().After(deadline) {
+		status, err := api.getJSON(deadline, observationRoute, &page)
+		if status == http.StatusOK {
+			v2Selected = true
+		}
+		if err == nil && status == http.StatusOK {
+			for _, observation := range page.Data {
+				if observation.ID == rootID {
+					if observation.Input != nil && observation.Output != nil {
+						if !observation.IsRootObservation {
+							t.Fatalf("root observation %s for trace %s is not marked as an application root", rootID, traceID)
+						}
+						return liveTrace{
+							ID:       traceID,
+							Input:    observation.Input,
+							Output:   observation.Output,
+							Metadata: observation.Metadata,
+						}
+					}
+				}
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatalf("trace %s IO was not visible through %s within the read-back deadline (last status %d, err %v)",
+					traceID, observationRoute, status, err)
+			}
+			api.waitForNextPoll()
+			continue
+		} else if err == nil && status != http.StatusNotFound {
+			t.Fatalf("GET %s returned unexpected status %d; check credentials and deployment", observationRoute, status)
+		}
+		if err == nil && status == http.StatusNotFound && !v2Selected {
+			legacySelected = true
+			continue
+		}
+		if !time.Now().Before(deadline) {
 			t.Fatalf("trace %s IO was not visible through %s within the read-back deadline (last status %d, err %v)",
-				traceID, route, status, err)
+				traceID, observationRoute, status, err)
 		}
-		time.Sleep(3 * time.Second)
+		api.waitForNextPoll()
 	}
 }
 
-func (api *liveAPI) getJSON(route string, into any) (int, error) {
-	request, err := http.NewRequest(http.MethodGet, route, nil)
+func (api *liveAPI) waitForNextPoll() {
+	interval := api.pollInterval
+	if interval <= 0 {
+		interval = 3 * time.Second
+	}
+	time.Sleep(interval)
+}
+
+func TestLiveReadbackLocksV2AfterSuccess(t *testing.T) {
+	var v2Calls atomic.Int32
+	var legacyCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/public/v2/observations":
+			switch v2Calls.Add(1) {
+			case 1:
+				_, _ = io.WriteString(writer, `{"data":[]}`)
+			case 2:
+				_, _ = io.WriteString(writer, `{`)
+			default:
+				_, _ = io.WriteString(writer, `{"data":[{"name":"generation","providedModelName":"synthetic-model"}]}`)
+			}
+		case "/api/public/observations":
+			legacyCalls.Add(1)
+			_, _ = io.WriteString(writer, `{"data":[{"name":"generation","model":"legacy-model"}]}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	api := &liveAPI{baseURL: server.URL, client: server.Client(), pollInterval: time.Millisecond}
+	observation := api.awaitGeneration(t, time.Now().Add(time.Second), "trace-id", "generation")
+	if got := observation.modelName(); got != "synthetic-model" {
+		t.Fatalf("modelName() = %q, want synthetic-model", got)
+	}
+	if got := v2Calls.Load(); got != 3 {
+		t.Errorf("v2 calls = %d, want 3", got)
+	}
+	if got := legacyCalls.Load(); got != 0 {
+		t.Errorf("legacy calls = %d, want 0", got)
+	}
+}
+
+func TestLiveReadbackFallsBackAfterInitialV2NotFound(t *testing.T) {
+	var v2Calls atomic.Int32
+	var legacyCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/public/v2/observations":
+			v2Calls.Add(1)
+			http.NotFound(writer, request)
+		case "/api/public/observations":
+			legacyCalls.Add(1)
+			_, _ = io.WriteString(writer, `{"data":[{"name":"generation","model":"legacy-model"}]}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	api := &liveAPI{baseURL: server.URL, client: server.Client(), pollInterval: time.Millisecond}
+	observation := api.awaitGeneration(t, time.Now().Add(time.Second), "trace-id", "generation")
+	if got := observation.modelName(); got != "legacy-model" {
+		t.Fatalf("modelName() = %q, want legacy-model", got)
+	}
+	if got := v2Calls.Load(); got != 1 {
+		t.Errorf("v2 calls = %d, want 1", got)
+	}
+	if got := legacyCalls.Load(); got != 1 {
+		t.Errorf("legacy calls = %d, want 1", got)
+	}
+}
+
+func TestLiveReadbackFallsBackToV2Scores(t *testing.T) {
+	var v3Calls atomic.Int32
+	var v2Calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/public/v3/scores":
+			v3Calls.Add(1)
+			http.NotFound(writer, request)
+		case "/api/public/v2/scores":
+			v2Calls.Add(1)
+			_, _ = io.WriteString(writer, `{"data":[{"name":"score","value":1,"timestamp":"2026-08-14T00:00:00Z"}]}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	api := &liveAPI{baseURL: server.URL, client: server.Client(), pollInterval: time.Millisecond}
+	score := api.awaitScore(t, time.Now().Add(time.Second), "trace-id", "score")
+	if score.Value != 1 {
+		t.Fatalf("score value = %v, want 1", score.Value)
+	}
+	if got := v3Calls.Load(); got != 1 {
+		t.Errorf("v3 calls = %d, want 1", got)
+	}
+	if got := v2Calls.Load(); got != 1 {
+		t.Errorf("v2 calls = %d, want 1", got)
+	}
+}
+
+func TestLiveReadbackLocksV2TraceAndMatchesExactRoot(t *testing.T) {
+	var v2Calls atomic.Int32
+	var legacyCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/public/v2/observations":
+			switch v2Calls.Add(1) {
+			case 1:
+				_, _ = io.WriteString(writer, `{"data":[]}`)
+			case 2:
+				_, _ = io.WriteString(writer, `{`)
+			default:
+				_, _ = io.WriteString(writer, `{"data":[{"id":"other-root","isRootObservation":true,"input":"wrong","output":"wrong"},{"id":"root-id","isRootObservation":true,"input":"synthetic question","output":"synthetic answer"}]}`)
+			}
+		case "/api/public/traces/trace-id":
+			legacyCalls.Add(1)
+			_, _ = io.WriteString(writer, `{"id":"trace-id","input":"legacy","output":"legacy"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	api := &liveAPI{baseURL: server.URL, client: server.Client(), pollInterval: time.Millisecond}
+	trace := api.awaitTrace(t, time.Now().Add(time.Second), "trace-id", "root-id")
+	if trace.Input != "synthetic question" || trace.Output != "synthetic answer" {
+		t.Fatalf("trace IO = (%#v, %#v), want exact root IO", trace.Input, trace.Output)
+	}
+	if got := v2Calls.Load(); got != 3 {
+		t.Errorf("v2 calls = %d, want 3", got)
+	}
+	if got := legacyCalls.Load(); got != 0 {
+		t.Errorf("legacy calls = %d, want 0", got)
+	}
+}
+
+func TestLiveReadbackFallsBackToLegacyTrace(t *testing.T) {
+	var v2Calls atomic.Int32
+	var legacyCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/public/v2/observations":
+			v2Calls.Add(1)
+			http.NotFound(writer, request)
+		case "/api/public/traces/trace-id":
+			legacyCalls.Add(1)
+			_, _ = io.WriteString(writer, `{"id":"trace-id","input":"synthetic question","output":"synthetic answer"}`)
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	api := &liveAPI{baseURL: server.URL, client: server.Client(), pollInterval: time.Millisecond}
+	trace := api.awaitTrace(t, time.Now().Add(time.Second), "trace-id", "root-id")
+	if trace.Input != "synthetic question" || trace.Output != "synthetic answer" {
+		t.Fatalf("trace IO = (%#v, %#v), want legacy trace IO", trace.Input, trace.Output)
+	}
+	if got := v2Calls.Load(); got != 1 {
+		t.Errorf("v2 calls = %d, want 1", got)
+	}
+	if got := legacyCalls.Load(); got != 1 {
+		t.Errorf("legacy calls = %d, want 1", got)
+	}
+}
+
+func (api *liveAPI) getJSON(deadline time.Time, route string, into any) (int, error) {
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, route, nil)
 	if err != nil {
 		return 0, err
 	}

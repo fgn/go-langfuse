@@ -224,6 +224,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		ContextAttributes: client.propagatedAttributes,
 		HasTraceClaim:     client.hasTraceClaim,
 		Admit:             client.admitObservation,
+		ShouldExportSpan:  cfg.ShouldExportSpan,
 	})
 	if err != nil {
 		_ = batch.Shutdown(context.Background())
@@ -345,16 +346,20 @@ func (c *Client) reportStoppedOnce() {
 }
 
 // admitObservation accepts a pending admission token. The Langfuse processor
-// calls it from OnStart for SDK-scope spans only, so admission is decided by
-// the component being torn down: once Shutdown publishes stopped or the
-// processor stops, no start can be admitted, while an ordinary Flush leaves
-// admission open. See StartObservation for the token's evaluation.
-func (c *Client) admitObservation(ctx context.Context) {
+// calls it from OnStart for SDK-scope spans only. expected records whether the
+// span passed start-time export classification, so a filtered observation
+// remains usable without suppressing a later exported child's application-
+// root marker. Admission is decided by the component being torn down: once
+// Shutdown publishes stopped or the processor stops, no start can be admitted,
+// while an ordinary Flush leaves admission open. See StartObservation for the
+// token's evaluation.
+func (c *Client) admitObservation(ctx context.Context, expected bool) {
 	if c == nil || ctx == nil || c.stopped.Load() {
 		return
 	}
-	if token, ok := ctx.Value(admissionTokenContextKey{client: c}).(*atomic.Bool); ok && token != nil {
-		token.Store(true)
+	if token, ok := ctx.Value(admissionTokenContextKey{client: c}).(*observationAdmission); ok && token != nil {
+		token.expected.Store(expected)
+		token.admitted.Store(true)
 	}
 }
 

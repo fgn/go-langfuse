@@ -4,7 +4,7 @@ Thanks for helping improve go-langfuse.
 
 ## Development
 
-This module requires Go 1.25 or newer and suggests the patched Go 1.25.12
+This module requires Go 1.25 or newer and suggests the patched Go 1.25.13
 toolchain recorded in `go.mod`. Before submitting a change, run:
 
 ```sh

@@ -27,8 +27,9 @@ type TraceClaimFunc func(context.Context, oteltrace.TraceID) bool
 
 // AdmitFunc accepts the pending admission token in ctx, confirming to the
 // starting SDK observation that this processor observed its start before any
-// teardown. It runs synchronously inside Tracer.Start and must not block.
-type AdmitFunc func(context.Context)
+// teardown. expected reports whether the span passed start-time export
+// classification. It runs synchronously inside Tracer.Start and must not block.
+type AdmitFunc func(context.Context, bool)
 
 // Config configures a Processor.
 type Config struct {
@@ -41,6 +42,7 @@ type Config struct {
 	ContextAttributes ContextAttributesFunc
 	HasTraceClaim     TraceClaimFunc
 	Admit             AdmitFunc
+	ShouldExportSpan  func(sdktrace.ReadOnlySpan) bool
 }
 
 // Processor adds Langfuse propagation and application-root attributes, then
@@ -55,6 +57,7 @@ type Processor struct {
 	contextAttributes ContextAttributesFunc
 	hasTraceClaim     TraceClaimFunc
 	admit             AdmitFunc
+	shouldExportSpan  func(sdktrace.ReadOnlySpan) bool
 
 	stopped atomic.Bool
 
@@ -83,6 +86,11 @@ func New(config Config) (*Processor, error) {
 		return nil, errors.New("langfuse processor: next span processor is required")
 	}
 
+	shouldExportSpan := config.ShouldExportSpan
+	if shouldExportSpan == nil {
+		shouldExportSpan = IsDefaultExportSpan
+	}
+
 	return &Processor{
 		next:              config.Next,
 		publicKey:         config.PublicKey,
@@ -91,6 +99,7 @@ func New(config Config) (*Processor, error) {
 		contextAttributes: config.ContextAttributes,
 		hasTraceClaim:     config.HasTraceClaim,
 		admit:             config.Admit,
+		shouldExportSpan:  shouldExportSpan,
 		expected:          make(map[spanKey]struct{}),
 		shutdownDone:      make(chan struct{}),
 	}, nil
@@ -104,12 +113,6 @@ func (p *Processor) OnStart(parent context.Context, span sdktrace.ReadWriteSpan)
 		return
 	}
 
-	// Admit only spans from the SDK's own tracer: a foreign span started with
-	// a context that happens to carry an admission token must not accept it.
-	if span.InstrumentationScope().Name == lfattr.TracerName {
-		safeAdmit(p.admit, parent)
-	}
-
 	// Context callbacks are deliberately outside lifecycle. A diagnostic hook
 	// may itself be instrumented, and no callback should run while holding an
 	// SDK lifecycle lock.
@@ -120,8 +123,19 @@ func (p *Processor) OnStart(parent context.Context, span sdktrace.ReadWriteSpan)
 		return
 	}
 
+	p.fillMissingAttributes(span, propagated)
+
 	spanContext := span.SpanContext()
-	expected := spanContext.IsSampled() && ShouldExport(span)
+	expected := spanContext.IsSampled() && safeShouldExportSpan(p.shouldExportSpan, span, false)
+	if p.stopped.Load() {
+		return
+	}
+
+	// Admit only spans from the SDK's own tracer: a foreign span started with
+	// a context that happens to carry an admission token must not accept it.
+	if span.InstrumentationScope().Name == lfattr.TracerName {
+		safeAdmit(p.admit, parent, expected)
+	}
 	parentExpected := false
 	expectationOmitted := false
 
@@ -151,8 +165,6 @@ func (p *Processor) OnStart(parent context.Context, span sdktrace.ReadWriteSpan)
 		diagnostic.Report("active Langfuse span count exceeds the application-root tracking limit; root marking may be conservative")
 	}
 
-	p.fillMissingAttributes(span, propagated)
-
 	if expected &&
 		!parentExpected &&
 		!claimed &&
@@ -174,7 +186,10 @@ func (p *Processor) OnEnd(span sdktrace.ReadOnlySpan) {
 	})
 	p.expectationsMu.Unlock()
 
-	if p.stopped.Load() || !p.acceptsProjectSpan(span) || !spanContext.IsSampled() || !ShouldExport(span) {
+	if p.stopped.Load() ||
+		!p.acceptsProjectSpan(span) ||
+		!spanContext.IsSampled() ||
+		!safeShouldExportSpan(p.shouldExportSpan, span, true) {
 		return
 	}
 	if span.InstrumentationScope().Name == lfattr.TracerName && span.DroppedAttributes() > 0 {
@@ -299,7 +314,7 @@ func safeContextAttributes(callback ContextAttributesFunc, ctx context.Context) 
 	return callback(ctx)
 }
 
-func safeAdmit(callback AdmitFunc, ctx context.Context) {
+func safeAdmit(callback AdmitFunc, ctx context.Context, expected bool) {
 	if callback == nil {
 		return
 	}
@@ -308,7 +323,7 @@ func safeAdmit(callback AdmitFunc, ctx context.Context) {
 			diagnostic.Report("processor admission callback panicked; start not admitted")
 		}
 	}()
-	callback(ctx)
+	callback(ctx, expected)
 }
 
 func safeHasTraceClaim(callback TraceClaimFunc, ctx context.Context, traceID oteltrace.TraceID) (claimed bool) {
@@ -324,6 +339,25 @@ func safeHasTraceClaim(callback TraceClaimFunc, ctx context.Context, traceID ote
 	return callback(ctx, traceID)
 }
 
+func safeShouldExportSpan(
+	filter func(sdktrace.ReadOnlySpan) bool,
+	span sdktrace.ReadOnlySpan,
+	final bool,
+) (export bool) {
+	defer func() {
+		if recover() == nil {
+			return
+		}
+		if final {
+			diagnostic.Report("span export filter panicked; span dropped")
+		} else {
+			diagnostic.Report("span export filter panicked during application-root classification; root marker omitted")
+		}
+		export = false
+	}()
+	return filter(span)
+}
+
 func isAppRootEligible(span sdktrace.ReadOnlySpan) bool {
 	if !span.Parent().IsValid() {
 		return true
@@ -332,29 +366,47 @@ func isAppRootEligible(span sdktrace.ReadOnlySpan) bool {
 	return span.InstrumentationScope().Name != "litellm" || span.Name() != "raw_gen_ai_request"
 }
 
-// ShouldExport applies the Langfuse v4 smart default filter.
-func ShouldExport(span sdktrace.ReadOnlySpan) bool {
-	for _, item := range span.Attributes() {
-		key := string(item.Key)
-		if key == lfattr.ObservationTypeKey || strings.HasPrefix(key, "gen_ai.") {
-			return true
-		}
-	}
+// IsDefaultExportSpan applies the Langfuse v4 smart default filter.
+func IsDefaultExportSpan(span sdktrace.ReadOnlySpan) bool {
+	return IsLangfuseSpan(span) || IsGenAISpan(span) || IsKnownLLMInstrumentor(span)
+}
 
-	scope := span.InstrumentationScope().Name
-	for _, prefix := range knownLLMInstrumentationScopePrefixes {
-		if scope == prefix || strings.HasPrefix(scope, prefix+".") {
+// IsLangfuseSpan reports whether span was created by this SDK's tracer.
+func IsLangfuseSpan(span sdktrace.ReadOnlySpan) bool {
+	return span.InstrumentationScope().Name == lfattr.TracerName
+}
+
+// IsGenAISpan reports whether span has an OpenTelemetry GenAI semantic
+// convention attribute under gen_ai.*.
+func IsGenAISpan(span sdktrace.ReadOnlySpan) bool {
+	for _, item := range span.Attributes() {
+		if strings.HasPrefix(string(item.Key), "gen_ai.") {
 			return true
 		}
 	}
 	return false
 }
 
-// The entries after this SDK's own scope are derived from langfuse-python's
-// default span filter at commit 25257a5 (research snapshot 2026-07-16). See
-// THIRD_PARTY_NOTICES.md. Prefix matching is namespace-aware.
+// IsKnownLLMInstrumentor reports whether span comes from a known LLM
+// instrumentation scope.
+func IsKnownLLMInstrumentor(span sdktrace.ReadOnlySpan) bool {
+	scope := span.InstrumentationScope().Name
+	for _, prefix := range knownLLMInstrumentationScopePrefixes {
+		// The generic "ai" scope is exact-only, matching the TypeScript SDK;
+		// every named instrumentation namespace also admits descendants.
+		if scope == prefix || prefix != "ai" && strings.HasPrefix(scope, prefix+".") {
+			return true
+		}
+	}
+	return false
+}
+
+// This list is the union of the official Langfuse Python SDK at
+// 73b5c028d2757d8960b3a468bd80c9ef99b52e74 and TypeScript SDK at
+// a4ef9f2b55da5576fe66be4a6c026268ae9656c5, verified 2026-08-14. The Go
+// SDK's langfuse-sdk.go scope is handled by IsLangfuseSpan before this list.
+// See THIRD_PARTY_NOTICES.md. Prefix matching is namespace-aware.
 var knownLLMInstrumentationScopePrefixes = [...]string{
-	lfattr.TracerName,
 	"langfuse-sdk",
 	"agent_framework",
 	"autogen-core",
@@ -366,10 +418,13 @@ var knownLLMInstrumentationScopePrefixes = [...]string{
 	"opentelemetry.instrumentation.agno",
 	"opentelemetry.instrumentation.alephalpha",
 	"opentelemetry.instrumentation.anthropic",
+	"opentelemetry.instrumentation.aws_bedrock",
 	"opentelemetry.instrumentation.bedrock",
 	"opentelemetry.instrumentation.cohere",
 	"opentelemetry.instrumentation.crewai",
+	"opentelemetry.instrumentation.gemini",
 	"opentelemetry.instrumentation.google_generativeai",
+	"opentelemetry.instrumentation.google_genai",
 	"opentelemetry.instrumentation.groq",
 	"opentelemetry.instrumentation.haystack",
 	"opentelemetry.instrumentation.langchain",
@@ -384,6 +439,7 @@ var knownLLMInstrumentationScopePrefixes = [...]string{
 	"opentelemetry.instrumentation.together",
 	"opentelemetry.instrumentation.transformers",
 	"opentelemetry.instrumentation.vertexai",
+	"opentelemetry.instrumentation.vertex_ai",
 	"opentelemetry.instrumentation.voyageai",
 	"opentelemetry.instrumentation.watsonx",
 	"opentelemetry.instrumentation.writer",

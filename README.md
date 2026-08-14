@@ -288,6 +288,21 @@ cfg.TracerProvider = existingProvider
 lf, err := langfuse.New(ctx, cfg)
 ```
 
+`gen_ai.*` is the OpenTelemetry GenAI semantic-convention namespace. To
+replace the default policy, set `ShouldExportSpan` before calling `New`; compose with
+`IsDefaultExportSpan` when extending it:
+
+```go
+cfg.ShouldExportSpan = func(span sdktrace.ReadOnlySpan) bool {
+	return langfuse.IsDefaultExportSpan(span) || span.InstrumentationScope().Name == "my.framework"
+}
+```
+
+The filter is a Langfuse export decision, not a sanitizer and not a filter for
+other processors on the shared provider. Use the isolated default mode when
+SDK observations or propagated Langfuse attributes must not reach another
+backend.
+
 | Behavior | Isolated provider | Borrowed provider |
 | --- | --- | --- |
 | Provider owner | SDK client | Application |
@@ -297,6 +312,9 @@ lf, err := langfuse.New(ctx, cfg)
 | Span limits | Fixed SDK-safe limits; ambient `OTEL_SPAN_*` ignored | Caller limits remain authoritative |
 | `Client.Shutdown` | Stops owned provider resources | Stops and unregisters only the SDK's processor |
 | Global OTel provider | Never replaced | Never replaced |
+
+The table describes the default filter. A custom `ShouldExportSpan` is a full
+override and can also reject SDK observations.
 
 Neither mode ever changes the global OpenTelemetry provider. Borrowed-mode
 lifecycle and the one-client-per-provider rule are covered in the

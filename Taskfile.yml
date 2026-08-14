@@ -3,7 +3,7 @@ version: "3"
 
 vars:
   GOLANGCI_LINT_VERSION: 2.9.0
-  GOVULNCHECK_VERSION: 1.1.4
+  GOVULNCHECK_VERSION: 1.7.0
 
 tasks:
   install:golangci-lint:
@@ -45,10 +45,11 @@ tasks:
       - go test -race -mod=readonly {{.CLI_ARGS | default "./..."}}
 
   build:
-    desc: Compile examples and the opt-in live test suite
+    desc: Compile examples and run credential-free live read-back tests
     cmds:
       - go build -mod=readonly ./examples/...
       - go test -tags=live -run='^$' -mod=readonly ./...
+      - go test -tags=live -run='^TestLiveReadback' -mod=readonly .
 
   readme:check:
     desc: Compile the standalone README quickstart
@@ -74,7 +75,7 @@ tasks:
       - test -f LICENSE
       - grep -q "Apache License" LICENSE
       - test "$(go mod edit -json | jq -r .Go)" = "1.25.0"
-      - test "$(go mod edit -json | jq -r .Toolchain)" = "go1.25.12"
+      - test "$(go mod edit -json | jq -r .Toolchain)" = "go1.25.13"
 
   contrib:sync:
     desc: Mirror the wiretap package from contrib/openai into contrib/googlegenai

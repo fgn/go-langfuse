@@ -23,6 +23,10 @@ variables:
 | `MaxQueueSize` | Bounds ended spans buffered for export. `0` selects the default 2048; negative values fail validation in `New` |
 | `BlockOnQueueFull` | Opts into blocking backpressure when the queue is full instead of the default drop-on-full |
 
+In borrowed-provider mode, `Config.ShouldExportSpan` replaces the default
+Langfuse content filter. Set it before calling `New`. The callback contract and
+composition helpers are described under [current limitations](#current-limitations).
+
 For an isolated provider, an empty `Config.ServiceName` preserves the standard
 OpenTelemetry resource (including `OTEL_SERVICE_NAME`). Set `ServiceName` only
 when an explicit SDK-local override is desired. A borrowed provider always
@@ -383,8 +387,15 @@ different kinds of work different rates in one process.
   remains authoritative, and spans it rejects cannot be recovered by the SDK.
   Smart filtering is an export selection step, not a sampler.
 - The default smart filter exports SDK observations, spans with `gen_ai.*`
-  attributes, known LLM instrumentation scopes, and required application roots.
-  Unrelated HTTP, database, and logging spans are excluded by default.
+  attributes, and known LLM instrumentation scopes. Unrelated HTTP, database,
+  and logging spans are excluded by default.
+- `Config.ShouldExportSpan` is a full override of that content filter. The
+  exported `IsDefaultExportSpan`, `IsLangfuseSpan`, `IsGenAISpan`, and
+  `IsKnownLLMInstrumentor` helpers support composition. Sampling, lifecycle,
+  and project-key isolation remain mandatory gates. The callback can run at
+  span start and end; it must be concurrency-safe, side-effect-free, and
+  non-blocking. A panic omits root classification at start and rejects export
+  at end without including the panic value in diagnostics.
 - Filtering cannot reconstruct an unexported parent. Application-root detection
   follows the official SDKs' start-time, direct-parent expectation; late-added
   AI attributes and filtered middle spans can therefore create an additional
@@ -399,8 +410,7 @@ different kinds of work different rates in one process.
   and diagnosed without including their payload.
 - Batch export improves application latency but cannot survive an abrupt
   process exit. Graceful shutdown is required.
-- Custom filters, export-all mode, multiple projects on one provider,
-  datasets, and administrative APIs remain out of scope. Tail sampling
-  (keep-all-errors) is not provided: the outcome is unknown when the trace
+- Multiple projects on one provider, datasets, and administrative APIs remain
+  out of scope. Tail sampling (keep-all-errors) is not provided: the outcome is unknown when the trace
   root starts; use `WithSampleRate(ctx, 1)` for requests known to matter up
   front.

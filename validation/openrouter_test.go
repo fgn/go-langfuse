@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	openaigo "github.com/openai/openai-go"
-	"github.com/openai/openai-go/option"
+	openaigo "github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 
 	langfuseopenai "github.com/fgn/go-langfuse/contrib/openai"
 )

@@ -782,10 +782,10 @@ func assertObservationWireEnvelope(t *testing.T, span wireSpan) {
 		"service.name":           wireService,
 		"telemetry.sdk.language": "go",
 		"telemetry.sdk.name":     "opentelemetry",
-		"telemetry.sdk.version":  "1.44.0",
+		"telemetry.sdk.version":  "1.45.0",
 	})
-	if span.resourceSchemaURL != "https://opentelemetry.io/schemas/1.41.0" {
-		t.Fatalf("resource schema URL = %q, want OTel 1.41.0 schema", span.resourceSchemaURL)
+	if span.resourceSchemaURL != "https://opentelemetry.io/schemas/1.43.0" {
+		t.Fatalf("resource schema URL = %q, want OTel 1.43.0 schema", span.resourceSchemaURL)
 	}
 	if span.scope == nil {
 		t.Fatal("OTLP ScopeSpans.scope is nil")

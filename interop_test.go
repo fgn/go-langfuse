@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -147,6 +148,166 @@ func TestBorrowedProviderFiltersAtEndForThirdPartySpans(t *testing.T) {
 		t.Fatalf("exported spans = %v, want only late-gen-ai", sortedInteropSpanNames(spans))
 	}
 	assertInteropMissingAttribute(t, spans["late-gen-ai"], lfattr.AppRootKey)
+}
+
+func TestBorrowedProviderCustomFilterOverridesDefaultWithoutBypassingProjectIsolation(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(func() { shutdownProvider(t, provider) })
+	client := newInteropClient(t, receiver, Config{
+		TracerProvider: provider,
+		ShouldExportSpan: func(span sdktrace.ReadOnlySpan) bool {
+			return span.Name() == "custom-keep" || span.Name() == "foreign-project"
+		},
+	})
+	t.Cleanup(func() { shutdownClient(t, client) })
+
+	tracer := provider.Tracer("application")
+	_, customKeep := tracer.Start(context.Background(), "custom-keep")
+	customKeep.End()
+	_, defaultGenAI := tracer.Start(
+		context.Background(),
+		"default-gen-ai",
+		oteltrace.WithAttributes(attribute.String("gen_ai.request.model", "gpt-5")),
+	)
+	defaultGenAI.End()
+
+	foreignProjectTracer := provider.Tracer(
+		lfattr.TracerName,
+		oteltrace.WithInstrumentationAttributes(attribute.String("public_key", "pk-other")),
+	)
+	_, foreignProject := foreignProjectTracer.Start(context.Background(), "foreign-project")
+	foreignProject.End()
+
+	flushClient(t, client)
+	spans := interopSpanMap(t, receiver)
+	if len(spans) != 1 || spans["custom-keep"] == nil {
+		t.Fatalf("exported spans = %v, want only custom-keep", sortedInteropSpanNames(spans))
+	}
+}
+
+func TestBorrowedProviderCustomFilterPanicIsPayloadFreeAndFailsClosed(t *testing.T) {
+	diagnostics := captureRootDiagnostics(t)
+	const panicPayload = "FILTER-PANIC-private-value"
+
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
+	t.Cleanup(func() { shutdownProvider(t, provider) })
+	client := newInteropClient(t, receiver, Config{
+		TracerProvider: provider,
+		ShouldExportSpan: func(sdktrace.ReadOnlySpan) bool {
+			panic(panicPayload)
+		},
+	})
+	t.Cleanup(func() { shutdownClient(t, client) })
+
+	_, span := provider.Tracer("application").Start(context.Background(), "panic-filter")
+	span.End()
+	flushClient(t, client)
+
+	if spans := interopAllSpans(receiver); len(spans) != 0 {
+		t.Fatalf("exported spans = %v, want none", interopProtoSpanNames(spans))
+	}
+	assertDiagnosticCount(t, diagnostics, "span export filter panicked", 2)
+	for _, message := range diagnostics.snapshot() {
+		if strings.Contains(message, panicPayload) {
+			t.Fatalf("diagnostic exposed panic payload %q: %q", panicPayload, message)
+		}
+	}
+}
+
+func TestBorrowedProviderStartFilterResultControlsTraceClaim(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		panicParent bool
+	}{
+		{name: "rejected parent"},
+		{name: "panicking parent", panicParent: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if test.panicParent {
+				captureRootDiagnostics(t)
+			}
+			receiver := otlpreceiver.New()
+			t.Cleanup(receiver.Close)
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
+			t.Cleanup(func() { shutdownProvider(t, provider) })
+			client := newInteropClient(t, receiver, Config{
+				TracerProvider: provider,
+				ShouldExportSpan: func(span sdktrace.ReadOnlySpan) bool {
+					if span.Name() == "filtered-parent" {
+						if test.panicParent {
+							panic("private-parent-filter-payload")
+						}
+						return false
+					}
+					return span.Name() == "accepted-child"
+				},
+			})
+			t.Cleanup(func() { shutdownClient(t, client) })
+
+			parentCtx, parent := client.StartObservation(
+				context.Background(),
+				"filtered-parent",
+				TypeSpan,
+				ObservationAttributes{},
+			)
+			_, child := client.StartObservation(
+				parentCtx,
+				"accepted-child",
+				TypeSpan,
+				ObservationAttributes{},
+			)
+			child.End()
+			parent.End()
+			flushClient(t, client)
+
+			spans := interopSpanMap(t, receiver)
+			if len(spans) != 1 || spans["accepted-child"] == nil {
+				t.Fatalf("exported spans = %v, want only accepted-child", sortedInteropSpanNames(spans))
+			}
+			assertInteropBoolAttribute(t, spans["accepted-child"], lfattr.AppRootKey, true)
+		})
+	}
+}
+
+func TestBorrowedProviderStartAcceptedEndRejectedMarkerReachesGenericExporter(t *testing.T) {
+	receiver := otlpreceiver.New()
+	t.Cleanup(receiver.Close)
+	genericExporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(genericExporter)),
+	)
+	t.Cleanup(func() { shutdownProvider(t, provider) })
+	client := newInteropClient(t, receiver, Config{
+		TracerProvider: provider,
+		ShouldExportSpan: func(span sdktrace.ReadOnlySpan) bool {
+			for _, item := range span.Attributes() {
+				if item.Key == "test.reject_at_end" && item.Value.AsBool() {
+					return false
+				}
+			}
+			return true
+		},
+	})
+	t.Cleanup(func() { shutdownClient(t, client) })
+
+	_, span := provider.Tracer("application").Start(context.Background(), "start-only")
+	span.SetAttributes(attribute.Bool("test.reject_at_end", true))
+	span.End()
+	flushClient(t, client)
+
+	if spans := interopAllSpans(receiver); len(spans) != 0 {
+		t.Fatalf("Langfuse spans = %v, want none after end-time rejection", interopProtoSpanNames(spans))
+	}
+	genericSpans := interopStubMap(t, genericExporter.GetSpans())
+	if len(genericSpans) != 1 || genericSpans["start-only"].Name == "" {
+		t.Fatalf("generic spans = %v, want start-only", sortedInteropStubNames(genericSpans))
+	}
+	assertInteropStubBoolAttribute(t, genericSpans["start-only"], lfattr.AppRootKey, true)
 }
 
 func TestBorrowedProviderCoexistsWithGenericExporterAndAnnotatesEverySpan(t *testing.T) {
@@ -695,6 +856,14 @@ func assertInteropStubStringAttribute(t *testing.T, span tracetest.SpanStub, key
 	value, found := interopStubAttribute(span, key)
 	if !found || value.AsString() != want {
 		t.Fatalf("generic span %q attribute %q = (%q, %v), want %q", span.Name, key, value.AsString(), found, want)
+	}
+}
+
+func assertInteropStubBoolAttribute(t *testing.T, span tracetest.SpanStub, key string, want bool) {
+	t.Helper()
+	value, found := interopStubAttribute(span, key)
+	if !found || value.AsBool() != want {
+		t.Fatalf("generic span %q attribute %q = (%v, %v), want %v", span.Name, key, value.AsBool(), found, want)
 	}
 }
 
