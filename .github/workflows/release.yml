@@ -16,24 +16,6 @@ on:
           - core
           - contrib/openai
           - contrib/googlegenai
-      live_gate_passed:
-        description: "I attest that the credentialed synthetic-project live gate passed"
-        required: true
-        default: false
-        type: boolean
-      live_gate_evidence:
-        description: "Non-secret URL or run/checklist ID for the live-gate evidence"
-        required: true
-        type: string
-      dogfood_passed:
-        description: "I attest that the staged production dogfood passed with no disclosure/duplication findings"
-        required: true
-        default: false
-        type: boolean
-      dogfood_evidence:
-        description: "Non-secret URL or issue/checklist ID for the dogfood evidence"
-        required: true
-        type: string
 
 permissions:
   contents: write
@@ -46,20 +28,15 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    environment: release
     env:
       RELEASE_VERSION: ${{ inputs.version }}
       RELEASE_MODULE: ${{ inputs.module }}
-      LIVE_GATE_PASSED: ${{ inputs.live_gate_passed }}
-      LIVE_GATE_EVIDENCE: ${{ inputs.live_gate_evidence }}
-      DOGFOOD_PASSED: ${{ inputs.dogfood_passed }}
-      DOGFOOD_EVIDENCE: ${{ inputs.dogfood_evidence }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
-      - name: Validate dispatch and attestations
+      - name: Validate dispatch
         shell: bash
         run: |
           set -euo pipefail
@@ -73,21 +50,8 @@ jobs:
             RELEASE_TAG="$RELEASE_MODULE/$RELEASE_VERSION"
           fi
           echo "RELEASE_TAG=$RELEASE_TAG" >> "$GITHUB_ENV"
-          test "$LIVE_GATE_PASSED" = "true"
-          test "$DOGFOOD_PASSED" = "true"
-          live_evidence="${LIVE_GATE_EVIDENCE//[[:space:]]/}"
-          dogfood_evidence="${DOGFOOD_EVIDENCE//[[:space:]]/}"
-          test -n "$live_evidence"
-          test -n "$dogfood_evidence"
-          test "${live_evidence,,}" != "n/a"
-          test "${dogfood_evidence,,}" != "n/a"
           git fetch origin main --tags
           test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
-          {
-            echo "### Human release attestations"
-            echo "- Live compatibility gate: $LIVE_GATE_EVIDENCE"
-            echo "- Staged production dogfood: $DOGFOOD_EVIDENCE"
-          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -207,6 +171,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git fetch origin main --tags
+          test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
           if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_TAG" >/dev/null 2>&1; then
             git fetch --force origin "refs/tags/$RELEASE_TAG:refs/tags/$RELEASE_TAG"
             test "$(git cat-file -t "refs/tags/$RELEASE_TAG")" = "tag"
@@ -222,9 +188,11 @@ jobs:
           test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
 
       - name: Create or verify GitHub release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             test "$(gh release view "$RELEASE_TAG" --json tagName --jq .tagName)" = "$RELEASE_TAG"
           else

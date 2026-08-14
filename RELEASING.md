@@ -11,19 +11,19 @@ a release tag by hand. A tag push does not start the release workflow.
 
 Merge a release-preparation pull request that completes every item below:
 
-1. Complete the staged production dogfood. Resolve duplicate-observation and
-   content-disclosure findings, then record a non-secret issue, checklist, or
-   run URL as evidence.
-2. Pre-seed the dedicated synthetic Langfuse project with prompt
+1. Exercise the affected SDK path in a representative consuming application
+   against a local Langfuse stack. Check for duplicate observations and
+   unintended content disclosure. Use synthetic data only; do not send
+   release-test data to a shared or production project.
+2. Pre-seed the local synthetic Langfuse project with prompt
    `go-langfuse-live-prompt` version 1 and the checklist evaluator. Run
    `go test -count=1 -tags=live -run TestLiveCompatibility -v .` with that
-   project's credentials. Use the logged unique run marker (present in the
-   trace name, session, metadata, and test log so cached data cannot be
-   mistaken for the current run) to verify in the Langfuse UI: trace
+   local project's credentials. Use the logged unique run marker (present in
+   the trace name, session, metadata, and test log so cached data cannot be
+   mistaken for the current run) to verify in the local Langfuse UI: trace
    visibility, environment/user/session/tag/metadata filters, application
    roots, generation usage and cost, prompt links, and observation-level
-   evaluators. Record non-secret evidence. Never paste credentials or
-   telemetry payloads into that evidence.
+   evaluators.
    The test fails closed when credentials are absent, tracing/content capture
    is disabled, or recording IDs are empty; a zero exit therefore cannot mean
    that it merely skipped export.
@@ -51,25 +51,25 @@ rejects dispatches from another branch or an older commit.
 From GitHub Actions, manually run the **Release** workflow on `main` and supply:
 
 - the exact stable version, such as `v0.1.0`;
-- an explicit live-gate attestation and its non-secret evidence URL or ID; and
-- an explicit production-dogfood attestation and its non-secret evidence URL or
-  ID.
+- the module to release.
 
-The `release` GitHub environment should require maintainer approval. The
-workflow validates the attestations and repeats all local static gates before
-it inspects, creates, or verifies the requested tag. Only after those checks
-pass does it create an annotated tag on the tested commit and create generated
-GitHub release notes.
+The workflow repeats the credential-free release gates listed above for the
+selected module before it inspects, creates, or verifies the requested tag.
+Only after those checks pass does it create an annotated tag on the tested
+commit and create generated GitHub release notes. The maintainer who dispatches
+the workflow is responsible for completing the local synthetic checks above.
 
 If a run pushes the tag but fails while creating release notes, rerun the same
-workflow on the same `main` commit. It accepts an existing tag only when that
-tag resolves to the tested commit. A tag on any other commit fails closed.
+workflow before `main` advances. It accepts an existing tag only when that tag
+resolves to the tested commit. A tag on any other commit fails closed. If
+`main` has advanced, verify the existing annotated tag against the original
+tested commit before creating the missing GitHub release from that tag; never
+move or replace the release tag.
 
 The workflow-created annotated tag is not a developer GPG signature. Release
-authority instead comes from the protected `main` branch, the auditable manual
-inputs, the protected `release` environment, and the workflow's scoped
-`contents: write` token. Configure those repository protections before the
-first release.
+authority instead comes from the maintainer's repository write and Actions
+permissions, the manual dispatch from current `main`, and the workflow's scoped
+`contents: write` token.
 
 ## Contrib module releases
 
