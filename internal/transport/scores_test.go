@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -338,7 +339,7 @@ func TestScoresDropWhenQueueIsFull(t *testing.T) {
 	client.capacity = 1
 
 	// The first score occupies the dispatcher, the second fills the queue,
-	// and the third must be dropped without blocking or erroring.
+	// and the third must be rejected without blocking.
 	if err := client.Enqueue(context.Background(), []byte(`{"name":"a"}`), "e"); err != nil {
 		t.Fatalf("Enqueue(a) error = %v", err)
 	}
@@ -350,8 +351,8 @@ func TestScoresDropWhenQueueIsFull(t *testing.T) {
 	if err := client.Enqueue(context.Background(), []byte(`{"name":"b"}`), "e"); err != nil {
 		t.Fatalf("Enqueue(b) error = %v", err)
 	}
-	if err := client.Enqueue(context.Background(), []byte(`{"name":"c"}`), "e"); err != nil {
-		t.Fatalf("Enqueue(c) on a full queue error = %v, want nil drop", err)
+	if err := client.Enqueue(context.Background(), []byte(`{"name":"c"}`), "e"); !errors.Is(err, ErrScoreQueueFull) {
+		t.Fatalf("Enqueue(c) on a full queue error = %v, want ErrScoreQueueFull", err)
 	}
 	releaseServer()
 	flushScores(t, client)

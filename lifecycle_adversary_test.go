@@ -174,6 +174,10 @@ func TestShutdownDeadlineIsNotBlockedByBackgroundFlush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
+	t.Cleanup(func() {
+		server.unblock()
+		_ = client.processor.Shutdown(context.Background())
+	})
 	_, observation := client.StartObservation(
 		context.Background(),
 		"stalled-flush",
@@ -220,6 +224,77 @@ func TestShutdownDeadlineIsNotBlockedByBackgroundFlush(t *testing.T) {
 	}
 	if !errors.Is(shutdownErr, context.DeadlineExceeded) {
 		t.Errorf("Shutdown() error = %v, want context deadline exceeded", shutdownErr)
+	}
+	canceledCtx, cancelProcessor := context.WithCancel(context.Background())
+	cancelProcessor()
+	if err := client.processor.ForceFlush(canceledCtx); err != nil {
+		t.Errorf("processor ForceFlush() after Client.Shutdown = %v, want nil because client teardown stopped the processor", err)
+	}
+}
+
+func TestConcurrentShutdownReportsInProgressAndReplaysSuccess(t *testing.T) {
+	server := newBlockingOTLPServer()
+	t.Cleanup(server.close)
+	client, err := New(context.Background(), Config{
+		BaseURL: server.URL(), PublicKey: "pk-concurrent-shutdown", SecretKey: "sk-concurrent-shutdown",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_, observation := client.StartObservation(context.Background(), "concurrent-shutdown", TypeSpan, ObservationAttributes{})
+	observation.End()
+
+	first := make(chan error, 1)
+	go func() { first <- client.Shutdown(context.Background()) }()
+	select {
+	case <-server.requestArrived:
+	case <-time.After(time.Second):
+		t.Fatal("Shutdown never reached the blocking OTLP server")
+	}
+	if err := client.Shutdown(context.Background()); !errors.Is(err, ErrShutdownInProgress) {
+		t.Fatalf("concurrent Shutdown() error = %v, want ErrShutdownInProgress", err)
+	}
+	server.unblock()
+	select {
+	case err := <-first:
+		if err != nil {
+			t.Fatalf("owning Shutdown() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("owning Shutdown did not return after the server was released")
+	}
+	if err := client.Shutdown(context.Background()); err != nil {
+		t.Fatalf("repeated successful Shutdown() error = %v", err)
+	}
+}
+
+func TestShutdownReentryReturnsInProgressWithoutDeadlock(t *testing.T) {
+	client, err := New(context.Background(), Config{
+		BaseURL: "https://cloud.langfuse.com", PublicKey: "pk-reentrant-shutdown", SecretKey: "sk-reentrant-shutdown",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	reentrant := &shutdownOnFlushProcessor{client: client, result: make(chan error, 1)}
+	client.provider.RegisterSpanProcessor(reentrant)
+
+	returned := make(chan error, 1)
+	go func() { returned <- client.Shutdown(context.Background()) }()
+	select {
+	case err := <-returned:
+		if err != nil {
+			t.Fatalf("owning Shutdown() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Shutdown deadlocked when ForceFlush re-entered it")
+	}
+	select {
+	case err := <-reentrant.result:
+		if !errors.Is(err, ErrShutdownInProgress) {
+			t.Fatalf("re-entrant Shutdown() error = %v, want ErrShutdownInProgress", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("re-entrant Shutdown result was not recorded")
 	}
 }
 
@@ -295,6 +370,23 @@ type shutdownOnStartProcessor struct {
 	once   sync.Once
 	err    error
 }
+
+type shutdownOnFlushProcessor struct {
+	client *Client
+	result chan error
+	once   sync.Once
+}
+
+func (*shutdownOnFlushProcessor) OnStart(context.Context, sdktrace.ReadWriteSpan) {}
+
+func (*shutdownOnFlushProcessor) OnEnd(sdktrace.ReadOnlySpan) {}
+
+func (p *shutdownOnFlushProcessor) ForceFlush(context.Context) error {
+	p.once.Do(func() { p.result <- p.client.Shutdown(context.Background()) })
+	return nil
+}
+
+func (*shutdownOnFlushProcessor) Shutdown(context.Context) error { return nil }
 
 func (p *shutdownOnStartProcessor) OnStart(context.Context, sdktrace.ReadWriteSpan) {
 	p.once.Do(func() {

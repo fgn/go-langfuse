@@ -174,6 +174,32 @@ func TestBodyCloseBeforeTerminalIsClosedEarly(t *testing.T) {
 	}
 }
 
+func TestBodyFinalizerCanReenterClose(t *testing.T) {
+	call := &scriptedCall{}
+	var wrapper *bodyWrapper
+	finalized := make(chan struct{})
+	wrapper = newBodyWrapper(t.Context(), io.NopCloser(strings.NewReader(`{"ok":true}`)), call,
+		modeUnary, 1<<16, 200, 1<<16, &atomic.Bool{}, func(Outcome) {
+			_ = wrapper.Close()
+			close(finalized)
+		})
+	returned := make(chan struct{})
+	go func() {
+		_, _ = io.ReadAll(wrapper)
+		close(returned)
+	}()
+	select {
+	case <-finalized:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("finalizer deadlocked when it re-entered body Close")
+	}
+	select {
+	case <-returned:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("response read did not return after re-entrant finalization")
+	}
+}
+
 // TestBodyCausalCancellation locks the conservative rule: canceled
 // requires the ordered observation plus a compatible error.
 func TestBodyCausalCancellation(t *testing.T) {

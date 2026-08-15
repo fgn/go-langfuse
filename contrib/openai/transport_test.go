@@ -12,11 +12,10 @@ import (
 	"testing"
 	"time"
 
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	collectortracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
 	tracepb "go.opentelemetry.io/proto/otlp/trace/v1"
 	"google.golang.org/protobuf/proto"
-
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/fgn/go-langfuse"
 	langfuseopenai "github.com/fgn/go-langfuse/contrib/openai"
@@ -28,6 +27,28 @@ type otlpReceiver struct {
 	server *httptest.Server
 	spans  chan *tracepb.Span
 }
+
+type panickingOnEndProcessor struct{}
+
+func (panickingOnEndProcessor) OnStart(context.Context, sdktrace.ReadWriteSpan) {}
+
+func (panickingOnEndProcessor) OnEnd(sdktrace.ReadOnlySpan) { panic("application processor panic") }
+
+func (panickingOnEndProcessor) ForceFlush(context.Context) error { return nil }
+
+func (panickingOnEndProcessor) Shutdown(context.Context) error { return nil }
+
+type panickingOnStartProcessor struct{}
+
+func (panickingOnStartProcessor) OnStart(context.Context, sdktrace.ReadWriteSpan) {
+	panic("application processor panic")
+}
+
+func (panickingOnStartProcessor) OnEnd(sdktrace.ReadOnlySpan) {}
+
+func (panickingOnStartProcessor) ForceFlush(context.Context) error { return nil }
+
+func (panickingOnStartProcessor) Shutdown(context.Context) error { return nil }
 
 func newOTLPReceiver(t *testing.T) *otlpReceiver {
 	t.Helper()
@@ -595,6 +616,42 @@ func TestUnrecognizedRoutesPassThrough(t *testing.T) {
 	receiver.expectNone(t)
 }
 
+func TestResponseFinalizationContainsApplicationProcessorPanic(t *testing.T) {
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSpanProcessor(panickingOnEndProcessor{}),
+	)
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	receiver := newOTLPReceiver(t)
+	lf := newTestClient(t, receiver, func(cfg *langfuse.Config) { cfg.TracerProvider = provider })
+	server := chatServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, chatResponse)
+	})
+	client := &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
+	resp := postChat(t, client, server.URL, context.Background())
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+}
+
+func TestObservationStartContainsApplicationProcessorPanic(t *testing.T) {
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSpanProcessor(panickingOnStartProcessor{}),
+	)
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	receiver := newOTLPReceiver(t)
+	lf := newTestClient(t, receiver, func(cfg *langfuse.Config) { cfg.TracerProvider = provider })
+	server := chatServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, chatResponse)
+	})
+	client := &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
+	resp := postChat(t, client, server.URL, context.Background())
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+}
+
 func TestTelemetryPartialOnMalformed2xx(t *testing.T) {
 	receiver := newOTLPReceiver(t)
 	lf := newTestClient(t, receiver, nil)
@@ -749,48 +806,6 @@ func TestNoOpFastPathForwardsExactRequestIdentity(t *testing.T) {
 	replayed, _ := io.ReadAll(replay)
 	if string(replayed) != body {
 		t.Fatalf("original GetBody altered: %q", replayed)
-	}
-}
-
-// TestDuplicateBorrowedDisabledIsNoOp locks the remaining no-op state:
-// a second client on an already-reserved borrowed provider is disabled
-// and must take the fast path.
-func TestDuplicateBorrowedDisabledIsNoOp(t *testing.T) {
-	provider := sdktrace.NewTracerProvider()
-	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = provider.Shutdown(ctx)
-	})
-	receiver := newOTLPReceiver(t)
-	first := newTestClient(t, receiver, func(cfg *langfuse.Config) { cfg.TracerProvider = provider })
-	_ = first
-	duplicate, err := langfuse.New(context.Background(), langfuse.Config{
-		BaseURL: receiver.server.URL, PublicKey: "pk-lf-test", SecretKey: "sk-lf-test",
-		TracerProvider: provider,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	target := chatServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, chatResponse)
-	})
-	req, err := http.NewRequest(http.MethodPost, target.URL+"/v1/chat/completions",
-		strings.NewReader(`{"model":"m","messages":[]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	check := &identityCheck{t: t, expected: req, inner: http.DefaultTransport}
-	resp, err := langfuseopenai.NewTransport(duplicate, check).RoundTrip(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
-	if check.calls != 1 {
-		t.Fatal("duplicate-disabled client did not take the fast path")
 	}
 }
 

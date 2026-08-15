@@ -39,10 +39,21 @@ const (
 	// is bounded; the transport's request-size limit splits or rejects
 	// oversized requests at export time.
 	defaultMaxQueueSize = 2048
+	maximumQueueSize    = 1 << 16
 	maxExportBatchSize  = 512
 	exportBatchTimeout  = 5 * time.Second
 	exportTimeout       = 30 * time.Second
 )
+
+// ErrTracerProviderInUse reports that another Langfuse client already owns
+// the Langfuse processor attachment for a borrowed tracer provider.
+var ErrTracerProviderInUse = errors.New("langfuse: tracer provider already has a Langfuse client")
+
+// ErrShutdownInProgress reports that another call is currently shutting down
+// the client. It prevents re-entrant shutdown callbacks from waiting on
+// themselves. Call Shutdown again after the owning call completes to receive
+// its stored result.
+var ErrShutdownInProgress = errors.New("langfuse: shutdown is in progress")
 
 // Client owns all Langfuse exporter, processor, and lifecycle state. Its zero
 // value is a safe no-op.
@@ -63,6 +74,9 @@ type Client struct {
 	stopped                 atomic.Bool
 	stoppedWarning          atomic.Bool
 	shutdownStarted         atomic.Bool
+	shutdownDone            chan struct{}
+	shutdownResultMu        sync.RWMutex
+	shutdownResult          error
 	borrowedRateWarning     atomic.Bool
 	scoreSuppressionWarning atomic.Bool
 }
@@ -149,8 +163,8 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if err := validateConfigString("service name", cfg.ServiceName, true); err != nil {
 		return nil, err
 	}
-	if cfg.MaxQueueSize < 0 {
-		return nil, errors.New("langfuse: max queue size must not be negative")
+	if cfg.MaxQueueSize < 0 || cfg.MaxQueueSize > maximumQueueSize {
+		return nil, fmt.Errorf("langfuse: max queue size must be within [0, %d]", maximumQueueSize)
 	}
 	if cfg.SampleRate != nil && !validSampleFraction(*cfg.SampleRate) {
 		return nil, errors.New("langfuse: sample rate must be finite and within [0, 1]")
@@ -171,6 +185,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		disableContentCapture: cfg.DisableContentCapture,
 		mask:                  cfg.Mask,
 		environment:           environment,
+		shutdownDone:          make(chan struct{}),
 	}
 	scores, err := transport.NewScoresClient(transportConfig)
 	if err != nil {
@@ -184,8 +199,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	client.prompts = newPromptCache(promptFetcher)
 	if cfg.TracerProvider != nil {
 		if !reserveBorrowedProvider(cfg.TracerProvider, client) {
-			diagnostic.Report("a Langfuse client is already attached to this tracer provider; duplicate client is disabled")
-			return &Client{disabled: true}, nil
+			return nil, ErrTracerProviderInUse
 		}
 		client.reserved = true
 		client.provider = cfg.TracerProvider
@@ -391,10 +405,15 @@ func (c *Client) Flush(ctx context.Context) error {
 // Shutdown permanently stops this Client after draining queued observations
 // and scores, bounded by ctx. In borrowed mode it shuts down the Langfuse
 // processor using ctx before unregistering it; the provider and all
-// unrelated processors remain owned by the application.
+// unrelated processors remain owned by the application. A concurrent or
+// re-entrant call returns [ErrShutdownInProgress]. After shutdown completes,
+// later calls return the first call's stored result.
 func (c *Client) Shutdown(ctx context.Context) error {
 	if c == nil || c.isDisabled() {
 		return nil
+	}
+	if c.shutdownStarted.Load() {
+		return c.currentShutdownResult()
 	}
 	if ctx == nil {
 		return errors.New("langfuse: shutdown context is nil")
@@ -404,7 +423,7 @@ func (c *Client) Shutdown(ctx context.Context) error {
 	// re-enter Shutdown. Re-entrant and concurrent calls return immediately;
 	// the call that wins this transition owns teardown and its result.
 	if !c.shutdownStarted.CompareAndSwap(false, true) {
-		return nil
+		return c.currentShutdownResult()
 	}
 	c.stopped.Store(true)
 	// Stop prompt admission and cancel prompt I/O before the potentially
@@ -412,14 +431,36 @@ func (c *Client) Shutdown(ctx context.Context) error {
 	// can start or keep running once shutdown has begun; the drain itself
 	// waits at the end alongside the score queue.
 	c.prompts.beginShutdown()
+	var result error
 	if c.owned {
 		flushErr := c.provider.ForceFlush(ctx)
-		shutdownErr := c.provider.Shutdown(ctx)
-		return errors.Join(flushErr, shutdownErr, c.scores.Shutdown(ctx), c.prompts.shutdown(ctx))
+		// Stop the processor directly before provider shutdown. The OTel provider
+		// marks itself shut down before it checks ctx, so an already-ended context
+		// can otherwise leave the batch worker running forever.
+		processorErr := c.processor.Shutdown(ctx)
+		providerErr := c.provider.Shutdown(ctx)
+		result = errors.Join(flushErr, processorErr, providerErr, c.scores.Shutdown(ctx), c.prompts.shutdown(ctx))
+	} else {
+		flushErr := c.processor.ForceFlush(ctx)
+		shutdownErr := c.processor.Shutdown(ctx)
+		c.provider.UnregisterSpanProcessor(c.processor)
+		c.releaseReservation()
+		result = errors.Join(flushErr, shutdownErr, c.scores.Shutdown(ctx), c.prompts.shutdown(ctx))
 	}
-	flushErr := c.processor.ForceFlush(ctx)
-	shutdownErr := c.processor.Shutdown(ctx)
-	c.provider.UnregisterSpanProcessor(c.processor)
-	c.releaseReservation()
-	return errors.Join(flushErr, shutdownErr, c.scores.Shutdown(ctx), c.prompts.shutdown(ctx))
+	c.shutdownResultMu.Lock()
+	c.shutdownResult = result
+	c.shutdownResultMu.Unlock()
+	close(c.shutdownDone)
+	return result
+}
+
+func (c *Client) currentShutdownResult() error {
+	select {
+	case <-c.shutdownDone:
+		c.shutdownResultMu.RLock()
+		defer c.shutdownResultMu.RUnlock()
+		return c.shutdownResult
+	default:
+		return ErrShutdownInProgress
+	}
 }

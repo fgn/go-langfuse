@@ -3,10 +3,12 @@ package langfuse_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +30,12 @@ type scoreWireReceiver struct {
 	mu       sync.Mutex
 	status   int
 	requests []scoreWireRequest
+}
+
+type panickingScoreMetadata struct{}
+
+func (panickingScoreMetadata) MarshalJSON() ([]byte, error) {
+	panic("score metadata marshal panic")
 }
 
 func (r *scoreWireReceiver) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -206,6 +214,135 @@ func TestScoreWireSubmitsAuthenticatedJSON(t *testing.T) {
 	if len(body) != len(want) {
 		t.Fatalf("score payload has %d fields, want %d: %v", len(body), len(want), body)
 	}
+}
+
+func TestRecordScoreContainsMetadataMarshalPanic(t *testing.T) {
+	client, receiver := newScoreWireClient(t, nil)
+	rating := 1.0
+	err := client.RecordScore(context.Background(), langfuse.Score{
+		Name: "panic-safe", SessionID: "s", NumericValue: &rating,
+		Metadata: map[string]any{"value": panickingScoreMetadata{}},
+	})
+	if err == nil {
+		t.Fatal("RecordScore() error = nil, want payload-free serialization error")
+	}
+	if strings.Contains(err.Error(), "score metadata marshal panic") {
+		t.Fatalf("RecordScore() error exposed panic payload: %v", err)
+	}
+	if got := len(receiver.all()); got != 0 {
+		t.Fatalf("serialization failure sent %d requests, want 0", got)
+	}
+}
+
+func TestScoreWireMasksCompleteMetadataOnce(t *testing.T) {
+	maskCalls := 0
+	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) {
+		config.Mask = func(value any) any {
+			maskCalls++
+			metadata, ok := value.(map[string]any)
+			if !ok || metadata["secret"] != "remove-me" || metadata["keep"] != "original" {
+				t.Fatalf("Mask value = %#v, want the complete score metadata map", value)
+			}
+			return map[string]any{"keep": "masked"}
+		}
+	})
+	rating := 1.0
+	if err := client.RecordScore(context.Background(), langfuse.Score{
+		Name: "masked", SessionID: "s", NumericValue: &rating,
+		Metadata: map[string]any{"secret": "remove-me", "keep": "original"},
+	}); err != nil {
+		t.Fatalf("RecordScore() error = %v", err)
+	}
+	flushClient(t, client)
+	if maskCalls != 1 {
+		t.Fatalf("Mask calls = %d, want 1", maskCalls)
+	}
+	_, body := scoreWireEvent(t, receiver.all()[0])
+	want := map[string]any{"keep": "masked"}
+	if got := body["metadata"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("score metadata = %#v, want %#v", got, want)
+	}
+}
+
+func TestScoreWireOmitsMetadataWhenMaskDoesNotReturnMap(t *testing.T) {
+	tests := []struct {
+		name string
+		mask func(any) any
+	}{
+		{name: "nil", mask: func(any) any { return nil }},
+		{name: "wrong type", mask: func(any) any { return "not metadata" }},
+		{name: "panic", mask: func(any) any { panic("mask secret") }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client, receiver := newScoreWireClient(t, func(config *langfuse.Config) {
+				config.Mask = test.mask
+			})
+			rating := 1.0
+			if err := client.RecordScore(context.Background(), langfuse.Score{
+				Name: "masked", SessionID: "s", NumericValue: &rating,
+				Metadata: map[string]any{"secret": "remove-me"},
+			}); err != nil {
+				t.Fatalf("RecordScore() error = %v", err)
+			}
+			flushClient(t, client)
+			_, body := scoreWireEvent(t, receiver.all()[0])
+			if metadata, exists := body["metadata"]; exists {
+				t.Fatalf("score metadata = %#v, want omitted", metadata)
+			}
+		})
+	}
+}
+
+func TestRecordScoreReportsFullQueue(t *testing.T) {
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseServer := func() { releaseOnce.Do(func() { close(release) }) }
+	arrived := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case arrived <- struct{}{}:
+		default:
+		}
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	t.Cleanup(releaseServer)
+	client, err := langfuse.New(context.Background(), langfuse.Config{
+		BaseURL: server.URL, PublicKey: "pk-full-score-queue", SecretKey: "sk-full-score-queue",
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = client.Shutdown(ctx)
+	})
+	rating := 1.0
+	record := func() error {
+		return client.RecordScore(context.Background(), langfuse.Score{
+			Name: "queue", SessionID: "s", NumericValue: &rating,
+		})
+	}
+	if err := record(); err != nil {
+		t.Fatalf("first RecordScore() error = %v", err)
+	}
+	select {
+	case <-arrived:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first score never reached the blocking server")
+	}
+	for index := range 256 {
+		if err := record(); err != nil {
+			t.Fatalf("RecordScore() filling slot %d error = %v", index, err)
+		}
+	}
+	if err := record(); !errors.Is(err, langfuse.ErrScoreQueueFull) {
+		t.Fatalf("RecordScore() on full queue error = %v, want ErrScoreQueueFull", err)
+	}
+	releaseServer()
 }
 
 func TestScoreWireTimestampAndConfigID(t *testing.T) {

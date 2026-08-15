@@ -5,6 +5,20 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-15
+
+- Return explicit errors when a score queue is full, when a borrowed tracer
+  provider already has a Langfuse client, and when `Observe` receives a nil
+  callback. Limit `Config.MaxQueueSize` to 65,536 spans so invalid
+  configuration cannot request an excessive allocation.
+- Make shutdown results precise. A concurrent or re-entrant call returns
+  `ErrShutdownInProgress`, and later calls return the first call's stored
+  result. Owned-provider shutdown now stops the batch processor even when its
+  context expires during the final flush.
+- Apply `Config.Mask` once to complete score metadata. Contain panics from the
+  masker and from caller-defined score metadata marshalers without exposing
+  panic values.
+
 ## [0.7.1] - 2026-08-15
 
 - Validate score targets and explicit data-type/value combinations before

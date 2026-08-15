@@ -25,8 +25,9 @@ Langfuse.
 - **Strict content privacy.** Exports only what you explicitly supply; a
   capture kill-switch and a masking hook cover input, output, and metadata.
 - **Safe by default.** Nil and disabled clients are true no-ops, zero
-  values are safe, lifecycle calls are idempotent, and telemetry failures
-  never become application failures.
+  values are safe, repeat lifecycle calls return a stable result, and
+  score validation and score-queue admission failures are explicit. Export
+  failures never escape observation calls.
 
 Datasets and administrative APIs are out of scope; use the Langfuse REST
 API for those. go-langfuse follows semantic versioning: until v1.0, minor
@@ -79,7 +80,9 @@ func run(ctx context.Context) error {
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = lf.Shutdown(shutdownCtx)
+		if err := lf.Shutdown(shutdownCtx); err != nil {
+			log.Printf("shut down Langfuse client: %v", err)
+		}
 	}()
 
 	ctx = lf.WithTraceAttributes(ctx, langfuse.TraceAttributes{
@@ -180,7 +183,8 @@ full pattern.
 `RecordScore` submits evaluations and user feedback. Validation is
 synchronous, so every returned error means the score was not accepted.
 Delivery is asynchronous with bounded retry, and `Flush`/`Shutdown` drain
-accepted scores:
+accepted scores. If the non-blocking score queue is full, `RecordScore`
+returns `ErrScoreQueueFull` and does not accept the score:
 
 ```go
 rating := float64(feedback.Rating)

@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"regexp"
 	"sync/atomic"
-
-	"go.opentelemetry.io/otel"
+	"time"
 
 	"github.com/fgn/go-langfuse"
+	"github.com/fgn/go-langfuse/internal/diagnostic"
 )
 
 // maxSSEEvent bounds one buffered SSE event; larger events abandon
@@ -73,12 +73,15 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	ctx := req.Context()
 	call, _ := callFromContext(ctx)
-	obsCtx, obs := t.lf.StartObservation(ctx, t.observationName(route, call), route.Type,
+	obsCtx, obs, started := t.startObservation(ctx, t.observationName(route, call), route.Type,
 		langfuse.ObservationAttributes{
 			Model:    route.Model,
 			Prompt:   call.Prompt,
 			Metadata: startMetadata(route, call),
 		})
+	if !started {
+		return t.base.RoundTrip(req)
+	}
 
 	// No-op fast path: a nil, zero, disabled, or shut-down client
 	// returns the no-op observation, identified by its documented
@@ -101,12 +104,12 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if !obs.Sampled() {
 		resp, err := t.base.RoundTrip(clone)
 		if err != nil || resp.Body == nil || resp.Body == http.NoBody {
-			obs.End()
+			safeEndAt(obs, time.Now())
 			return resp, err
 		}
 		resp.Body = newBodyWrapper(obsCtx, resp.Body, nil, modeIgnore, 0,
 			resp.StatusCode, 0, &atomic.Bool{},
-			func(outcome Outcome) { obs.EndAt(outcome.End) })
+			func(outcome Outcome) { safeEndAt(obs, outcome.End) })
 		return resp, nil
 	}
 
@@ -130,6 +133,21 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp.Body = newBodyWrapper(obsCtx, resp.Body, parser, mode, t.cfg.CaptureCap,
 		resp.StatusCode, maxSSEEvent, cancelObserved, finalize)
 	return resp, nil
+}
+
+func (t *Transport) startObservation(
+	ctx context.Context,
+	name string,
+	observationType langfuse.ObservationType,
+	attributes langfuse.ObservationAttributes,
+) (observationCtx context.Context, observation *langfuse.Observation, started bool) {
+	defer func() {
+		if recover() != nil {
+			diagnose("application span processor panicked while starting an observation; panic contained")
+		}
+	}()
+	observationCtx, observation = t.lf.StartObservation(ctx, name, observationType, attributes)
+	return observationCtx, observation, true
 }
 
 // observationName resolves precedence: per-context call attributes win
@@ -181,7 +199,7 @@ func (t *Transport) finalizeTransportError(ctx context.Context, obs *langfuse.Ob
 	if level == langfuse.LevelError {
 		obs.RecordError(errors.New(status))
 	}
-	obs.End()
+	safeEndAt(obs, time.Now())
 }
 
 // newFinalizer builds the exactly-once completion function that maps an
@@ -201,7 +219,7 @@ func (t *Transport) newFinalizer(
 			if recovered := recover(); recovered != nil {
 				diagnose("attempt finalization panicked; observation ended with partial telemetry")
 			}
-			obs.EndAt(outcome.End)
+			safeEndAt(obs, outcome.End)
 		}()
 
 		if body, ok := recorder.snapshot(); ok {
@@ -284,6 +302,15 @@ func (t *Transport) newFinalizer(
 			obs.RecordError(errors.New(update.StatusMessage))
 		}
 	}
+}
+
+func safeEndAt(observation *langfuse.Observation, at time.Time) {
+	defer func() {
+		if recover() != nil {
+			diagnose("application span processor panicked while ending an observation; panic contained")
+		}
+	}()
+	observation.EndAt(at)
 }
 
 // selectMode chooses the parse strategy from configuration, the URL
@@ -377,5 +404,5 @@ func safeResult(parser Call) (result Result) {
 // diagnose emits a payload-free diagnostic through the OpenTelemetry
 // error handler, matching the core SDK's diagnostic channel.
 func diagnose(message string) {
-	otel.Handle(errors.New("langfuse contrib: " + message))
+	diagnostic.Report("contrib: " + message)
 }

@@ -20,8 +20,8 @@ variables:
 
 | Config field | Purpose |
 | --- | --- |
-| `MaxQueueSize` | Bounds ended spans buffered for export. `0` selects the default 2048; negative values fail validation in `New` |
-| `BlockOnQueueFull` | Opts into blocking backpressure when the queue is full instead of the default drop-on-full |
+| `MaxQueueSize` | Bounds ended spans buffered for export. `0` selects the default 2048; values outside `[0, 65536]` fail validation in `New` |
+| `BlockOnQueueFull` | Opts into blocking backpressure when a span or score queue is full. By default, full span queues drop with a diagnostic and full score queues return `ErrScoreQueueFull` |
 
 In borrowed-provider mode, `Config.ShouldExportSpan` replaces the default
 Langfuse content filter. Set it before calling `New`. The callback contract and
@@ -317,8 +317,11 @@ whose body cannot be read or does not account for the submitted event
 score with a payload-free diagnostic. Each score is serialized once as a
 complete ingestion event, so a retried delivery resends the identical event
 and stays idempotent through the event ID and the score ID. On a full score
-queue new scores are dropped with a diagnostic, and `Config.BlockOnQueueFull`
-opts into the same blocking backpressure as for observations.
+queue, `RecordScore` returns `ErrScoreQueueFull` without accepting the score.
+`Config.BlockOnQueueFull` opts into the same blocking backpressure as for
+observations. `Config.Mask` receives score metadata as one complete map. A
+nil, panicking, or type-changing result omits the metadata field. Score
+comments are not masked.
 
 ## Flush and shutdown
 
@@ -333,8 +336,9 @@ In borrowed mode, shut down the Langfuse client before the application's
 tracer provider; the client never shuts down unrelated processors or
 exporters. Create a fresh timeout context for each `Flush` or `Shutdown` call,
 since a reused deadline keeps running. Repeated and concurrent lifecycle calls
-are safe: the first `Shutdown` owns teardown and later calls return without
-starting another.
+are safe. The first `Shutdown` owns teardown. A concurrent or re-entrant call
+returns `ErrShutdownInProgress` without waiting. A call after teardown
+completes returns the first call's stored result.
 
 ## Sampling
 

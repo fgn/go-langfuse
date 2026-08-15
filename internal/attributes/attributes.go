@@ -114,7 +114,7 @@ func Encode(value any, mask func(any) any, field string) (encoded string, ok boo
 		}
 		return value, true
 	}
-	data, err, panicked := safeJSONMarshal(value)
+	data, err, panicked := MarshalJSON(value, MaxSerializedBytes)
 	if panicked {
 		diagnostic.Report(field + " serializer panicked; field omitted")
 		return "", false
@@ -139,6 +139,24 @@ func Encode(value any, mask func(any) any, field string) (encoded string, ok boo
 
 func ObservationMetadata(metadata map[string]any, mask func(any) any) []otelattr.KeyValue {
 	return ObservationMetadataWithExisting(metadata, mask, nil)
+}
+
+// ScoreMetadata applies the masker once to the complete metadata map. A nil,
+// panicking, or type-changing masker omits the field.
+func ScoreMetadata(metadata map[string]any, mask func(any) any) map[string]any {
+	if len(metadata) == 0 {
+		return nil
+	}
+	masked, ok := applyMask(metadata, mask, "score metadata")
+	if !ok || isNil(masked) {
+		return nil
+	}
+	values, ok := masked.(map[string]any)
+	if !ok {
+		diagnostic.Report("masker changed score metadata to an unsupported type; field omitted")
+		return nil
+	}
+	return values
 }
 
 // ObservationMetadataWithExisting gives retained keys priority over new keys
@@ -390,7 +408,7 @@ func NormalizeUsage(
 	} else {
 		diagnostic.Report("usage total overflowed; total bucket omitted")
 	}
-	encoded, err, panicked := safeJSONMarshal(counts)
+	encoded, err, panicked := MarshalJSON(counts, MaxSerializedBytes)
 	if panicked || err != nil || len(encoded) > MaxSerializedBytes {
 		diagnostic.Report("usage could not be serialized; usage omitted")
 		return "", false
@@ -430,7 +448,10 @@ func boundedUsageKeys(values map[string]int64) []string {
 	return keys
 }
 
-func safeJSONMarshal(value any) (data []byte, err error, panicked bool) {
+// MarshalJSON bounds ordinary values before encoding and contains panics from
+// caller-defined JSON or text marshalers. Callers must still check the encoded
+// length because custom marshalers are opaque until they return.
+func MarshalJSON(value any, limit int) (data []byte, err error, panicked bool) {
 	defer func() {
 		if recover() != nil {
 			data = nil
@@ -439,7 +460,7 @@ func safeJSONMarshal(value any) (data []byte, err error, panicked bool) {
 		}
 	}()
 	if _, err := estimateJSONSize(
-		reflect.ValueOf(value), MaxSerializedBytes, 0, make(map[jsonVisit]struct{}),
+		reflect.ValueOf(value), limit, 0, make(map[jsonVisit]struct{}),
 	); err != nil {
 		return nil, err, false
 	}

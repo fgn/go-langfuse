@@ -175,8 +175,14 @@ func (w *bodyWrapper) Close() error {
 // runs under recover so a parser defect degrades telemetry, never the
 // application's read.
 func (w *bodyWrapper) process(p []byte) {
+	var finish func()
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	defer func() {
+		w.mu.Unlock()
+		if finish != nil {
+			finish()
+		}
+	}()
 	if w.finalized || w.frozen || w.mode == modeIgnore {
 		return
 	}
@@ -232,13 +238,13 @@ func (w *bodyWrapper) process(p []byte) {
 			}
 			switch verdict.Terminal {
 			case TerminalSuccess:
-				w.finalizeLocked(StateComplete)
+				finish = w.finalizeLocked(StateComplete)
 				return false
 			case TerminalError:
-				w.finalizeLocked(StateFailed)
+				finish = w.finalizeLocked(StateFailed)
 				return false
 			case TerminalIncomplete:
-				w.finalizeLocked(StateIncomplete)
+				finish = w.finalizeLocked(StateIncomplete)
 				return false
 			case TerminalNone:
 			}
@@ -265,8 +271,14 @@ func (w *bodyWrapper) process(p []byte) {
 // unary and sentinel-free SSE complete, sentinel-requiring SSE that
 // never saw its terminal is incomplete.
 func (w *bodyWrapper) terminalRead(err error) {
+	var finish func()
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	defer func() {
+		w.mu.Unlock()
+		if finish != nil {
+			finish()
+		}
+	}()
 	if w.finalized {
 		return
 	}
@@ -284,11 +296,11 @@ func (w *bodyWrapper) terminalRead(err error) {
 				// validity, preserving the clean-wire lifecycle rule.
 				w.chunked.FinishOversizedUnary(w.status)
 			}
-			w.finalizeLocked(StateComplete)
+			finish = w.finalizeLocked(StateComplete)
 			return
 		}
 		if w.mode == modeIgnore {
-			w.finalizeLocked(StateComplete)
+			finish = w.finalizeLocked(StateComplete)
 			return
 		}
 		// SSE stream ended cleanly. Success requires both the
@@ -297,17 +309,17 @@ func (w *bodyWrapper) terminalRead(err error) {
 		// truncated final frame is incomplete even for sentinel-free
 		// protocols).
 		if w.call.FeedEvent(nil).Terminal == TerminalSuccess && !w.framer.pending() {
-			w.finalizeLocked(StateComplete)
+			finish = w.finalizeLocked(StateComplete)
 		} else {
-			w.finalizeLocked(StateIncomplete)
+			finish = w.finalizeLocked(StateIncomplete)
 		}
 		return
 	}
 	if w.causallyCanceled(err) {
-		w.finalizeLocked(StateCanceled)
+		finish = w.finalizeLocked(StateCanceled)
 		return
 	}
-	w.finalizeLocked(StateFailed)
+	finish = w.finalizeLocked(StateFailed)
 }
 
 // closeTelemetry handles Close before a transport-terminal event.
@@ -319,8 +331,14 @@ func (w *bodyWrapper) terminalRead(err error) {
 // finished and Close is completion. Anything else remains the
 // observable closed_early fact.
 func (w *bodyWrapper) closeTelemetry() {
+	var finish func()
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	defer func() {
+		w.mu.Unlock()
+		if finish != nil {
+			finish()
+		}
+	}()
 	if w.finalized {
 		return
 	}
@@ -332,7 +350,7 @@ func (w *bodyWrapper) closeTelemetry() {
 		if !w.unaryOver && len(body) > 0 && json.Valid(body) {
 			defer w.recoverParse()
 			w.call.FinishUnary(body, w.status)
-			w.finalizeLocked(StateComplete)
+			finish = w.finalizeLocked(StateComplete)
 			return
 		}
 		if w.unaryChunked && w.chunked.UnaryComplete() {
@@ -342,11 +360,11 @@ func (w *bodyWrapper) closeTelemetry() {
 			// decoder-close completion pattern, same as json.Valid above.
 			defer w.recoverParse()
 			w.chunked.FinishOversizedUnary(w.status)
-			w.finalizeLocked(StateComplete)
+			finish = w.finalizeLocked(StateComplete)
 			return
 		}
 	}
-	w.finalizeLocked(StateClosedEarly)
+	finish = w.finalizeLocked(StateClosedEarly)
 }
 
 // causallyCanceled requires a compatible terminal error together with
@@ -365,9 +383,9 @@ func (w *bodyWrapper) causallyCanceled(err error) bool {
 	return cause != nil && errors.Is(err, cause)
 }
 
-func (w *bodyWrapper) finalizeLocked(state FinalState) {
+func (w *bodyWrapper) finalizeLocked(state FinalState) func() {
 	if w.finalized {
-		return
+		return nil
 	}
 	if state == StateComplete || state == StateFailed || state == StateIncomplete {
 		// Hard terminals freeze telemetry while the body keeps
@@ -379,13 +397,15 @@ func (w *bodyWrapper) finalizeLocked(state FinalState) {
 	}
 	w.finalized = true
 	runtime.SetFinalizer(w, nil)
-	w.finalize(Outcome{
+	outcome := Outcome{
 		State:           state,
 		CancelObserved:  w.cancelObserved.Load() || w.ctxDone(),
 		CaptureDegraded: w.framer.discarded || w.unaryOver || w.parsePanic,
 		End:             time.Now(),
 		CompletionStart: w.completionStart,
-	})
+	}
+	finalize := w.finalize
+	return func() { finalize(outcome) }
 }
 
 // recoverParse contains parser panics: the attempt still records

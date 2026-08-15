@@ -50,6 +50,9 @@ var (
 
 	_ error = langfuse.ErrPromptNotFound
 	_ error = langfuse.ErrPromptTypeMismatch
+	_ error = langfuse.ErrScoreQueueFull
+	_ error = langfuse.ErrShutdownInProgress
+	_ error = langfuse.ErrTracerProviderInUse
 )
 
 func TestPublicMethodSurface(t *testing.T) {

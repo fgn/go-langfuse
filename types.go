@@ -55,15 +55,17 @@ type Config struct {
 
 	// MaxQueueSize bounds how many ended export-eligible spans the client
 	// buffers in memory while waiting for batch export. Zero selects the
-	// default of 2048; negative values are a validation error in [New].
+	// default of 2048. Values outside [0, 65536] are a validation error in
+	// [New].
 	MaxQueueSize int
 
 	// BlockOnQueueFull makes ending an exported observation, and recording a
 	// score, wait for buffer space instead of dropping when the
 	// corresponding queue is full. A sustained export outage can then stall
 	// goroutines that end observations or record scores, so it defaults to
-	// false: on a full queue new work is dropped with a diagnostic, matching
-	// OpenTelemetry defaults.
+	// false. On a full span queue, new spans are dropped with a diagnostic,
+	// matching OpenTelemetry defaults. On a full score queue,
+	// [Client.RecordScore] returns [ErrScoreQueueFull].
 	BlockOnQueueFull bool
 
 	// Disabled makes the complete client a safe no-op.

@@ -297,8 +297,9 @@ func TestShutdownFlushesAndReturnsRedactedExportFailure(t *testing.T) {
 	if !client.stopped.Load() {
 		t.Fatal("client was not stopped after failed final export")
 	}
-	if err := client.Shutdown(context.Background()); err != nil {
-		t.Fatalf("repeated Shutdown() error = %v, want nil", err)
+	repeatedErr := client.Shutdown(nil)
+	if repeatedErr == nil || repeatedErr.Error() != err.Error() {
+		t.Fatalf("repeated Shutdown() error = %v, want replay of %v", repeatedErr, err)
 	}
 }
 
@@ -416,7 +417,7 @@ func TestDisabledAndZeroValuesAreConcurrencySafe(t *testing.T) {
 	assertTrueNoopObservation(t, zeroObservation)
 }
 
-func TestDuplicateBorrowedProviderReturnsTrueNoopAndOwnerShutdownUnlocks(t *testing.T) {
+func TestDuplicateBorrowedProviderReturnsErrorAndOwnerShutdownUnlocks(t *testing.T) {
 	diagnostics := captureRootDiagnostics(t)
 	ownerReceiver := newRootOTLPReceiver(t)
 	successorReceiver := newRootOTLPReceiver(t)
@@ -433,32 +434,17 @@ func TestDuplicateBorrowedProviderReturnsTrueNoopAndOwnerShutdownUnlocks(t *test
 	}
 
 	duplicate, err := New(context.Background(), borrowedTestConfig(provider, successorReceiver.server.URL, "duplicate"))
-	if err != nil {
-		t.Fatalf("New(duplicate) error = %v", err)
+	if duplicate != nil || !errors.Is(err, ErrTracerProviderInUse) {
+		t.Fatalf("New(duplicate) = (%v, %v), want (nil, ErrTracerProviderInUse)", duplicate, err)
 	}
-	assertTrueNoopClient(t, duplicate)
 	assertProviderOwner(t, provider, owner)
-	assertDiagnosticCount(t, diagnostics, "duplicate client is disabled", 1)
-
-	ctx := context.Background()
-	duplicateCtx, duplicateObservation := duplicate.StartObservation(ctx, "must-not-export", TypeGeneration, ObservationAttributes{
-		Input: "printable duplicate payload",
-	})
-	if duplicateCtx != ctx {
-		t.Fatal("duplicate no-op client returned a different context")
-	}
-	duplicateObservation.End()
-	if err := duplicate.Flush(context.Background()); err != nil {
-		t.Fatalf("duplicate Flush() error = %v", err)
-	}
-	if err := duplicate.Shutdown(nil); err != nil {
-		t.Fatalf("duplicate Shutdown(nil) error = %v", err)
-	}
+	assertDiagnosticCount(t, diagnostics, "duplicate client is disabled", 0)
 	assertProviderOwner(t, provider, owner)
 	if got := successorReceiver.requests.Load(); got != 0 {
 		t.Fatalf("duplicate project received %d requests, want zero", got)
 	}
 
+	ctx := context.Background()
 	_, ownerObservation := owner.StartObservation(ctx, "owner-export", TypeSpan, ObservationAttributes{})
 	ownerObservation.End()
 	flushClient(t, owner)
@@ -527,19 +513,17 @@ func TestConcurrentNewOnBorrowedProviderCreatesExactlyOneOwner(t *testing.T) {
 	})
 
 	var owner *Client
-	disabledCount := 0
+	errorCount := 0
 	for index, client := range clients {
 		if errorsByIndex[index] != nil {
-			t.Errorf("New() call %d error = %v", index, errorsByIndex[index])
+			if !errors.Is(errorsByIndex[index], ErrTracerProviderInUse) || client != nil {
+				t.Errorf("New() call %d = (%v, %v), want (nil, ErrTracerProviderInUse)", index, client, errorsByIndex[index])
+			}
+			errorCount++
 			continue
 		}
 		if client == nil {
 			t.Errorf("New() call %d returned nil client", index)
-			continue
-		}
-		if client.disabled {
-			disabledCount++
-			assertTrueNoopClient(t, client)
 			continue
 		}
 		if owner != nil {
@@ -550,27 +534,12 @@ func TestConcurrentNewOnBorrowedProviderCreatesExactlyOneOwner(t *testing.T) {
 	if owner == nil {
 		t.Fatal("concurrent New() calls returned no active owner")
 	}
-	if disabledCount != clientCount-1 {
-		t.Fatalf("disabled clients = %d, want %d", disabledCount, clientCount-1)
+	if errorCount != clientCount-1 {
+		t.Fatalf("provider-in-use errors = %d, want %d", errorCount, clientCount-1)
 	}
 	assertProviderOwner(t, provider, owner)
-	assertDiagnosticCount(t, diagnostics, "duplicate client is disabled", clientCount-1)
+	assertDiagnosticCount(t, diagnostics, "duplicate client is disabled", 0)
 
-	// Shutting down every duplicate concurrently must not release the owner.
-	workers = sync.WaitGroup{}
-	for _, client := range clients {
-		if client == owner {
-			continue
-		}
-		workers.Add(1)
-		go func(client *Client) {
-			defer workers.Done()
-			if err := client.Shutdown(nil); err != nil {
-				t.Errorf("duplicate Shutdown(nil) error = %v", err)
-			}
-		}(client)
-	}
-	workers.Wait()
 	assertProviderOwner(t, provider, owner)
 
 	_, observation := owner.StartObservation(context.Background(), "concurrent-owner-export", TypeSpan, ObservationAttributes{})

@@ -33,6 +33,10 @@ const (
 	defaultScoreQueueSize = 256
 )
 
+// ErrScoreQueueFull reports synchronous non-admission to the bounded score
+// delivery queue.
+var ErrScoreQueueFull = errors.New("langfuse transport: score queue is full")
+
 // ScoresClient delivers score events to the Langfuse JSON ingestion endpoint
 // from a bounded queue serviced by one background dispatcher, retrying
 // transient failures with the same policy defaults as the OTLP exporter.
@@ -146,8 +150,7 @@ func NewScoresClient(cfg Config) (*ScoresClient, error) {
 // delivery; eventID is the envelope event ID the ingestion result must
 // account for. It returns an error only when the client is shut down or, in
 // blocking mode, when ctx ends while waiting for queue space. In non-blocking
-// mode a full queue drops the score with a payload-free diagnostic and
-// returns nil, matching the span pipeline's backpressure default.
+// mode a full queue returns ErrScoreQueueFull without accepting the score.
 func (s *ScoresClient) Enqueue(ctx context.Context, payload []byte, eventID string) error {
 	for {
 		s.mu.Lock()
@@ -173,8 +176,7 @@ func (s *ScoresClient) Enqueue(ctx context.Context, payload []byte, eventID stri
 		s.mu.Unlock()
 
 		if !s.blockOnFull {
-			s.reportAsync("score dropped because the score queue is full")
-			return nil
+			return ErrScoreQueueFull
 		}
 		select {
 		case <-s.space:

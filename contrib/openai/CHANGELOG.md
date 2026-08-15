@@ -5,6 +5,8 @@ follows Semantic Versioning independently of the core module.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-15
+
 - Observe the OpenAI Responses API (`/responses`, unary and streaming)
   as generations with a closed sanitization schema, terminal-
   authoritative streaming output with bounded incremental fallback,
@@ -17,6 +19,9 @@ follows Semantic Versioning independently of the core module.
   surface that streams over-cap SSE events and unary bodies through a
   bounded JSON scanner so control-plane facts survive payloads the
   buffers cannot hold.
+- Run response finalization after releasing the response-body lock. Contain
+  panics from application OpenTelemetry error handlers and span processors so
+  telemetry cannot panic or deadlock an HTTP exchange.
 
 ## [0.1.0] - 2026-07-23
 

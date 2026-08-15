@@ -66,9 +66,9 @@ The caller owns span limits. If they are unusually low, OpenTelemetry may drop
 SDK fields; the client emits a payload-free diagnostic when it detects that on
 an SDK observation.
 
-Only one active client is supported on a borrowed provider. A
-duplicate construction emits an OTel diagnostic and returns a true no-op
-client so unscoped AI spans cannot fan out to two projects.
+Only one active client is supported on a borrowed provider. A duplicate
+construction returns `ErrTracerProviderInUse`. The returned client is nil.
+This prevents unscoped AI spans from going to two projects.
 
 Borrowed mode batches accepted spans with the standard OpenTelemetry
 geometry: a 2048-span queue and up to 512 spans per export. One Langfuse HTTP
@@ -102,8 +102,10 @@ Create each timeout context immediately before its lifecycle call. Reusing the
 Langfuse client's context for provider shutdown can leave the provider no time if the
 first shutdown consumes the deadline.
 
-`Client.Shutdown` first stops its batch processor with the supplied context,
-then unregisters it. It never shuts down another exporter. End all active spans
-before shutdown; `Flush` can export only spans that have ended.
+`Client.Shutdown` flushes and stops its batch processor with the supplied
+context, then unregisters it. It never shuts down another exporter. A
+concurrent or re-entrant call returns `ErrShutdownInProgress`. A call after
+shutdown completes returns the stored result from the first call. End all
+active spans before shutdown; `Flush` can export only spans that have ended.
 
 See the compiled [existing-provider example](../examples/existingotel/main.go).

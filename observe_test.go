@@ -96,15 +96,12 @@ func TestObservePanicEndsObservationWithoutCapturingPanicValue(t *testing.T) {
 }
 
 func TestObserveNilCallbackStartsNoObservation(t *testing.T) {
-	diagnostics := captureEdgeDiagnostics(t)
 	client, receiver := newObservationWireClient(t, nil)
 
 	if err := client.Observe(context.Background(), "observe-nil-callback", langfuse.TypeSpan,
-		langfuse.ObservationAttributes{}, nil); err != nil {
-		t.Fatalf("Observe(nil callback) error = %v, want nil", err)
+		langfuse.ObservationAttributes{}, nil); err == nil {
+		t.Fatal("Observe(nil callback) error = nil, want validation error")
 	}
-	assertEdgeDiagnosticCount(t, diagnostics, "observe callback is nil", 1)
-
 	// A follow-up observation proves the nil-callback call exported nothing.
 	_, observation := client.StartObservation(context.Background(), "observe-follow-up",
 		langfuse.TypeSpan, langfuse.ObservationAttributes{})

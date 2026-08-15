@@ -2,6 +2,7 @@ package langfuse
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"sync"
@@ -176,7 +177,7 @@ func (c *Client) nextTraceDecision(
 // the observation is marked failed with the payload-free status "panic",
 // the panic value is never captured, and the panic propagates. On a nil,
 // disabled, or stopped client fn still runs, receiving ctx unchanged and a
-// no-op handle. A nil fn reports a diagnostic and starts no observation.
+// no-op handle. A nil fn is a validation error and starts no observation.
 func (c *Client) Observe(
 	ctx context.Context,
 	name string,
@@ -185,8 +186,7 @@ func (c *Client) Observe(
 	fn func(ctx context.Context, observation *Observation) error,
 ) error {
 	if fn == nil {
-		diagnostic.Report("observe callback is nil; no observation started")
-		return nil
+		return errors.New("langfuse: observe callback is nil")
 	}
 	observationCtx, observation := c.StartObservation(ctx, name, observationType, values)
 	completed := false

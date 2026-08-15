@@ -5,6 +5,12 @@ follows Semantic Versioning independently of the core module.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-15
+
+- Run response finalization after releasing the response-body lock. Contain
+  panics from application OpenTelemetry error handlers and span processors so
+  telemetry cannot panic or deadlock an HTTP exchange.
+
 ## [0.1.0] - 2026-07-23
 
 - Initial release: transport-level Langfuse instrumentation with no

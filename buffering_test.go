@@ -55,6 +55,40 @@ func TestNewRejectsNegativeMaxQueueSize(t *testing.T) {
 	}
 }
 
+func TestNewValidatesMaxQueueSizeUpperBound(t *testing.T) {
+	t.Parallel()
+
+	client, err := langfuse.New(context.Background(), langfuse.Config{
+		BaseURL:      "https://cloud.langfuse.com",
+		PublicKey:    "pk-lf-maximum-queue",
+		SecretKey:    "sk-lf-maximum-queue",
+		MaxQueueSize: 65_536,
+	})
+	if err != nil {
+		t.Fatalf("New() at MaxQueueSize limit error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := client.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown() error = %v", err)
+	}
+
+	client, err = langfuse.New(context.Background(), langfuse.Config{
+		BaseURL:      "https://cloud.langfuse.com",
+		PublicKey:    "pk-lf-excessive-queue",
+		SecretKey:    "sk-lf-excessive-queue",
+		MaxQueueSize: 65_537,
+	})
+	if client != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = client.Shutdown(ctx)
+	}
+	if err == nil {
+		t.Fatal("New() error = nil, want excessive MaxQueueSize validation failure")
+	}
+}
+
 func TestBlockOnQueueFullBlocksEndAndLosesNoObservations(t *testing.T) {
 	receiver := otlpreceiver.New()
 	t.Cleanup(receiver.Close)

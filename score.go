@@ -3,7 +3,6 @@ package langfuse
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -11,8 +10,14 @@ import (
 
 	oteltrace "go.opentelemetry.io/otel/trace"
 
+	lfattr "github.com/fgn/go-langfuse/internal/attributes"
 	"github.com/fgn/go-langfuse/internal/diagnostic"
+	"github.com/fgn/go-langfuse/internal/transport"
 )
+
+// ErrScoreQueueFull reports that a non-blocking client did not accept a score
+// because its bounded delivery queue was full.
+var ErrScoreQueueFull = errors.New("langfuse: score queue is full")
 
 // ScoreDataType identifies how Langfuse stores and aggregates a score value.
 type ScoreDataType string
@@ -66,7 +71,9 @@ type Score struct {
 	// Comment is explicit content supplied by the caller. It is not
 	// processed by Config.Mask; sanitize it before calling the SDK.
 	Comment string
-	// Metadata is serialized as one JSON value.
+	// Metadata is passed to Config.Mask as one complete value and must remain a
+	// map[string]any to be retained. The resulting map is serialized as one JSON
+	// value.
 	Metadata map[string]any
 	// Timestamp records when the scored interaction happened, for example
 	// when feedback is computed by a batch job hours after the trace. The
@@ -84,7 +91,7 @@ type Score struct {
 // export), so transport failures never reach the caller: after the retry
 // budget they are reported as payload-free OpenTelemetry diagnostics and the
 // score is dropped. [Client.Flush] and [Client.Shutdown] drain accepted
-// scores. When the queue is full a score is dropped with a diagnostic unless
+// scores. When the queue is full, the call returns [ErrScoreQueueFull] unless
 // Config.BlockOnQueueFull waits for space, bounded by ctx. A disabled client
 // returns nil without sending, and a shut-down client returns an error. The
 // complete serialized score event is limited to 128 KiB.
@@ -108,7 +115,11 @@ func (c *Client) RecordScore(ctx context.Context, score Score) error {
 	if err != nil {
 		return err
 	}
-	return c.scores.Enqueue(ctx, payload, eventID)
+	err = c.scores.Enqueue(ctx, payload, eventID)
+	if errors.Is(err, transport.ErrScoreQueueFull) {
+		return ErrScoreQueueFull
+	}
+	return err
 }
 
 // suppressScore applies the sampling decision of the caller's context path to
@@ -264,8 +275,8 @@ func (c *Client) buildScorePayload(score Score) ([]byte, string, error) {
 	if score.Comment != "" {
 		payload["comment"] = score.Comment
 	}
-	if len(score.Metadata) != 0 {
-		payload["metadata"] = score.Metadata
+	if metadata := lfattr.ScoreMetadata(score.Metadata, c.mask); len(metadata) != 0 {
+		payload["metadata"] = metadata
 	}
 
 	// The ingestion event envelope carries the score's timestamp: Langfuse
@@ -290,8 +301,8 @@ func (c *Client) buildScorePayload(score Score) ([]byte, string, error) {
 		}},
 	}
 
-	encoded, err := json.Marshal(event)
-	if err != nil {
+	encoded, err, panicked := lfattr.MarshalJSON(event, maxScorePayloadBytes)
+	if panicked || err != nil {
 		return nil, "", errors.New("langfuse: score could not be serialized")
 	}
 	if len(encoded) > maxScorePayloadBytes {

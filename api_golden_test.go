@@ -448,4 +448,10 @@ type Usage struct {
 var ErrPromptNotFound = errors.New("langfuse: prompt not found")
 
 var ErrPromptTypeMismatch = errors.New("langfuse: prompt type mismatch")
+
+var ErrScoreQueueFull = errors.New("langfuse: score queue is full")
+
+var ErrShutdownInProgress = errors.New("langfuse: shutdown is in progress")
+
+var ErrTracerProviderInUse = errors.New("langfuse: tracer provider already has a Langfuse client")
 `

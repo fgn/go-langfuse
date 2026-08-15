@@ -31,15 +31,13 @@ package langfusegenai
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"regexp"
 	"strings"
 
-	"go.opentelemetry.io/otel"
-
 	"github.com/fgn/go-langfuse"
 	"github.com/fgn/go-langfuse/contrib/googlegenai/internal/wiretap"
+	"github.com/fgn/go-langfuse/internal/diagnostic"
 )
 
 const adapterMarker = "langfusegenai"
@@ -88,7 +86,7 @@ func WithProvider(name string) Option {
 			// cleared so classification falls back to the host
 			// classifier rather than a stale earlier option.
 			o.provider = ""
-			otel.Handle(errors.New("langfuse contrib: invalid provider override ignored"))
+			diagnostic.Report("contrib: invalid provider override ignored")
 			return
 		}
 		o.provider = normalized
@@ -129,7 +127,7 @@ type CallAttributes struct {
 // nil with a diagnostic.
 func ContextWithCall(ctx context.Context, call CallAttributes) context.Context {
 	if ctx == nil {
-		otel.Handle(errors.New("langfuse contrib: ContextWithCall called with a nil context"))
+		diagnostic.Report("contrib: ContextWithCall called with a nil context")
 		return nil
 	}
 	return wiretap.ContextWithCall(ctx, wiretap.CallAttributes{
@@ -153,7 +151,7 @@ func ContextWithCall(ctx context.Context, call CallAttributes) context.Context {
 // routes through.
 func NewTransport(lf *langfuse.Client, base http.RoundTripper, opts ...Option) http.RoundTripper {
 	if base != nil && wiretap.IsOwn(base, adapterMarker) {
-		otel.Handle(errors.New("langfuse contrib: transport already instrumented; returning existing layer"))
+		diagnostic.Report("contrib: transport already instrumented; returning existing layer")
 		return base
 	}
 	var resolved options
