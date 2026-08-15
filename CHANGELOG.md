@@ -5,6 +5,13 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-08-15
+
+- Validate score targets and explicit data-type/value combinations before
+  asynchronous delivery. Scores now reject mixed trace/session targets,
+  incompatible value types, Boolean values outside 0 or 1, Text values outside
+  1 to 500 characters, and Correction scores with a session target or config.
+
 ## [0.7.0] - 2026-08-14
 
 - Add `Config.ShouldExportSpan`, a full span-export-filter override whose API
