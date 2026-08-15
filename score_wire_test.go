@@ -349,15 +349,30 @@ func TestScoreWireValidationAndLifecycle(t *testing.T) {
 	t.Parallel()
 	client, receiver := newScoreWireClient(t, nil)
 	rating := 1.0
+	outsideBooleanRange := 2.0
+	stringValue := "value"
+	emptyText := ""
+	oversizedText := strings.Repeat("t", 501)
 	valid := langfuse.Score{Name: "user-feedback", SessionID: "s", NumericValue: &rating}
 
 	invalid := map[string]langfuse.Score{
 		"missing name":           {SessionID: "s", NumericValue: &rating},
 		"missing target":         {Name: "n", NumericValue: &rating},
+		"two targets":            {Name: "n", TraceID: "t", SessionID: "s", NumericValue: &rating},
 		"observation sans trace": {Name: "n", SessionID: "s", ObservationID: "o", NumericValue: &rating},
 		"no value":               {Name: "n", SessionID: "s"},
 		"two values":             {Name: "n", SessionID: "s", NumericValue: &rating, StringValue: new(string)},
 		"bad data type":          {Name: "n", SessionID: "s", NumericValue: &rating, DataType: "MOOD"},
+		"numeric categorical":    {Name: "n", SessionID: "s", NumericValue: &rating, DataType: langfuse.ScoreTypeCategorical},
+		"numeric correction":     {Name: "n", TraceID: "t", NumericValue: &rating, DataType: langfuse.ScoreTypeCorrection},
+		"numeric text":           {Name: "n", SessionID: "s", NumericValue: &rating, DataType: langfuse.ScoreTypeText},
+		"string numeric":         {Name: "n", SessionID: "s", StringValue: &stringValue, DataType: langfuse.ScoreTypeNumeric},
+		"string boolean":         {Name: "n", SessionID: "s", StringValue: &stringValue, DataType: langfuse.ScoreTypeBoolean},
+		"boolean outside range":  {Name: "n", SessionID: "s", NumericValue: &outsideBooleanRange, DataType: langfuse.ScoreTypeBoolean},
+		"empty text":             {Name: "n", SessionID: "s", StringValue: &emptyText, DataType: langfuse.ScoreTypeText},
+		"oversized text":         {Name: "n", SessionID: "s", StringValue: &oversizedText, DataType: langfuse.ScoreTypeText},
+		"correction on session":  {Name: "n", SessionID: "s", StringValue: &stringValue, DataType: langfuse.ScoreTypeCorrection},
+		"correction with config": {Name: "n", TraceID: "t", StringValue: &stringValue, DataType: langfuse.ScoreTypeCorrection, ConfigID: "c"},
 		"oversized name":         {Name: strings.Repeat("n", 201), SessionID: "s", NumericValue: &rating},
 		"oversized config ID":    {Name: "n", SessionID: "s", NumericValue: &rating, ConfigID: strings.Repeat("c", 201)},
 		"five-digit year":        {Name: "n", SessionID: "s", NumericValue: &rating, Timestamp: time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)},
@@ -409,5 +424,42 @@ func TestScoreWireValidationAndLifecycle(t *testing.T) {
 	}
 	if got := len(stoppedReceiver.all()); got != 0 {
 		t.Fatalf("stopped client sent %d score requests, want 0", got)
+	}
+}
+
+func TestScoreWireAcceptsExplicitDataTypeShapes(t *testing.T) {
+	t.Parallel()
+	client, receiver := newScoreWireClient(t, nil)
+	booleanValue := 1.0
+	categoricalValue := "helpful"
+	textValue := strings.Repeat("t", 500)
+	correctionValue := "corrected output"
+
+	valid := map[string]langfuse.Score{
+		"boolean": {
+			Name: "grounded", SessionID: "s", NumericValue: &booleanValue,
+			DataType: langfuse.ScoreTypeBoolean,
+		},
+		"categorical": {
+			Name: "tone", SessionID: "s", StringValue: &categoricalValue,
+			DataType: langfuse.ScoreTypeCategorical,
+		},
+		"text": {
+			Name: "notes", SessionID: "s", StringValue: &textValue,
+			DataType: langfuse.ScoreTypeText,
+		},
+		"correction": {
+			Name: "output", TraceID: "t", StringValue: &correctionValue,
+			DataType: langfuse.ScoreTypeCorrection,
+		},
+	}
+	for label, score := range valid {
+		if err := client.RecordScore(context.Background(), score); err != nil {
+			t.Fatalf("RecordScore(%s) error = %v", label, err)
+		}
+	}
+	flushClient(t, client)
+	if got := len(receiver.all()); got != len(valid) {
+		t.Fatalf("valid score request count = %d, want %d", got, len(valid))
 	}
 }

@@ -27,6 +27,7 @@ const (
 
 const (
 	maxScoreNameCharacters = 200
+	maxTextScoreCharacters = 500
 	maxScorePayloadBytes   = 128 << 10
 )
 
@@ -41,24 +42,26 @@ type Score struct {
 	// Name identifies the score series, for example "user-feedback".
 	// Required; at most 200 characters.
 	Name string
-	// TraceID, SessionID, and ObservationID select the score target. At
-	// least one of TraceID or SessionID is required, and ObservationID
-	// additionally requires TraceID.
+	// TraceID, SessionID, and ObservationID select the score target. Exactly
+	// one of TraceID or SessionID is required, and ObservationID additionally
+	// requires TraceID. Correction scores cannot target sessions.
 	TraceID       string
 	SessionID     string
 	ObservationID string
-	// Exactly one of NumericValue or StringValue must be set. Boolean
-	// scores use NumericValue 0 or 1 with ScoreTypeBoolean.
+	// Exactly one of NumericValue or StringValue must be set. NUMERIC and
+	// BOOLEAN use NumericValue, while CATEGORICAL, CORRECTION, and TEXT use
+	// StringValue. Boolean scores use NumericValue 0 or 1.
 	NumericValue *float64
 	StringValue  *string
 	// DataType is optional; when empty, Langfuse infers NUMERIC or
-	// CATEGORICAL from the value type.
+	// CATEGORICAL from the value type. TEXT values must contain 1 to 500
+	// characters.
 	DataType ScoreDataType
 	// ConfigID references a Langfuse score config by its identifier.
 	// Optional; at most 200 characters. Langfuse validates the score against
 	// the config server-side, so a violating score is rejected during
 	// asynchronous delivery and dropped with a diagnostic rather than
-	// returned as a RecordScore error.
+	// returned as a RecordScore error. Correction scores cannot use ConfigID.
 	ConfigID string
 	// Comment is explicit content supplied by the caller. It is not
 	// processed by Config.Mask; sanitize it before calling the SDK.
@@ -160,6 +163,9 @@ func validateScore(score Score) error {
 	if score.TraceID == "" && score.SessionID == "" {
 		return errors.New("langfuse: score requires a trace ID or session ID target")
 	}
+	if score.TraceID != "" && score.SessionID != "" {
+		return errors.New("langfuse: score requires exactly one trace ID or session ID target")
+	}
 	if score.ObservationID != "" && score.TraceID == "" {
 		return errors.New("langfuse: score observation ID requires a trace ID")
 	}
@@ -170,7 +176,37 @@ func validateScore(score Score) error {
 		return errors.New("langfuse: score string value is not valid UTF-8")
 	}
 	switch score.DataType {
-	case "", ScoreTypeBoolean, ScoreTypeCategorical, ScoreTypeCorrection, ScoreTypeNumeric, ScoreTypeText:
+	case "":
+	case ScoreTypeNumeric:
+		if score.NumericValue == nil {
+			return errors.New("langfuse: NUMERIC score requires a numeric value")
+		}
+	case ScoreTypeCategorical:
+		if score.StringValue == nil {
+			return errors.New("langfuse: CATEGORICAL score requires a string value")
+		}
+	case ScoreTypeBoolean:
+		if score.NumericValue == nil || (*score.NumericValue != 0 && *score.NumericValue != 1) {
+			return errors.New("langfuse: BOOLEAN score requires a numeric value equal to 0 or 1")
+		}
+	case ScoreTypeCorrection:
+		if score.StringValue == nil {
+			return errors.New("langfuse: CORRECTION score requires a string value")
+		}
+		if score.SessionID != "" {
+			return errors.New("langfuse: CORRECTION score requires a trace or observation target")
+		}
+		if score.ConfigID != "" {
+			return errors.New("langfuse: CORRECTION score cannot use a config ID")
+		}
+	case ScoreTypeText:
+		if score.StringValue == nil {
+			return errors.New("langfuse: TEXT score requires a string value")
+		}
+		length := utf8.RuneCountInString(*score.StringValue)
+		if length == 0 || length > maxTextScoreCharacters {
+			return errors.New("langfuse: TEXT score must contain 1 to 500 characters")
+		}
 	default:
 		return errors.New("langfuse: unsupported score data type")
 	}

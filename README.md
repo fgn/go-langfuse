@@ -193,6 +193,13 @@ err := lf.RecordScore(ctx, langfuse.Score{
 })
 ```
 
+Set exactly one target: a session, a trace, or an observation with its trace.
+When `DataType` is set, its value must have the matching shape. Numeric and
+Boolean scores use `NumericValue`; Categorical, Text, and Correction scores use
+`StringValue`. Boolean values must be 0 or 1, Text values must contain 1 to 500
+characters, and Correction scores can target only a trace or observation and
+cannot use a score config.
+
 The SDK generates the upsert ID when `ID` is empty, so retried deliveries
 cannot create duplicates. `Timestamp` backdates a score from a later
 evaluation job, and `ConfigID` binds it to a Langfuse score config. The
