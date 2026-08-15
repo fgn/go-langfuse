@@ -17,7 +17,8 @@ recording every other field. The privacy boundary is deliberately narrow:
 | `TraceAttributes.Metadata` | No | Yes, once as the complete `map[string]any` |
 | Observation name/type, trace name, user/session IDs, tags, version, level, `StatusMessage`, model/parameters, usage, costs, prompt, and completion time | No | No |
 | `RecordError(err)` text and exception event | No | No |
-| `Score` comment, value, and metadata | No | No |
+| `Score` metadata | No | Yes, once as the complete `map[string]any` |
+| `Score` comment and value | No | No |
 | OpenTelemetry resource attributes (`resource.Default`/`OTEL_RESOURCE_ATTRIBUTES` in isolated mode; caller resource in borrowed mode) | No | No |
 | Third-party OTel span attributes and events | No | No |
 
@@ -43,20 +44,29 @@ payload-free error values or sanitize an error before passing it to
 `RecordError`; never put credentials, PHI, prompts, or completions in an error
 or `StatusMessage`.
 
-`Mask` can transform only the SDK values shown in the table. A metadata masker
-must return a `map[string]any`; returning another type omits that metadata.
-Copy and recursively redact maps and slices rather than mutating caller-owned
-data:
+`Mask` receives a `MaskField` with each SDK value shown in the table. A
+metadata masker must return a `map[string]any`; returning another type omits
+that metadata. The SDK calls the masker synchronously. It must be fast,
+non-blocking, and concurrency-safe. Copy and recursively redact maps and slices
+rather than mutating caller-owned data:
 
 ```go
 cfg := langfuse.ConfigFromEnv()
-cfg.DisableContentCapture = true
 cfg.Mask = redactSDKValue
 
-func redactSDKValue(value any) any {
+func redactSDKValue(field langfuse.MaskField, value any) any {
+	switch field {
+	case langfuse.MaskObservationInput, langfuse.MaskObservationOutput:
+		return "[redacted]"
+	case langfuse.MaskTraceMetadata, langfuse.MaskObservationMetadata, langfuse.MaskScoreMetadata:
+		return redactMetadata(value)
+	default:
+		return nil
+	}
+}
+
+func redactMetadata(value any) any {
 	switch value := value.(type) {
-	case string:
-		return strings.ReplaceAll(value, "secret", "[redacted]")
 	case map[string]any:
 		redacted := make(map[string]any, len(value))
 		for key, item := range value {
@@ -64,14 +74,14 @@ func redactSDKValue(value any) any {
 			case "email", "customer_id", "authorization":
 				redacted[key] = "[redacted]"
 			default:
-				redacted[key] = redactSDKValue(item)
+				redacted[key] = redactMetadata(item)
 			}
 		}
 		return redacted
 	case []any:
 		redacted := make([]any, len(value))
 		for index, item := range value {
-			redacted[index] = redactSDKValue(item)
+			redacted[index] = redactMetadata(item)
 		}
 		return redacted
 	default:
@@ -80,10 +90,10 @@ func redactSDKValue(value any) any {
 }
 ```
 
-The example assumes JSON-like `map[string]any` and `[]any` shapes. A
-production masker must cover every concrete value type the application
-supplies, must be concurrency-safe, and should have tests proving its
-redaction policy.
+The example fully replaces observation input and output. It assumes JSON-like
+`map[string]any` and `[]any` metadata. A production masker must cover every
+concrete value type the application supplies, must be concurrency-safe, and
+should have tests proving its redaction policy.
 
 These controls apply **only to data supplied through this client**; they never
 rewrite third-party OTel instrumentation, so configure or sanitize those

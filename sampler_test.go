@@ -429,7 +429,7 @@ func TestSampledOutObservationSkipsMaskAndErrorCalls(t *testing.T) {
 	var maskCalls atomic.Int64
 	client, _ := newObservationWireClient(t, func(config *langfuse.Config) {
 		config.SampleRate = rate(0)
-		config.Mask = func(value any) any {
+		config.Mask = func(_ langfuse.MaskField, value any) any {
 			maskCalls.Add(1)
 			return value
 		}
@@ -468,7 +468,7 @@ func TestRecordOnlySpanKeepsFullUpdatePath(t *testing.T) {
 		PublicKey:      "pk-lf-record-only",
 		SecretKey:      "sk-lf-record-only",
 		TracerProvider: provider,
-		Mask: func(value any) any {
+		Mask: func(_ langfuse.MaskField, value any) any {
 			maskCalls.Add(1)
 			return value
 		},

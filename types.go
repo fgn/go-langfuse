@@ -6,6 +6,17 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
+// MaskField identifies the SDK field passed to Config.Mask.
+type MaskField string
+
+const (
+	MaskObservationInput    MaskField = "observation input"
+	MaskObservationOutput   MaskField = "observation output"
+	MaskTraceMetadata       MaskField = "trace metadata"
+	MaskObservationMetadata MaskField = "observation metadata"
+	MaskScoreMetadata       MaskField = "score metadata"
+)
+
 // Config configures a Langfuse client.
 type Config struct {
 	// BaseURL is the Langfuse host or OTLP traces endpoint. It defaults to
@@ -77,14 +88,15 @@ type Config struct {
 	// usage are still recorded.
 	DisableContentCapture bool
 
-	// Mask applies only to Input, Output, and Metadata supplied through this
-	// Client. Each metadata map is passed as one complete value and must remain
-	// a map[string]any to be retained. It does not process identifiers, model
-	// fields, StatusMessage, [Observation.RecordError] text, or third-party
-	// spans and events.
-	// Mask may be called concurrently and therefore must be concurrency-safe.
-	// A panic is recovered and the affected value is omitted.
-	Mask func(value any) any
+	// Mask applies only to observation Input and Output, and to trace,
+	// observation, and score Metadata supplied through this Client. It receives
+	// the field and its complete typed value before serialization. Each metadata
+	// map must remain a map[string]any to be retained. It does not process
+	// identifiers, model fields, StatusMessage, [Observation.RecordError] text,
+	// or third-party spans and events. Calls are synchronous and can occur
+	// concurrently, so the function must be fast, non-blocking, and
+	// concurrency-safe. A panic is recovered and the affected value is omitted.
+	Mask func(field MaskField, value any) any
 
 	envErr error
 }

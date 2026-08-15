@@ -53,6 +53,12 @@ var (
 	_ error = langfuse.ErrScoreQueueFull
 	_ error = langfuse.ErrShutdownInProgress
 	_ error = langfuse.ErrTracerProviderInUse
+
+	_ langfuse.MaskField = langfuse.MaskObservationInput
+	_ langfuse.MaskField = langfuse.MaskObservationOutput
+	_ langfuse.MaskField = langfuse.MaskTraceMetadata
+	_ langfuse.MaskField = langfuse.MaskObservationMetadata
+	_ langfuse.MaskField = langfuse.MaskScoreMetadata
 )
 
 func TestPublicMethodSurface(t *testing.T) {

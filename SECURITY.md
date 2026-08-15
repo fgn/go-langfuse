@@ -18,17 +18,18 @@ seven days.
 masking or serialization. It does not drop metadata, identifiers, model
 parameters, usage, costs, prompt references, status messages, or errors.
 
-`Mask` is called only for SDK-supplied observation input, observation output,
-the complete `ObservationAttributes.Metadata` map, and the complete
-`TraceAttributes.Metadata` map. It is not called for observation or trace
-names, user/session IDs, tags, versions, level/status, model parameters, usage,
-costs, prompt references, completion timestamps, or third-party OpenTelemetry
-attributes and events. Applications using a borrowed tracer provider must
-separately configure or sanitize third-party instrumentors.
+`Mask` receives a `MaskField` with SDK-supplied observation input, observation
+output, the complete `ObservationAttributes.Metadata` map, the complete
+`TraceAttributes.Metadata` map, and score metadata. It is not called for
+observation or trace names, user/session IDs, tags, versions, level/status,
+model parameters, usage, costs, prompt references, completion timestamps, or
+third-party OpenTelemetry attributes and events. Applications using a borrowed
+tracer provider must separately configure or sanitize third-party
+instrumentors.
 
-`Score` fields are likewise explicit content: neither `DisableContentCapture`
-nor `Mask` applies to a score's comment, value, or metadata. Sanitize them
-before calling `RecordScore`.
+`Score` fields are likewise explicit content. `Mask` applies to score metadata,
+but neither `DisableContentCapture` nor `Mask` applies to a score's comment or
+value. Sanitize those fields before calling `RecordScore`.
 
 OpenTelemetry resource attributes are not masked. The isolated provider uses
 `resource.Default`, including `OTEL_SERVICE_NAME` and

@@ -69,7 +69,7 @@ type Client struct {
 	disabled    bool
 
 	disableContentCapture bool
-	mask                  func(any) any
+	mask                  func(string, any) any
 
 	stopped                 atomic.Bool
 	stoppedWarning          atomic.Bool
@@ -169,6 +169,13 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.SampleRate != nil && !validSampleFraction(*cfg.SampleRate) {
 		return nil, errors.New("langfuse: sample rate must be finite and within [0, 1]")
 	}
+	var mask func(string, any) any
+	if cfg.Mask != nil {
+		configuredMask := cfg.Mask
+		mask = func(field string, value any) any {
+			return configuredMask(MaskField(field), value)
+		}
+	}
 
 	transportConfig := transport.Config{
 		BaseURL:          cfg.BaseURL,
@@ -183,7 +190,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 
 	client := &Client{
 		disableContentCapture: cfg.DisableContentCapture,
-		mask:                  cfg.Mask,
+		mask:                  mask,
 		environment:           environment,
 		shutdownDone:          make(chan struct{}),
 	}

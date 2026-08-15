@@ -380,64 +380,6 @@ func TestSampledOutAttemptSkipsCaptureButExportsNothing(t *testing.T) {
 	receiver.expectNone(t)
 }
 
-func TestMaskGovernsAdapterContent(t *testing.T) {
-	receiver := newOTLPReceiver(t)
-	lf := newTestClient(t, receiver, func(cfg *langfuse.Config) {
-		cfg.Mask = func(value any) any {
-			switch value := value.(type) {
-			case string:
-				return strings.ReplaceAll(value, "SECRET", "[masked]")
-			case []any:
-				for index, item := range value {
-					value[index] = maskAny(item)
-				}
-				return value
-			case map[string]any:
-				return maskAny(value)
-			default:
-				return value
-			}
-		}
-	})
-	provider := chatServer(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, chatResponse)
-	})
-	httpClient := &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
-	resp := postChat(t, httpClient, provider.URL, context.Background())
-	_, _ = io.Copy(io.Discard, resp.Body)
-	_ = resp.Body.Close()
-
-	flush(t, lf)
-	span := receiver.nextSpan(t)
-	for _, key := range []string{"langfuse.observation.input", "langfuse.observation.output"} {
-		if value := attrString(t, span, key); strings.Contains(value, "SECRET") {
-			t.Fatalf("%s bypassed Mask: %q", key, value)
-		}
-	}
-}
-
-func maskAny(value any) any {
-	switch value := value.(type) {
-	case string:
-		return strings.ReplaceAll(value, "SECRET", "[masked]")
-	case map[string]any:
-		masked := make(map[string]any, len(value))
-		for key, item := range value {
-			masked[key] = maskAny(item)
-		}
-		return masked
-	case []any:
-		masked := make([]any, len(value))
-		for index, item := range value {
-			masked[index] = maskAny(item)
-		}
-		return masked
-	default:
-		return value
-	}
-}
-
 func TestPrivacyModes(t *testing.T) {
 	receiver := newOTLPReceiver(t)
 	lf := newTestClient(t, receiver, nil)

@@ -58,12 +58,21 @@ func run(ctx context.Context) (runErr error) {
 	return nil
 }
 
-// Mask receives input/output values individually and each complete metadata
-// map. Return copied collections so caller-owned values are never mutated.
-func redactSDKValue(value any) any {
+// Mask receives the field with each value. This policy removes all observation
+// content and recursively redacts selected metadata keys.
+func redactSDKValue(field langfuse.MaskField, value any) any {
+	switch field {
+	case langfuse.MaskObservationInput, langfuse.MaskObservationOutput:
+		return "[redacted]"
+	case langfuse.MaskTraceMetadata, langfuse.MaskObservationMetadata, langfuse.MaskScoreMetadata:
+		return redactMetadata(value)
+	default:
+		return nil
+	}
+}
+
+func redactMetadata(value any) any {
 	switch value := value.(type) {
-	case string:
-		return strings.ReplaceAll(value, "secret", "[redacted]")
 	case map[string]any:
 		redacted := make(map[string]any, len(value))
 		for key, item := range value {
@@ -71,13 +80,13 @@ func redactSDKValue(value any) any {
 				redacted[key] = "[redacted]"
 				continue
 			}
-			redacted[key] = redactSDKValue(item)
+			redacted[key] = redactMetadata(item)
 		}
 		return redacted
 	case []any:
 		redacted := make([]any, len(value))
 		for index, item := range value {
-			redacted[index] = redactSDKValue(item)
+			redacted[index] = redactMetadata(item)
 		}
 		return redacted
 	default:
