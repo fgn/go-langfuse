@@ -236,9 +236,11 @@ func TestRecordScoreContainsMetadataMarshalPanic(t *testing.T) {
 
 func TestScoreWireMasksCompleteMetadataOnce(t *testing.T) {
 	maskCalls := 0
+	var gotField langfuse.MaskField
 	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) {
-		config.Mask = func(value any) any {
+		config.Mask = func(field langfuse.MaskField, value any) any {
 			maskCalls++
+			gotField = field
 			metadata, ok := value.(map[string]any)
 			if !ok || metadata["secret"] != "remove-me" || metadata["keep"] != "original" {
 				t.Fatalf("Mask value = %#v, want the complete score metadata map", value)
@@ -257,6 +259,9 @@ func TestScoreWireMasksCompleteMetadataOnce(t *testing.T) {
 	if maskCalls != 1 {
 		t.Fatalf("Mask calls = %d, want 1", maskCalls)
 	}
+	if gotField != langfuse.MaskScoreMetadata {
+		t.Fatalf("Mask field = %q, want %q", gotField, langfuse.MaskScoreMetadata)
+	}
 	_, body := scoreWireEvent(t, receiver.all()[0])
 	want := map[string]any{"keep": "masked"}
 	if got := body["metadata"]; !reflect.DeepEqual(got, want) {
@@ -267,11 +272,11 @@ func TestScoreWireMasksCompleteMetadataOnce(t *testing.T) {
 func TestScoreWireOmitsMetadataWhenMaskDoesNotReturnMap(t *testing.T) {
 	tests := []struct {
 		name string
-		mask func(any) any
+		mask func(langfuse.MaskField, any) any
 	}{
-		{name: "nil", mask: func(any) any { return nil }},
-		{name: "wrong type", mask: func(any) any { return "not metadata" }},
-		{name: "panic", mask: func(any) any { panic("mask secret") }},
+		{name: "nil", mask: func(langfuse.MaskField, any) any { return nil }},
+		{name: "wrong type", mask: func(langfuse.MaskField, any) any { return "not metadata" }},
+		{name: "panic", mask: func(langfuse.MaskField, any) any { panic("mask secret") }},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

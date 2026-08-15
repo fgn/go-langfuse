@@ -39,6 +39,16 @@ func TestLiveCompatibility(t *testing.T) {
 	if config.DisableContentCapture {
 		t.Fatal("LANGFUSE_CONTENT_CAPTURE_ENABLED disables content; the live compatibility fixture must exercise content ingestion")
 	}
+	config.Mask = func(field langfuse.MaskField, value any) any {
+		switch field {
+		case langfuse.MaskObservationInput, langfuse.MaskObservationOutput:
+			return "[live-redacted]"
+		case langfuse.MaskTraceMetadata, langfuse.MaskObservationMetadata, langfuse.MaskScoreMetadata:
+			return value
+		default:
+			return nil
+		}
+	}
 	client, err := langfuse.New(ctx, config)
 	if err != nil {
 		t.Fatalf("New(): %v", err)
@@ -144,6 +154,12 @@ func TestLiveCompatibility(t *testing.T) {
 	if got := readBack.modelName(); got != "synthetic-model" {
 		t.Errorf("read-back model = %q, want synthetic-model", got)
 	}
+	if got, want := readBack.Input, any("[live-redacted]"); got != want {
+		t.Errorf("read-back generation input = %#v, want masked input %#v", got, want)
+	}
+	if got, want := readBack.Output, any("[live-redacted]"); got != want {
+		t.Errorf("read-back generation output = %#v, want masked output %#v", got, want)
+	}
 	assertSDKMetadata(t, "observation", readBack.Metadata)
 	// The SDK normalizes the inclusive Usage fields sent above (input 12 with
 	// 2 cached and 1 audio, output 7 with 1 reasoning) to exclusive buckets.
@@ -158,10 +174,10 @@ func TestLiveCompatibility(t *testing.T) {
 	assertLiveTime(t, "generation end", readBack.EndTime, generationEnd)
 
 	trace := api.awaitTrace(t, deadline, root.TraceID(), root.ID())
-	if got, want := trace.Input, any("synthetic question"); got != want {
+	if got, want := trace.Input, any("[live-redacted]"); got != want {
 		t.Errorf("read-back trace input = %#v, want root observation input %#v", got, want)
 	}
-	if got, want := trace.Output, any("synthetic answer"); got != want {
+	if got, want := trace.Output, any("[live-redacted]"); got != want {
 		t.Errorf("read-back trace output = %#v, want root observation output %#v", got, want)
 	}
 	assertSDKMetadata(t, "trace", trace.Metadata)

@@ -210,6 +210,16 @@ const LevelError Level = "ERROR"
 
 const LevelWarning Level = "WARNING"
 
+const MaskObservationInput MaskField = "observation input"
+
+const MaskObservationMetadata MaskField = "observation metadata"
+
+const MaskObservationOutput MaskField = "observation output"
+
+const MaskScoreMetadata MaskField = "score metadata"
+
+const MaskTraceMetadata MaskField = "trace metadata"
+
 const PromptSourceCache PromptSource = "cache"
 
 const PromptSourceFallback PromptSource = "fallback"
@@ -338,10 +348,12 @@ type Config struct {
 	BlockOnQueueFull bool
 	Disabled bool
 	DisableContentCapture bool
-	Mask func(value any) any
+	Mask func(field MaskField, value any) any
 }
 
 type Level string
+
+type MaskField string
 
 type Observation struct {
 }

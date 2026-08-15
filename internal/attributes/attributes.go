@@ -81,7 +81,7 @@ const (
 
 // Encode applies mask and produces the string representation expected by
 // Langfuse. Strings stay strings; all other values are deterministic JSON.
-func Encode(value any, mask func(any) any, field string) (encoded string, ok bool) {
+func Encode(value any, mask func(string, any) any, field string) (encoded string, ok bool) {
 	if isNil(value) {
 		return "", false
 	}
@@ -93,7 +93,7 @@ func Encode(value any, mask func(any) any, field string) (encoded string, ok boo
 					panicked = true
 				}
 			}()
-			value = mask(value)
+			value = mask(field, value)
 		}()
 		if panicked {
 			diagnostic.Report("masker panicked; " + field + " omitted")
@@ -137,13 +137,13 @@ func Encode(value any, mask func(any) any, field string) (encoded string, ok boo
 // ObservationMetadata applies the masker once to the complete metadata value,
 // then emits one deterministic attribute per top-level key.
 
-func ObservationMetadata(metadata map[string]any, mask func(any) any) []otelattr.KeyValue {
+func ObservationMetadata(metadata map[string]any, mask func(string, any) any) []otelattr.KeyValue {
 	return ObservationMetadataWithExisting(metadata, mask, nil)
 }
 
 // ScoreMetadata applies the masker once to the complete metadata map. A nil,
 // panicking, or type-changing masker omits the field.
-func ScoreMetadata(metadata map[string]any, mask func(any) any) map[string]any {
+func ScoreMetadata(metadata map[string]any, mask func(string, any) any) map[string]any {
 	if len(metadata) == 0 {
 		return nil
 	}
@@ -164,7 +164,7 @@ func ScoreMetadata(metadata map[string]any, mask func(any) any) map[string]any {
 // because newly supplied keys sort earlier.
 func ObservationMetadataWithExisting(
 	metadata map[string]any,
-	mask func(any) any,
+	mask func(string, any) any,
 	existing map[string]struct{},
 ) []otelattr.KeyValue {
 	if len(metadata) == 0 {
@@ -197,7 +197,7 @@ func ObservationMetadataWithExisting(
 // TraceMetadata normalizes request-scoped metadata to the official propagation
 // representation: one string value per top-level key, each at most 200
 // characters.
-func TraceMetadata(metadata map[string]any, mask func(any) any) map[string]string {
+func TraceMetadata(metadata map[string]any, mask func(string, any) any) map[string]string {
 	result, _ := TraceMetadataWithExisting(metadata, mask, nil)
 	return result
 }
@@ -210,7 +210,7 @@ func TraceMetadata(metadata map[string]any, mask func(any) any) map[string]strin
 // post-mask value, never the caller's input.
 func TraceMetadataWithExisting(
 	metadata map[string]any,
-	mask func(any) any,
+	mask func(string, any) any,
 	existing map[string]string,
 ) (map[string]string, map[string]bool) {
 	if len(metadata) == 0 {
@@ -748,7 +748,7 @@ func jsonStringSize(value string) int {
 	return size
 }
 
-func applyMask(value any, mask func(any) any, field string) (result any, ok bool) {
+func applyMask(value any, mask func(string, any) any, field string) (result any, ok bool) {
 	if mask == nil {
 		return value, true
 	}
@@ -759,7 +759,7 @@ func applyMask(value any, mask func(any) any, field string) (result any, ok bool
 			ok = false
 		}
 	}()
-	return mask(value), true
+	return mask(field, value), true
 }
 
 func isNil(value any) bool {

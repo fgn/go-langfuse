@@ -185,7 +185,7 @@ func (s *traceState) isAccepted(key string) bool {
 	return found
 }
 
-func (s *traceState) merge(values TraceAttributes, mask func(any) any) {
+func (s *traceState) merge(values TraceAttributes, mask func(string, any) any) {
 	if value := propagatedString("trace name", values.Name); value != "" {
 		s.name = value
 		delete(s.accepted, acceptedName)
@@ -280,7 +280,7 @@ func (s *traceState) merge(values TraceAttributes, mask func(any) any) {
 // baggage-accepted; those are replaced from the current namespace and
 // re-marked, so a later import updates earlier imports while local
 // values keep winning.
-func (s *traceState) mergeImportedMetadata(imported map[string]any, mask func(any) any, hasNamespace bool) {
+func (s *traceState) mergeImportedMetadata(imported map[string]any, mask func(string, any) any, hasNamespace bool) {
 	// Normalize against the locally originated entries only: capacity
 	// held by unconfirmed accepted keys from earlier hops must not
 	// starve the current namespace's replacement projection (those keys

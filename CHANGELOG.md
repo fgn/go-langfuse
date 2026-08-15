@@ -5,6 +5,15 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-15
+
+- **Breaking**: `Config.Mask` now receives a `MaskField` with each value. Callers
+  can now apply different policies to observation input, observation output,
+  trace metadata, observation metadata, and score metadata without embedding
+  private markers in their data. Masking remains source-stage and does not
+  transform third-party OpenTelemetry spans or fields outside the documented
+  privacy boundary.
+
 ## [0.8.0] - 2026-08-15
 
 - Return explicit errors when a score queue is full, when a borrowed tracer

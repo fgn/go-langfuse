@@ -319,9 +319,9 @@ complete ingestion event, so a retried delivery resends the identical event
 and stays idempotent through the event ID and the score ID. On a full score
 queue, `RecordScore` returns `ErrScoreQueueFull` without accepting the score.
 `Config.BlockOnQueueFull` opts into the same blocking backpressure as for
-observations. `Config.Mask` receives score metadata as one complete map. A
-nil, panicking, or type-changing result omits the metadata field. Score
-comments are not masked.
+observations. `Config.Mask` receives score metadata as one complete map with
+`MaskScoreMetadata`. A nil, panicking, or type-changing result omits the
+metadata field. Score comments are not masked.
 
 ## Flush and shutdown
 

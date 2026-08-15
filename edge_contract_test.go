@@ -546,7 +546,7 @@ func TestEdgeContractShutdownLinearizesAgainstStartingObservation(t *testing.T) 
 	releaseMask := make(chan struct{})
 	client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
 		config.TracerProvider = provider
-		config.Mask = func(value any) any {
+		config.Mask = func(_ langfuse.MaskField, value any) any {
 			close(maskEntered)
 			<-releaseMask
 			return value

@@ -376,11 +376,11 @@ in the [OpenAI adapter README](contrib/openai/README.md) and the
 
 The SDK never inspects function arguments, HTTP bodies, or model clients;
 it exports only fields explicitly supplied by the caller.
-`LANGFUSE_CONTENT_CAPTURE_ENABLED=false` drops SDK-supplied input and
-output, and `Config.Mask` transforms input, output, and metadata before
-export. Identifiers, model data, status messages, error text, and
-third-party spans sit outside both controls; the exact boundary and a
-masker example are in the [privacy guide](docs/privacy.md).
+`LANGFUSE_CONTENT_CAPTURE_ENABLED=false` drops SDK-supplied input and output.
+`Config.Mask` receives a `MaskField` and transforms input, output, and metadata
+before export. Identifiers, model data, status messages, error text, and
+third-party spans sit outside both controls; the exact boundary and a masker
+example are in the [privacy guide](docs/privacy.md).
 
 ## Documentation
 

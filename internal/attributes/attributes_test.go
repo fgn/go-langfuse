@@ -181,7 +181,7 @@ func TestEncodeAppliesMaskBeforeSerializationAndSizeCheck(t *testing.T) {
 	original := privateValue{Secret: strings.Repeat("s", lfattr.MaxSerializedBytes+1)}
 	var received any
 
-	got, ok := lfattr.Encode(original, func(value any) any {
+	got, ok := lfattr.Encode(original, func(_ string, value any) any {
 		received = value
 		return map[string]any{"redacted": true}
 	}, "input")
@@ -198,7 +198,7 @@ func TestEncodeAppliesMaskBeforeSerializationAndSizeCheck(t *testing.T) {
 
 func TestEncodeMaskRunsOnceAndMayReturnEmptyScalar(t *testing.T) {
 	calls := 0
-	got, ok := lfattr.Encode("secret", func(any) any {
+	got, ok := lfattr.Encode("secret", func(_ string, _ any) any {
 		calls++
 		return false
 	}, "input")
@@ -213,7 +213,7 @@ func TestEncodeMaskRunsOnceAndMayReturnEmptyScalar(t *testing.T) {
 func TestEncodeMaskPanicIsContained(t *testing.T) {
 	diagnostics := captureDiagnostics(t)
 
-	got, ok := lfattr.Encode("do not log this payload", func(any) any {
+	got, ok := lfattr.Encode("do not log this payload", func(_ string, _ any) any {
 		panic("mask failure containing do not log this payload")
 	}, "input")
 	if ok || got != "" {
@@ -225,7 +225,7 @@ func TestEncodeMaskPanicIsContained(t *testing.T) {
 
 func TestEncodeMaskReturningTypedNilOmitsValue(t *testing.T) {
 	var replacement *string
-	if got, ok := lfattr.Encode("secret", func(any) any { return replacement }, "input"); ok || got != "" {
+	if got, ok := lfattr.Encode("secret", func(_ string, _ any) any { return replacement }, "input"); ok || got != "" {
 		t.Fatalf("Encode() = (%q, %v), want (\"\", false)", got, ok)
 	}
 }
@@ -298,7 +298,7 @@ func TestObservationMetadataMaskRunsOnceOnCompleteMap(t *testing.T) {
 	calls := 0
 	got := keyValuesToStrings(lfattr.ObservationMetadata(map[string]any{
 		"secret": "value",
-	}, func(value any) any {
+	}, func(_ string, value any) any {
 		calls++
 		metadata, ok := value.(map[string]any)
 		if !ok || metadata["secret"] != "value" {

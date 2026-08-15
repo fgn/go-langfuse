@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -623,17 +624,19 @@ func TestInvalidTraceAttributesEnvironmentIsIgnored(t *testing.T) {
 func TestImportAppliesMaskToInboundMetadataExactlyOnce(t *testing.T) {
 	receiver := otlpreceiver.New()
 	t.Cleanup(receiver.Close)
+	var fields []MaskField
 	client := newInteropClient(t, receiver, Config{
-		// The Mask receives whole field values; for metadata that is the
+		// The mask receives whole field values; for metadata that is the
 		// merged map, exactly as on the local WithTraceAttributes path.
-		Mask: func(value any) any {
+		Mask: func(field MaskField, value any) any {
+			fields = append(fields, field)
 			if fields, ok := value.(map[string]any); ok {
 				masked := make(map[string]any, len(fields))
-				for key, field := range fields {
-					if text, isString := field.(string); isString {
+				for key, item := range fields {
+					if text, isString := item.(string); isString {
 						masked[key] = strings.ReplaceAll(text, "secret", "***")
 					} else {
-						masked[key] = field
+						masked[key] = item
 					}
 				}
 				return masked
@@ -648,6 +651,9 @@ func TestImportAppliesMaskToInboundMetadataExactlyOnce(t *testing.T) {
 	state, _ := ctx.Value(traceStateContextKey{client: client}).(traceState)
 	if state.metadata["note"] != "***-plan" {
 		t.Errorf("imported metadata = %q, want masked ***-plan", state.metadata["note"])
+	}
+	if !slices.Equal(fields, []MaskField{MaskTraceMetadata}) {
+		t.Errorf("Mask fields = %v, want trace metadata once", fields)
 	}
 }
 
@@ -1249,7 +1255,7 @@ func TestImportMaskCollisionsAndExactlyOnce(t *testing.T) {
 	t.Cleanup(receiver.Close)
 	var maskCalls int
 	client := newInteropClient(t, receiver, Config{
-		Mask: func(value any) any {
+		Mask: func(_ MaskField, value any) any {
 			fields, ok := value.(map[string]any)
 			if !ok {
 				return value

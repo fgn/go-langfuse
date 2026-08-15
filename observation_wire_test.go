@@ -416,24 +416,26 @@ func TestObservationWireMetadataAndUpdateMerge(t *testing.T) {
 
 func TestObservationWireContentCaptureAndMask(t *testing.T) {
 	t.Run("mask before serialization", func(t *testing.T) {
-		var calls atomic.Int32
+		fields := make(map[langfuse.MaskField]int)
 		client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
-			config.Mask = func(value any) any {
-				calls.Add(1)
-				switch typed := value.(type) {
-				case string:
-					return "[masked:" + typed + "]"
-				case map[string]any:
-					if _, isInput := typed["content"]; isInput {
-						return map[string]any{"content": "masked"}
-					}
+			config.Mask = func(field langfuse.MaskField, value any) any {
+				fields[field]++
+				switch field {
+				case langfuse.MaskObservationInput:
+					return map[string]any{"content": "masked"}
+				case langfuse.MaskObservationOutput:
+					return "[masked:" + value.(string) + "]"
+				case langfuse.MaskTraceMetadata, langfuse.MaskObservationMetadata:
 					return map[string]any{"safe": "yes"}
 				default:
 					return nil
 				}
 			}
 		})
-		_, observation := client.StartObservation(context.Background(), "masked", langfuse.TypeSpan,
+		ctx := client.WithTraceAttributes(context.Background(), langfuse.TraceAttributes{
+			Metadata: map[string]any{"secret": "trace-metadata"},
+		})
+		_, observation := client.StartObservation(ctx, "masked", langfuse.TypeSpan,
 			langfuse.ObservationAttributes{
 				Input:    map[string]any{"content": "secret"},
 				Output:   "secret-output",
@@ -449,9 +451,16 @@ func TestObservationWireContentCaptureAndMask(t *testing.T) {
 			"langfuse.observation.output":        "[masked:secret-output]",
 			"langfuse.observation.type":          "span",
 			"langfuse.release":                   wireRelease,
+			"langfuse.trace.metadata.safe":       "yes",
 		})
-		if got := calls.Load(); got != 3 {
-			t.Fatalf("Mask calls = %d, want exactly input, output, and complete metadata (3)", got)
+		wantFields := map[langfuse.MaskField]int{
+			langfuse.MaskTraceMetadata:       1,
+			langfuse.MaskObservationInput:    1,
+			langfuse.MaskObservationOutput:   1,
+			langfuse.MaskObservationMetadata: 1,
+		}
+		if !reflect.DeepEqual(fields, wantFields) {
+			t.Fatalf("Mask fields = %v, want %v", fields, wantFields)
 		}
 	})
 
@@ -459,7 +468,7 @@ func TestObservationWireContentCaptureAndMask(t *testing.T) {
 		var calls atomic.Int32
 		client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
 			config.DisableContentCapture = true
-			config.Mask = func(value any) any {
+			config.Mask = func(_ langfuse.MaskField, value any) any {
 				calls.Add(1)
 				return map[string]any{"safe": "masked"}
 			}
