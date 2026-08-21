@@ -1,3 +1,3 @@
 package langfuse
 
-const sdkVersion = "0.9.0"
+const sdkVersion = "0.10.0"
