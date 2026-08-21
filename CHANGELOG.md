@@ -5,6 +5,8 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-08-21
+
 - Add `Client.WithContentCapture` to override the client's SDK input/output
   capture default for one client-scoped context tree. Each observation stores
   the effective policy when it starts, so later updates cannot drift from its
