@@ -29,6 +29,10 @@ type Observation struct {
 	// zero when the span started at the current time. It is written once
 	// before the handle is shared and is read without the lock.
 	startTime time.Time
+	// contentCapture is the immutable policy resolved from the starting
+	// context. Updates do not accept a context, so retaining the decision here
+	// prevents the observation's payload policy from changing over its lifetime.
+	contentCapture bool
 	// sampledOut is the immutable head-sampling classification captured at
 	// start. It must not be recomputed from the span later: IsRecording turns
 	// false after End, which would misclassify an ended borrowed-mode
@@ -71,7 +75,8 @@ func (c *Client) StartObservation(
 	}
 	typeName := normalizeObservationType(observationType)
 	values = normalizeObservationStrings(values)
-	spanAttributes, explicit := c.buildObservationAttributes(typeName, values, true, nil)
+	contentCapture := c.contentCaptureEnabled(ctx)
+	spanAttributes, explicit := c.buildObservationAttributes(typeName, values, true, nil, contentCapture)
 	spanAttributes, attributeSizes, attributeBytes, attributesOmitted := fitObservationAttributeBudget(
 		spanAttributes, nil, 0,
 	)
@@ -122,6 +127,7 @@ func (c *Client) StartObservation(
 		span:           span,
 		typeName:       typeName,
 		startTime:      values.StartTime,
+		contentCapture: contentCapture,
 		sampledOut:     !span.IsRecording() && !span.SpanContext().IsSampled(),
 		explicit:       explicit,
 		metadataKeys:   observationMetadataKeys(spanAttributes),
@@ -243,7 +249,9 @@ func (o *Observation) Update(values ObservationAttributes) {
 	existingMetadata := cloneStringSet(o.metadataKeys)
 	o.mu.Unlock()
 	values = normalizeObservationStrings(values)
-	spanAttributes, explicit := o.client.buildObservationAttributes(o.typeName, values, false, existingMetadata)
+	spanAttributes, explicit := o.client.buildObservationAttributes(
+		o.typeName, values, false, existingMetadata, o.contentCapture,
+	)
 	if o.client.stopped.Load() {
 		o.client.reportStoppedOnce()
 		return
@@ -672,6 +680,7 @@ func (c *Client) buildObservationAttributes(
 	values ObservationAttributes,
 	starting bool,
 	existingMetadata map[string]struct{},
+	contentCapture bool,
 ) ([]attribute.KeyValue, map[string]struct{}) {
 	result := make([]attribute.KeyValue, 0, 16+min(len(values.Metadata), lfattr.MaxMetadataEntries))
 	explicit := make(map[string]struct{})
@@ -700,7 +709,7 @@ func (c *Client) buildObservationAttributes(
 	} else if hasGenerationAttributes(values) {
 		diagnostic.Report("generation-only attributes omitted from a non-generation observation")
 	}
-	if !c.disableContentCapture {
+	if contentCapture {
 		if input, ok := lfattr.Encode(values.Input, c.mask, "observation input"); ok {
 			result = append(result, attribute.String(lfattr.ObservationInputKey, input))
 		}

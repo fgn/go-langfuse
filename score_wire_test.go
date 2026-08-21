@@ -269,6 +269,32 @@ func TestScoreWireMasksCompleteMetadataOnce(t *testing.T) {
 	}
 }
 
+func TestContentCapturePolicyDoesNotChangeScorePayload(t *testing.T) {
+	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) {
+		config.DisableContentCapture = true
+	})
+	ctx := client.WithContentCapture(context.Background(), true)
+	rating := 1.0
+	if err := client.RecordScore(ctx, langfuse.Score{
+		Name:         "capture-policy-boundary",
+		SessionID:    "synthetic-session",
+		NumericValue: &rating,
+		Comment:      "synthetic-comment",
+		Metadata:     map[string]any{"synthetic": true},
+	}); err != nil {
+		t.Fatalf("RecordScore() error = %v", err)
+	}
+	flushClient(t, client)
+
+	_, body := scoreWireEvent(t, receiver.all()[0])
+	if got := body["comment"]; got != "synthetic-comment" {
+		t.Fatalf("score comment = %#v, want unchanged synthetic comment", got)
+	}
+	if got, want := body["metadata"], map[string]any{"synthetic": true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("score metadata = %#v, want %#v", got, want)
+	}
+}
+
 func TestScoreWireOmitsMetadataWhenMaskDoesNotReturnMap(t *testing.T) {
 	tests := []struct {
 		name string

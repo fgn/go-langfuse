@@ -83,9 +83,11 @@ type Config struct {
 	Disabled bool
 
 	// DisableContentCapture removes Input and Output supplied through
-	// ObservationAttributes. It does not remove content emitted by third-party
-	// OpenTelemetry instrumentation. Identifiers, metadata, model data, and
-	// usage are still recorded.
+	// ObservationAttributes by default. [Client.WithContentCapture] can override
+	// this setting for observations started on one client-scoped context path.
+	// It does not remove content emitted by third-party OpenTelemetry
+	// instrumentation. Identifiers, metadata, model data, and usage are still
+	// recorded.
 	DisableContentCapture bool
 
 	// Mask applies only to observation Input and Output, and to trace,
@@ -185,7 +187,8 @@ type PromptRef struct {
 // Oversized fields are omitted with a payload-free OpenTelemetry diagnostic.
 type ObservationAttributes struct {
 	// Input and Output are explicit content. They are never inferred by the
-	// SDK, are subject to Config.DisableContentCapture, and pass through Mask.
+	// SDK, are subject to Config.DisableContentCapture and
+	// Client.WithContentCapture, and pass through Mask.
 	Input  any
 	Output any
 	// Metadata merges by top-level key across Update calls and passes through

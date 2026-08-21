@@ -30,6 +30,7 @@ type (
 	observationContextKey    struct{ client *Client }
 	traceClaimContextKey     struct{ client *Client }
 	sampleRateContextKey     struct{ client *Client }
+	contentCaptureContextKey struct{ client *Client }
 	admissionTokenContextKey struct{ client *Client }
 )
 
@@ -151,6 +152,32 @@ func (c *Client) WithSampleRate(ctx context.Context, fraction float64) context.C
 		return ctx
 	}
 	return context.WithValue(ctx, sampleRateContextKey{client: c}, fraction)
+}
+
+// WithContentCapture returns a context that overrides
+// [Config.DisableContentCapture] for SDK observations subsequently started on
+// this context path. The decision is client-scoped, inherited by child
+// contexts, and fixed on each observation when it starts so later
+// [Observation.Update] calls use the same policy. It controls only
+// [ObservationAttributes.Input] and [ObservationAttributes.Output]; metadata,
+// errors, scores, and third-party OpenTelemetry data keep their documented
+// policies.
+func (c *Client) WithContentCapture(ctx context.Context, enabled bool) context.Context {
+	if c == nil || c.isDisabled() || ctx == nil {
+		return ctx
+	}
+	if c.stopped.Load() {
+		c.reportStoppedOnce()
+		return ctx
+	}
+	return context.WithValue(ctx, contentCaptureContextKey{client: c}, enabled)
+}
+
+func (c *Client) contentCaptureEnabled(ctx context.Context) bool {
+	if enabled, ok := ctx.Value(contentCaptureContextKey{client: c}).(bool); ok {
+		return enabled
+	}
+	return !c.disableContentCapture
 }
 
 func (s traceState) clone() traceState {

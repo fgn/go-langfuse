@@ -191,6 +191,84 @@ func TestLiveCompatibility(t *testing.T) {
 	assertLiveTime(t, "score timestamp", score.Timestamp, backdated)
 }
 
+// TestLiveContentCaptureOptIn locks the privacy boundary against a real
+// Langfuse deployment: a default-off client omits synthetic input/output, and
+// only the client-scoped opted-in context includes them in ingestion readback.
+// Run with: go test -count=1 -tags=live -run TestLiveContentCaptureOptIn -v .
+func TestLiveContentCaptureOptIn(t *testing.T) {
+	if os.Getenv("LANGFUSE_PUBLIC_KEY") == "" || os.Getenv("LANGFUSE_SECRET_KEY") == "" {
+		t.Fatal("live Langfuse credentials are required; refusing to pass without exporting")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	config := langfuse.ConfigFromEnv()
+	if config.Disabled {
+		t.Fatal("LANGFUSE_TRACING_ENABLED disables tracing; refusing to pass without exporting")
+	}
+	config.DisableContentCapture = true
+	client, err := langfuse.New(ctx, config)
+	if err != nil {
+		t.Fatalf("New(): %v", err)
+	}
+	defer func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		if err := client.Shutdown(shutdownCtx); err != nil {
+			t.Errorf("Shutdown(): %v", err)
+		}
+	}()
+
+	runMarker := fmt.Sprintf("go-langfuse-content-opt-in-%d", time.Now().UTC().UnixNano())
+	offCtx := client.WithTraceAttributes(ctx, langfuse.TraceAttributes{
+		Name: runMarker + "-off", Tags: []string{"go-langfuse", "live-content-policy"},
+		Metadata: map[string]any{"synthetic": true, "capture": false},
+	})
+	_, off := client.StartObservation(offCtx, runMarker+"-off", langfuse.TypeGeneration,
+		langfuse.ObservationAttributes{Input: "synthetic-default-off-input", Model: "synthetic-model"})
+	if off.TraceID() == "" || off.ID() == "" {
+		t.Fatal("default-off observation is not recording; refusing to pass without exporting")
+	}
+	off.Update(langfuse.ObservationAttributes{Output: "synthetic-default-off-output"})
+	off.End()
+
+	onCtx := client.WithTraceAttributes(ctx, langfuse.TraceAttributes{
+		Name: runMarker + "-on", Tags: []string{"go-langfuse", "live-content-policy"},
+		Metadata: map[string]any{"synthetic": true, "capture": true},
+	})
+	onCtx = client.WithContentCapture(onCtx, true)
+	_, on := client.StartObservation(onCtx, runMarker+"-on", langfuse.TypeGeneration,
+		langfuse.ObservationAttributes{Input: "synthetic-opted-in-input", Model: "synthetic-model"})
+	if on.TraceID() == "" || on.ID() == "" {
+		t.Fatal("opted-in observation is not recording; refusing to pass without exporting")
+	}
+	on.Update(langfuse.ObservationAttributes{Output: "synthetic-opted-in-output"})
+	on.End()
+
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer flushCancel()
+	if err := client.Flush(flushCtx); err != nil {
+		t.Fatalf("Flush(): %v", err)
+	}
+	t.Logf("synthetic content-policy traces exported; run_marker=%s off_trace_id=%s on_trace_id=%s",
+		runMarker, off.TraceID(), on.TraceID())
+
+	api := newLiveAPI(t, config.BaseURL)
+	deadline := time.Now().Add(90 * time.Second)
+	offReadback := api.awaitGeneration(t, deadline, off.TraceID(), runMarker+"-off")
+	if offReadback.Input != nil || offReadback.Output != nil {
+		t.Errorf("default-off readback content = (input %#v, output %#v), want both absent",
+			offReadback.Input, offReadback.Output)
+	}
+	onReadback := api.awaitGeneration(t, deadline, on.TraceID(), runMarker+"-on")
+	if got, want := onReadback.Input, any("synthetic-opted-in-input"); got != want {
+		t.Errorf("opted-in readback input = %#v, want %#v", got, want)
+	}
+	if got, want := onReadback.Output, any("synthetic-opted-in-output"); got != want {
+		t.Errorf("opted-in readback output = %#v, want %#v", got, want)
+	}
+}
+
 type liveObservation struct {
 	ID                  string             `json:"id"`
 	TraceID             string             `json:"traceId"`

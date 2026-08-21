@@ -18,6 +18,7 @@ var (
 	_ func(context.Context, langfuse.Config) (*langfuse.Client, error) = langfuse.New
 
 	_ func(*langfuse.Client, context.Context, langfuse.TraceAttributes) context.Context                                                                                   = (*langfuse.Client).WithTraceAttributes
+	_ func(*langfuse.Client, context.Context, bool) context.Context                                                                                                       = (*langfuse.Client).WithContentCapture
 	_ func(*langfuse.Client, context.Context, float64) context.Context                                                                                                    = (*langfuse.Client).WithSampleRate
 	_ func(*langfuse.Client, context.Context) context.Context                                                                                                             = (*langfuse.Client).WithBaggagePropagation
 	_ func(*langfuse.Client, context.Context) context.Context                                                                                                             = (*langfuse.Client).WithTraceAttributesFromBaggage
@@ -73,6 +74,7 @@ func TestPublicMethodSurface(t *testing.T) {
 		"Shutdown",
 		"StartObservation",
 		"WithBaggagePropagation",
+		"WithContentCapture",
 		"WithSampleRate",
 		"WithTraceAttributes",
 		"WithTraceAttributesFromBaggage",
