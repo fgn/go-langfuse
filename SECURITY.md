@@ -15,8 +15,11 @@ seven days.
 
 `DisableContentCapture` drops only SDK-supplied
 `ObservationAttributes.Input` and `ObservationAttributes.Output`, before
-masking or serialization. It does not drop metadata, identifiers, model
-parameters, usage, costs, prompt references, status messages, or errors.
+masking or serialization. `Client.WithContentCapture` can override that client
+default for observations started on one client-scoped context path; each
+observation keeps the decision for its full lifetime. Neither control drops
+metadata, identifiers, model parameters, usage, costs, prompt references,
+status messages, or errors.
 
 `Mask` receives a `MaskField` with SDK-supplied observation input, observation
 output, the complete `ObservationAttributes.Metadata` map, the complete

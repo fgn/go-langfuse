@@ -242,6 +242,39 @@ others. `Compile` is lenient, `CompileStrict` reports unresolved variables,
 `Prompt.Source` distinguishes server, cache, stale, and fallback results.
 The [prompts example](examples/prompts/main.go) runs this flow end to end.
 
+## Content capture
+
+`Config.DisableContentCapture` is the client default for SDK-supplied
+observation input and output. `WithContentCapture` overrides that default on
+one client-scoped context tree. Resolve the application policy before the
+first observation and pass the returned context to all child work:
+
+```go
+cfg := langfuse.ConfigFromEnv()
+cfg.DisableContentCapture = true
+lf, err := langfuse.New(ctx, cfg)
+if err != nil {
+	return err
+}
+
+if contentCaptureAllowed {
+	ctx = lf.WithContentCapture(ctx, true)
+}
+ctx, observation := lf.StartObservation(ctx, "generate-answer",
+	langfuse.TypeGeneration, langfuse.ObservationAttributes{Input: prompt})
+observation.Update(langfuse.ObservationAttributes{Output: answer})
+observation.End()
+```
+
+Absence of an override retains the client default. A child context inherits the
+override, but a context from another client does not. Each observation stores
+the effective decision when it starts, so later `Update` calls use the same
+policy. The switch controls only `ObservationAttributes.Input` and `Output`;
+audit metadata, status and error text, score comments and values, and resource
+attributes separately. It does not sanitize third-party OpenTelemetry spans.
+Use the default isolated tracer provider when Langfuse observations must not
+also reach another telemetry backend.
+
 ## Sampling
 
 In isolated mode the client samples whole traces deterministically by trace

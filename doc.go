@@ -34,6 +34,7 @@
 // lifecycle. Whole traces can be sampled deterministically by trace ID
 // through [Config.SampleRate] and [Client.WithSampleRate], with
 // [TraceSampledAt] exposing the same decision for correlated
-// application-level sampling. A nil or disabled [Client] and the zero
-// [Observation] are safe no-ops.
+// application-level sampling. [Client.WithContentCapture] can override the
+// client's input/output capture default for one local context tree. A nil or
+// disabled [Client] and the zero [Observation] are safe no-ops.
 package langfuse

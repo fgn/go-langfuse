@@ -5,6 +5,12 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+- Add `Client.WithContentCapture` to override the client's SDK input/output
+  capture default for one client-scoped context tree. Each observation stores
+  the effective policy when it starts, so later updates cannot drift from its
+  start policy. Metadata, errors, scores, resource attributes, and third-party
+  OpenTelemetry spans remain outside this narrow switch.
+
 ## [0.9.0] - 2026-08-15
 
 - **Breaking**: `Config.Mask` now receives a `MaskField` with each value. Callers

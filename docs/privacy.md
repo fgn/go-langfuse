@@ -8,9 +8,12 @@ sensitive data.
 
 Set `LANGFUSE_CONTENT_CAPTURE_ENABLED=false`, or configure
 `DisableContentCapture`, to drop SDK-supplied `Input` and `Output` while still
-recording every other field. The privacy boundary is deliberately narrow:
+recording every other field. `Client.WithContentCapture` can override that
+default for observations started on one client-scoped local context tree. Each
+observation retains the decision made at start for all later `Update` calls.
+The privacy boundary is deliberately narrow:
 
-| Data source | Dropped by `DisableContentCapture` | Passed to `Mask` |
+| Data source | Dropped when content capture is disabled | Passed to `Mask` |
 | --- | --- | --- |
 | `ObservationAttributes.Input` and `Output` | Yes | Yes, unless content capture is disabled |
 | `ObservationAttributes.Metadata` | No | Yes, once as the complete `map[string]any` |
@@ -43,6 +46,12 @@ status description, Langfuse status message, and exception-event message. Use
 payload-free error values or sanitize an error before passing it to
 `RecordError`; never put credentials, PHI, prompts, or completions in an error
 or `StatusMessage`.
+
+`WithContentCapture` is local process state, not an authorization system or a
+cross-process propagation mechanism. Call it only after the application has
+resolved its own access policy. It does not change score delivery: score
+metadata still passes through `Mask`, while score comments and values remain
+outside both the content-capture and masking controls.
 
 `Mask` receives a `MaskField` with each SDK value shown in the table. A
 metadata masker must return a `map[string]any`; returning another type omits

@@ -502,6 +502,114 @@ func TestObservationWireContentCaptureAndMask(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("context override is client scoped and stable for observation lifetime", func(t *testing.T) {
+		client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
+			config.DisableContentCapture = true
+		})
+		otherClient, otherReceiver := newObservationWireClient(t, func(config *langfuse.Config) {
+			config.DisableContentCapture = true
+		})
+
+		enabled := client.WithContentCapture(context.Background(), true)
+		enabledContext, enabledObservation := client.StartObservation(enabled, "context-enabled",
+			langfuse.TypeGeneration, langfuse.ObservationAttributes{Input: "enabled-input"})
+		enabledObservation.Update(langfuse.ObservationAttributes{Output: "enabled-output"})
+
+		_, inheritedObservation := client.StartObservation(enabledContext, "context-inherited",
+			langfuse.TypeSpan, langfuse.ObservationAttributes{Input: "inherited-input", Output: "inherited-output"})
+
+		// A later context override does not change the policy already stored on
+		// enabledObservation, but it does control observations started below it.
+		disabled := client.WithContentCapture(enabledContext, false)
+		enabledObservation.Update(langfuse.ObservationAttributes{Output: "enabled-output-after-override"})
+		_, disabledObservation := client.StartObservation(disabled, "context-disabled",
+			langfuse.TypeGeneration, langfuse.ObservationAttributes{Input: "disabled-input"})
+		disabledObservation.Update(langfuse.ObservationAttributes{Output: "disabled-output"})
+
+		// A context override created by one client must not override another
+		// client's default, even when both clients use the same context tree.
+		_, otherObservation := otherClient.StartObservation(enabled, "other-client",
+			langfuse.TypeGeneration, langfuse.ObservationAttributes{Input: "other-input"})
+		otherObservation.Update(langfuse.ObservationAttributes{Output: "other-output"})
+
+		otherObservation.End()
+		disabledObservation.End()
+		inheritedObservation.End()
+		enabledObservation.End()
+
+		spans := exportObservationWireSpans(t, client, receiver, 3)
+		assertObservationWireAttributes(t, observationWireSpanNamed(t, spans, "context-enabled").span.Attributes,
+			map[string]any{
+				"langfuse.environment":          wireEnv,
+				"langfuse.internal.is_app_root": true,
+				"langfuse.observation.input":    "enabled-input",
+				"langfuse.observation.output":   "enabled-output-after-override",
+				"langfuse.observation.type":     "generation",
+				"langfuse.release":              wireRelease,
+			})
+		assertObservationWireAttributes(t, observationWireSpanNamed(t, spans, "context-inherited").span.Attributes,
+			map[string]any{
+				"langfuse.environment":        wireEnv,
+				"langfuse.observation.input":  "inherited-input",
+				"langfuse.observation.output": "inherited-output",
+				"langfuse.observation.type":   "span",
+				"langfuse.release":            wireRelease,
+			})
+		assertObservationWireAttributes(t, observationWireSpanNamed(t, spans, "context-disabled").span.Attributes,
+			map[string]any{
+				"langfuse.environment":      wireEnv,
+				"langfuse.observation.type": "generation",
+				"langfuse.release":          wireRelease,
+			})
+		otherSpan := observationWireSpanNamed(t,
+			exportObservationWireSpans(t, otherClient, otherReceiver, 1), "other-client")
+		otherAttributes := observationWireAttributeMap(t, otherSpan.span.Attributes)
+		for _, key := range []string{"langfuse.observation.input", "langfuse.observation.output"} {
+			if _, exists := otherAttributes[key]; exists {
+				t.Errorf("other client inherited context capture override and exported %s", key)
+			}
+		}
+	})
+
+	t.Run("explicit opt-out overrides capture-on default without crossing clients", func(t *testing.T) {
+		client, receiver := newObservationWireClient(t, nil)
+		otherClient, otherReceiver := newObservationWireClient(t, nil)
+
+		disabled := client.WithContentCapture(context.Background(), false)
+		_, disabledObservation := client.StartObservation(disabled, "default-on-opted-out",
+			langfuse.TypeGeneration, langfuse.ObservationAttributes{Input: "must-not-export-input"})
+		disabledObservation.Update(langfuse.ObservationAttributes{Output: "must-not-export-output"})
+
+		// The first client's explicit opt-out must not change the other client's
+		// capture-on default, even when both start from the same context tree.
+		_, otherObservation := otherClient.StartObservation(disabled, "other-default-on",
+			langfuse.TypeGeneration, langfuse.ObservationAttributes{Input: "other-input"})
+		otherObservation.Update(langfuse.ObservationAttributes{Output: "other-output"})
+
+		otherObservation.End()
+		disabledObservation.End()
+
+		disabledSpan := observationWireSpanNamed(t,
+			exportObservationWireSpans(t, client, receiver, 1), "default-on-opted-out")
+		assertObservationWireAttributes(t, disabledSpan.span.Attributes, map[string]any{
+			"langfuse.environment":          wireEnv,
+			"langfuse.internal.is_app_root": true,
+			"langfuse.observation.type":     "generation",
+			"langfuse.release":              wireRelease,
+		})
+
+		otherSpan := observationWireSpanNamed(t,
+			exportObservationWireSpans(t, otherClient, otherReceiver, 1), "other-default-on")
+		assertObservationWireAttributes(t, otherSpan.span.Attributes, map[string]any{
+			"langfuse.environment":          wireEnv,
+			"langfuse.internal.is_app_root": true,
+			"langfuse.observation.input":    "other-input",
+			"langfuse.observation.output":   "other-output",
+			"langfuse.observation.type":     "generation",
+			"langfuse.release":              wireRelease,
+		})
+	})
 }
 
 func TestObservationWireRecordError(t *testing.T) {
