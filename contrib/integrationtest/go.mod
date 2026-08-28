@@ -9,7 +9,7 @@ go 1.25.0
 toolchain go1.25.13
 
 require (
-	cloud.google.com/go/auth v0.23.1
+	cloud.google.com/go/auth v0.23.2
 	github.com/fgn/go-langfuse v0.4.0
 	github.com/fgn/go-langfuse/contrib/googlegenai v0.0.0
 	github.com/fgn/go-langfuse/contrib/openai v0.0.0
