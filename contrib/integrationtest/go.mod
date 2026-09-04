@@ -16,7 +16,7 @@ require (
 	github.com/openai/openai-go/v3 v3.52.0
 	github.com/sashabaranov/go-openai v1.42.0
 	go.opentelemetry.io/proto/otlp v1.11.0
-	google.golang.org/genai v1.68.0
+	google.golang.org/genai v1.71.0
 	google.golang.org/protobuf v1.36.12
 )
 
