@@ -121,7 +121,7 @@ func NewClient(config Config) (*Client, error) {
 	if err != nil || u == nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" {
 		return nil, errors.New("langfuse api: invalid base URL")
 	}
-	for _, segment := range strings.Split(u.Path, "/") {
+	for segment := range strings.SplitSeq(u.Path, "/") {
 		if segment == "." || segment == ".." {
 			return nil, errors.New("langfuse api: base URL contains a dot segment")
 		}
@@ -186,9 +186,9 @@ type RequestError struct {
 	cause     error
 }
 
-func (e *RequestError) Error() string                     { return "langfuse api: " + e.Operation + ": " + e.Kind }
-func (e *RequestError) Unwrap() error                     { return e.cause }
-func (e *RequestError) Format(state fmt.State, verb rune) { formatError(state, verb, e.Error()) }
+func (e RequestError) Error() string                     { return "langfuse api: " + e.Operation + ": " + e.Kind }
+func (e RequestError) Unwrap() error                     { return e.cause }
+func (e RequestError) Format(state fmt.State, verb rune) { formatError(state, verb, e.Error()) }
 
 // ResponseError is a non-success HTTP response. BodyTruncated describes the
 // bounded discard; raw server error text is intentionally not retained.
@@ -199,10 +199,10 @@ type ResponseError struct {
 	RetryAfter    time.Duration
 }
 
-func (e *ResponseError) Error() string {
+func (e ResponseError) Error() string {
 	return "langfuse api: " + e.Operation + ": HTTP " + strconv.Itoa(e.StatusCode)
 }
-func (e *ResponseError) Format(state fmt.State, verb rune) { formatError(state, verb, e.Error()) }
+func (e ResponseError) Format(state fmt.State, verb rune) { formatError(state, verb, e.Error()) }
 
 func formatError(state fmt.State, verb rune, message string) {
 	if verb == 'q' {
@@ -249,7 +249,7 @@ func (c *Client) do(ctx context.Context, operation, method, path string, query u
 	if method == http.MethodGet {
 		attempts = c.maxAttempts
 	}
-	for attempt := 0; attempt < attempts; attempt++ {
+	for attempt := range attempts {
 		req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(payload))
 		if err != nil {
 			return requestError(operation, "invalid request", nil)

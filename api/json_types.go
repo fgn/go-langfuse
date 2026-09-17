@@ -17,18 +17,27 @@ type Optional[T any] struct {
 
 // Set includes a request value, including its zero value.
 func Set[T any](value T) *Optional[T] { return &Optional[T]{value: value} }
+
 // Null includes an explicit JSON null in a request.
 func Null[T any]() *Optional[T] { return &Optional[T]{null: true} }
+
 // Value returns the value and whether the request field is non-null and set.
 func (o *Optional[T]) Value() (T, bool) {
-	if o == nil || o.null { var zero T; return zero, false }
+	if o == nil || o.null {
+		var zero T
+		return zero, false
+	}
 	return o.value, true
 }
+
 // IsNull reports an explicitly requested JSON null.
 func (o *Optional[T]) IsNull() bool { return o != nil && o.null }
+
 // MarshalJSON encodes a present value or an explicit null.
 func (o Optional[T]) MarshalJSON() ([]byte, error) {
-	if o.null { return []byte("null"), nil }
+	if o.null {
+		return []byte("null"), nil
+	}
 	return json.Marshal(o.value)
 }
 
@@ -43,18 +52,25 @@ type Field[T any] struct {
 
 // IsZero reports an absent field for encoding/json's omitzero option.
 func (f Field[T]) IsZero() bool { return !f.Present }
+
 // UnmarshalJSON records presence and null independently of the value's zero value.
 func (f *Field[T]) UnmarshalJSON(data []byte) error {
 	*f = Field[T]{Present: true}
-	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) { f.Null = true; return nil }
+	if bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		f.Null = true
+		return nil
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	return decoder.Decode(&f.Value)
 }
+
 // MarshalJSON encodes null or the present value. Absent fields are omitted by
 // their enclosing wire struct's omitzero tag, not by this method alone.
 func (f Field[T]) MarshalJSON() ([]byte, error) {
-	if !f.Present || f.Null { return []byte("null"), nil }
+	if !f.Present || f.Null {
+		return []byte("null"), nil
+	}
 	return json.Marshal(f.Value)
 }
 
@@ -71,20 +87,30 @@ type ScoreValue struct {
 func (v *ScoreValue) UnmarshalJSON(data []byte) error {
 	*v = ScoreValue{}
 	data = bytes.TrimSpace(data)
-	if len(data) == 0 { return errors.New("langfuse api: empty score value") }
+	if len(data) == 0 {
+		return errors.New("langfuse api: empty score value")
+	}
 	switch data[0] {
 	case '"':
 		var value string
-		if err := json.Unmarshal(data, &value); err != nil { return err }
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
 		v.Text = &value
 	case 't', 'f':
 		var value bool
-		if err := json.Unmarshal(data, &value); err != nil { return err }
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
 		v.Boolean = &value
 	default:
-		if data[0] != '-' && (data[0] < '0' || data[0] > '9') { return errors.New("langfuse api: invalid score value type") }
+		if data[0] != '-' && (data[0] < '0' || data[0] > '9') {
+			return errors.New("langfuse api: invalid score value type")
+		}
 		var value json.Number
-		if err := json.Unmarshal(data, &value); err != nil { return err }
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
 		v.Number = &value
 	}
 	return nil
@@ -93,19 +119,33 @@ func (v *ScoreValue) UnmarshalJSON(data []byte) error {
 // MarshalJSON preserves the scalar representation and rejects invalid unions.
 func (v ScoreValue) MarshalJSON() ([]byte, error) {
 	count := 0
-	if v.Number != nil { count++ }
-	if v.Boolean != nil { count++ }
-	if v.Text != nil { count++ }
-	if count != 1 { return nil, errors.New("langfuse api: score value needs exactly one variant") }
-	if v.Number != nil { return json.Marshal(v.Number) }
-	if v.Boolean != nil { return json.Marshal(v.Boolean) }
+	if v.Number != nil {
+		count++
+	}
+	if v.Boolean != nil {
+		count++
+	}
+	if v.Text != nil {
+		count++
+	}
+	if count != 1 {
+		return nil, errors.New("langfuse api: score value needs exactly one variant")
+	}
+	if v.Number != nil {
+		return json.Marshal(v.Number)
+	}
+	if v.Boolean != nil {
+		return json.Marshal(v.Boolean)
+	}
 	return json.Marshal(v.Text)
 }
 
 func validJSON(value json.RawMessage) bool { return len(value) == 0 || json.Valid(value) }
 
 func validateNumber(value json.Number) bool {
-	if value == "" { return false }
+	if value == "" {
+		return false
+	}
 	data, err := json.Marshal(value)
 	return err == nil && len(data) > 0 && data[0] != '"'
 }

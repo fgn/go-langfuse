@@ -27,7 +27,9 @@ type ChatMessage struct {
 }
 
 // PromptPlaceholder names a message-list placeholder, not a text variable.
-type PromptPlaceholder struct { Name string `json:"name"` }
+type PromptPlaceholder struct {
+	Name string `json:"name"`
+}
 
 // ChatEntry is exactly one ordinary chat message or message-list placeholder.
 // MarshalJSON emits the official chatmessage/placeholder discriminator.
@@ -37,22 +39,33 @@ type ChatEntry struct {
 }
 
 // MessageEntry constructs an ordinary chat message, including empty content.
-func MessageEntry(role, content string) ChatEntry { return ChatEntry{Message: &ChatMessage{Role: role, Content: content}} }
+func MessageEntry(role, content string) ChatEntry {
+	return ChatEntry{Message: &ChatMessage{Role: role, Content: content}}
+}
+
 // PlaceholderEntry constructs a named message-list placeholder.
-func PlaceholderEntry(name string) ChatEntry { return ChatEntry{Placeholder: &PromptPlaceholder{Name: name}} }
+func PlaceholderEntry(name string) ChatEntry {
+	return ChatEntry{Placeholder: &PromptPlaceholder{Name: name}}
+}
 
 // MarshalJSON encodes the selected chat-message variant without inventing fields.
 func (entry ChatEntry) MarshalJSON() ([]byte, error) {
-	if (entry.Message == nil) == (entry.Placeholder == nil) { return nil, errors.New("langfuse api: chat entry needs exactly one variant") }
+	if (entry.Message == nil) == (entry.Placeholder == nil) {
+		return nil, errors.New("langfuse api: chat entry needs exactly one variant")
+	}
 	if entry.Message != nil {
-		if entry.Message.Role == "" { return nil, errors.New("langfuse api: chat message requires a role") }
+		if entry.Message.Role == "" {
+			return nil, errors.New("langfuse api: chat message requires a role")
+		}
 		return json.Marshal(struct {
-			Type string `json:"type"`
-			Role string `json:"role"`
+			Type    string `json:"type"`
+			Role    string `json:"role"`
 			Content string `json:"content"`
 		}{Type: "chatmessage", Role: entry.Message.Role, Content: entry.Message.Content})
 	}
-	if entry.Placeholder.Name == "" { return nil, errors.New("langfuse api: placeholder requires a name") }
+	if entry.Placeholder.Name == "" {
+		return nil, errors.New("langfuse api: placeholder requires a name")
+	}
 	return json.Marshal(struct {
 		Type string `json:"type"`
 		Name string `json:"name"`
@@ -64,14 +77,18 @@ func (entry ChatEntry) MarshalJSON() ([]byte, error) {
 func (entry *ChatEntry) UnmarshalJSON(data []byte) error {
 	*entry = ChatEntry{}
 	var wire struct {
-		Type *string `json:"type"`
-		Role *string `json:"role"`
+		Type    *string `json:"type"`
+		Role    *string `json:"role"`
 		Content *string `json:"content"`
-		Name *string `json:"name"`
+		Name    *string `json:"name"`
 	}
-	if err := json.Unmarshal(data, &wire); err != nil { return err }
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
 	kind := ""
-	if wire.Type != nil { kind = *wire.Type }
+	if wire.Type != nil {
+		kind = *wire.Type
+	}
 	if wire.Role != nil && wire.Content != nil && wire.Name == nil && (kind == "" || kind == "chatmessage") && *wire.Role != "" {
 		entry.Message = &ChatMessage{Role: *wire.Role, Content: *wire.Content}
 		return nil
@@ -92,6 +109,7 @@ type PromptContent struct {
 
 // TextContent constructs a text prompt, including an empty one.
 func TextContent(text string) PromptContent { return PromptContent{Text: &text} }
+
 // ChatContent constructs a chat prompt and copies its top-level entry slice.
 func ChatContent(messages ...ChatEntry) PromptContent {
 	result := make([]ChatEntry, len(messages))
@@ -100,16 +118,24 @@ func ChatContent(messages ...ChatEntry) PromptContent {
 }
 
 func (content PromptContent) kind() (PromptType, error) {
-	if (content.Text == nil) == (content.Chat == nil) { return "", errors.New("langfuse api: prompt content needs exactly one variant") }
-	if content.Text != nil { return PromptText, nil }
+	if (content.Text == nil) == (content.Chat == nil) {
+		return "", errors.New("langfuse api: prompt content needs exactly one variant")
+	}
+	if content.Text != nil {
+		return PromptText, nil
+	}
 	return PromptChat, nil
 }
 
 // MarshalJSON emits a string or array according to the selected variant.
 func (content PromptContent) MarshalJSON() ([]byte, error) {
 	kind, err := content.kind()
-	if err != nil { return nil, err }
-	if kind == PromptText { return json.Marshal(content.Text) }
+	if err != nil {
+		return nil, err
+	}
+	if kind == PromptText {
+		return json.Marshal(content.Text)
+	}
 	return json.Marshal(content.Chat)
 }
 
@@ -117,14 +143,20 @@ func (content PromptContent) MarshalJSON() ([]byte, error) {
 func (content *PromptContent) UnmarshalJSON(data []byte) error {
 	*content = PromptContent{}
 	data = bytes.TrimSpace(data)
-	if len(data) == 0 { return errors.New("langfuse api: empty prompt content") }
+	if len(data) == 0 {
+		return errors.New("langfuse api: empty prompt content")
+	}
 	switch data[0] {
 	case '"':
 		var text string
-		if err := json.Unmarshal(data, &text); err != nil { return err }
+		if err := json.Unmarshal(data, &text); err != nil {
+			return err
+		}
 		content.Text = &text
 	case '[':
-		if err := json.Unmarshal(data, &content.Chat); err != nil { return err }
+		if err := json.Unmarshal(data, &content.Chat); err != nil {
+			return err
+		}
 	default:
 		return errors.New("langfuse api: invalid prompt content type")
 	}
@@ -149,9 +181,13 @@ type Prompt struct {
 func (prompt *Prompt) UnmarshalJSON(data []byte) error {
 	type wire Prompt
 	var value wire
-	if err := json.Unmarshal(data, &value); err != nil { return err }
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
 	kind, err := value.Prompt.kind()
-	if err != nil || kind != value.Type || value.Name == "" || value.Version < 1 || len(value.Config) == 0 || value.Labels == nil || value.Tags == nil { return ErrInvalidResponse }
+	if err != nil || kind != value.Type || value.Name == "" || value.Version < 1 || len(value.Config) == 0 || value.Labels == nil || value.Tags == nil {
+		return ErrInvalidResponse
+	}
 	*prompt = Prompt(value)
 	return nil
 }
@@ -160,30 +196,42 @@ func (prompt *Prompt) UnmarshalJSON(data []byte) error {
 // Type may be omitted in Go and is inferred from Prompt. Set empty slices to
 // explicitly include [], rather than relying on server-side defaults.
 type CreatePromptRequest struct {
-	Name          string                  `json:"name"`
-	Prompt        PromptContent           `json:"prompt"`
-	Type          PromptType              `json:"type,omitempty"`
-	Config        json.RawMessage         `json:"config,omitempty"`
-	Labels        *Optional[[]string]     `json:"labels,omitempty"`
-	Tags          *Optional[[]string]     `json:"tags,omitempty"`
-	CommitMessage *Optional[string]       `json:"commitMessage,omitempty"`
+	Name          string              `json:"name"`
+	Prompt        PromptContent       `json:"prompt"`
+	Type          PromptType          `json:"type,omitempty"`
+	Config        json.RawMessage     `json:"config,omitempty"`
+	Labels        *Optional[[]string] `json:"labels,omitempty"`
+	Tags          *Optional[[]string] `json:"tags,omitempty"`
+	CommitMessage *Optional[string]   `json:"commitMessage,omitempty"`
 }
 
 func (request CreatePromptRequest) validate() error {
-	if _, err := escapedSegment(request.Name); err != nil { return err }
+	if _, err := escapedSegment(request.Name); err != nil {
+		return err
+	}
 	kind, err := request.Prompt.kind()
-	if err != nil { return err }
-	if request.Type != "" && request.Type != kind { return errors.New("langfuse api: prompt type does not match its content") }
-	if !validJSON(request.Config) { return errors.New("langfuse api: invalid prompt config JSON") }
+	if err != nil {
+		return err
+	}
+	if request.Type != "" && request.Type != kind {
+		return errors.New("langfuse api: prompt type does not match its content")
+	}
+	if !validJSON(request.Config) {
+		return errors.New("langfuse api: invalid prompt config JSON")
+	}
 	if labels, ok := request.Labels.Value(); ok {
-		if err := validatePromptLabels(labels); err != nil { return err }
+		if err := validatePromptLabels(labels); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
 // MarshalJSON emits the canonical inferred type and preserves request presence.
 func (request CreatePromptRequest) MarshalJSON() ([]byte, error) {
-	if err := request.validate(); err != nil { return nil, err }
+	if err := request.validate(); err != nil {
+		return nil, err
+	}
 	request.Type, _ = request.Prompt.kind()
 	type wire CreatePromptRequest
 	return json.Marshal(wire(request))
@@ -234,9 +282,13 @@ type DeletePromptOptions struct {
 // invalidate any runtime client's independent prompt cache.
 func (s *PromptsService) Create(ctx context.Context, request CreatePromptRequest) (Prompt, error) {
 	var result Prompt
-	if err := request.validate(); err != nil { return result, err }
+	if err := request.validate(); err != nil {
+		return result, err
+	}
 	err := clientFor((*service)(s)).do(ctx, "prompts_create", http.MethodPost, "/v2/prompts", nil, request, &result)
-	if err == nil && result.Name != request.Name { return Prompt{}, ErrInvalidResponse }
+	if err == nil && result.Name != request.Name {
+		return Prompt{}, ErrInvalidResponse
+	}
 	return result, err
 }
 
@@ -244,14 +296,26 @@ func (s *PromptsService) Create(ctx context.Context, request CreatePromptRequest
 func (s *PromptsService) Get(ctx context.Context, name string, options GetPromptOptions) (Prompt, error) {
 	var result Prompt
 	path, err := escapedSegment(name)
-	if err != nil { return result, err }
-	if options.Version < 0 || (options.Version != 0 && options.Label != "") { return result, errors.New("langfuse api: select a prompt version or label, not both") }
+	if err != nil {
+		return result, err
+	}
+	if options.Version < 0 || (options.Version != 0 && options.Label != "") {
+		return result, errors.New("langfuse api: select a prompt version or label, not both")
+	}
 	query := url.Values{}
-	if options.Version != 0 { query.Set("version", strconv.Itoa(options.Version)) }
-	if options.Label != "" { query.Set("label", options.Label) }
-	if options.Resolve != nil { query.Set("resolve", strconv.FormatBool(*options.Resolve)) }
+	if options.Version != 0 {
+		query.Set("version", strconv.Itoa(options.Version))
+	}
+	if options.Label != "" {
+		query.Set("label", options.Label)
+	}
+	if options.Resolve != nil {
+		query.Set("resolve", strconv.FormatBool(*options.Resolve))
+	}
 	err = clientFor((*service)(s)).do(ctx, "prompts_get", http.MethodGet, "/v2/prompts/"+path, query, nil, &result)
-	if err == nil && (result.Name != name || (options.Version != 0 && result.Version != options.Version)) { return Prompt{}, ErrInvalidResponse }
+	if err == nil && (result.Name != name || (options.Version != 0 && result.Version != options.Version)) {
+		return Prompt{}, ErrInvalidResponse
+	}
 	return result, err
 }
 
@@ -259,8 +323,12 @@ func (s *PromptsService) Get(ctx context.Context, name string, options GetPrompt
 func (s *PromptsService) List(ctx context.Context, options ListPromptsOptions) (Page[PromptMeta], error) {
 	var result Page[PromptMeta]
 	query, err := pageValues(options.PageOptions)
-	if err != nil { return result, err }
-	if err := addTimeRange(query, "fromUpdatedAt", "toUpdatedAt", options.FromUpdatedAt, options.ToUpdatedAt); err != nil { return result, err }
+	if err != nil {
+		return result, err
+	}
+	if err := addTimeRange(query, "fromUpdatedAt", "toUpdatedAt", options.FromUpdatedAt, options.ToUpdatedAt); err != nil {
+		return result, err
+	}
 	addString(query, "name", options.Name)
 	addString(query, "label", options.Label)
 	addString(query, "tag", options.Tag)
@@ -275,45 +343,81 @@ func (s *PromptsService) List(ctx context.Context, options ListPromptsOptions) (
 func (s *PromptsService) UpdateLabels(ctx context.Context, name string, version int, labels []string) (Prompt, error) {
 	var result Prompt
 	path, err := escapedSegment(name)
-	if err != nil { return result, err }
-	if version < 1 { return result, errors.New("langfuse api: prompt version must be positive") }
-	if err := validatePromptLabels(labels); err != nil { return result, err }
-	if labels == nil { labels = []string{} }
-	request := struct { NewLabels []string `json:"newLabels"` }{NewLabels: labels}
+	if err != nil {
+		return result, err
+	}
+	if version < 1 {
+		return result, errors.New("langfuse api: prompt version must be positive")
+	}
+	if err := validatePromptLabels(labels); err != nil {
+		return result, err
+	}
+	if labels == nil {
+		labels = []string{}
+	}
+	request := struct {
+		NewLabels []string `json:"newLabels"`
+	}{NewLabels: labels}
 	err = clientFor((*service)(s)).do(ctx, "promptVersion_update", http.MethodPatch, "/v2/prompts/"+path+"/versions/"+strconv.Itoa(version), nil, request, &result)
-	if err == nil && (result.Name != name || result.Version != version) { return Prompt{}, ErrInvalidResponse }
+	if err == nil && (result.Name != name || result.Version != version) {
+		return Prompt{}, ErrInvalidResponse
+	}
 	return result, err
 }
 
 // Delete performs an explicitly selected deletion in one HTTP attempt.
 func (s *PromptsService) Delete(ctx context.Context, name string, options DeletePromptOptions) error {
 	path, err := escapedSegment(name)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	selected := 0
-	if options.Version > 0 { selected++ }
-	if options.Label != "" { selected++ }
-	if options.AllVersions { selected++ }
-	if options.Version < 0 || selected != 1 { return errors.New("langfuse api: prompt deletion requires exactly one explicit selector") }
+	if options.Version > 0 {
+		selected++
+	}
+	if options.Label != "" {
+		selected++
+	}
+	if options.AllVersions {
+		selected++
+	}
+	if options.Version < 0 || selected != 1 {
+		return errors.New("langfuse api: prompt deletion requires exactly one explicit selector")
+	}
 	query := url.Values{}
-	if options.Version > 0 { query.Set("version", strconv.Itoa(options.Version)) }
-	if options.Label != "" { query.Set("label", options.Label) }
+	if options.Version > 0 {
+		query.Set("version", strconv.Itoa(options.Version))
+	}
+	if options.Label != "" {
+		query.Set("label", options.Label)
+	}
 	return clientFor((*service)(s)).do(ctx, "prompts_delete", http.MethodDelete, "/v2/prompts/"+path, query, nil, nil)
 }
 
 func validatePromptLabels(labels []string) error {
 	for _, label := range labels {
-		if strings.TrimSpace(label) == "" || label == "latest" { return errors.New("langfuse api: labels must be non-empty and latest is server-managed") }
+		if strings.TrimSpace(label) == "" || label == "latest" {
+			return errors.New("langfuse api: labels must be non-empty and latest is server-managed")
+		}
 	}
 	return nil
 }
 
 func addString(query url.Values, key, value string) {
-	if value != "" { query.Set(key, value) }
+	if value != "" {
+		query.Set(key, value)
+	}
 }
 
 func addTimeRange(query url.Values, fromKey, toKey string, from, to time.Time) error {
-	if !from.IsZero() && !to.IsZero() && !from.Before(to) { return errors.New("langfuse api: time range must increase") }
-	if !from.IsZero() { query.Set(fromKey, from.UTC().Format(time.RFC3339Nano)) }
-	if !to.IsZero() { query.Set(toKey, to.UTC().Format(time.RFC3339Nano)) }
+	if !from.IsZero() && !to.IsZero() && !from.Before(to) {
+		return errors.New("langfuse api: time range must increase")
+	}
+	if !from.IsZero() {
+		query.Set(fromKey, from.UTC().Format(time.RFC3339Nano))
+	}
+	if !to.IsZero() {
+		query.Set(toKey, to.UTC().Format(time.RFC3339Nano))
+	}
 	return nil
 }
