@@ -1,0 +1,2283 @@
+{
+  "operations": [
+    {
+      "id": "annotationQueues_listQueues",
+      "method": "GET",
+      "path": "/api/public/annotation-queues"
+    },
+    {
+      "id": "annotationQueues_createQueue",
+      "method": "POST",
+      "path": "/api/public/annotation-queues"
+    },
+    {
+      "id": "annotationQueues_getQueue",
+      "method": "GET",
+      "path": "/api/public/annotation-queues/{queueId}"
+    },
+    {
+      "id": "annotationQueues_listQueueItems",
+      "method": "GET",
+      "path": "/api/public/annotation-queues/{queueId}/items"
+    },
+    {
+      "id": "annotationQueues_createQueueItem",
+      "method": "POST",
+      "path": "/api/public/annotation-queues/{queueId}/items"
+    },
+    {
+      "id": "annotationQueues_getQueueItem",
+      "method": "GET",
+      "path": "/api/public/annotation-queues/{queueId}/items/{itemId}"
+    },
+    {
+      "id": "annotationQueues_updateQueueItem",
+      "method": "PATCH",
+      "path": "/api/public/annotation-queues/{queueId}/items/{itemId}"
+    },
+    {
+      "id": "annotationQueues_deleteQueueItem",
+      "method": "DELETE",
+      "path": "/api/public/annotation-queues/{queueId}/items/{itemId}"
+    },
+    {
+      "id": "annotationQueues_createQueueAssignment",
+      "method": "POST",
+      "path": "/api/public/annotation-queues/{queueId}/assignments"
+    },
+    {
+      "id": "annotationQueues_deleteQueueAssignment",
+      "method": "DELETE",
+      "path": "/api/public/annotation-queues/{queueId}/assignments"
+    },
+    {
+      "id": "blobStorageIntegrations_getBlobStorageIntegrations",
+      "method": "GET",
+      "path": "/api/public/integrations/blob-storage"
+    },
+    {
+      "id": "blobStorageIntegrations_upsertBlobStorageIntegration",
+      "method": "PUT",
+      "path": "/api/public/integrations/blob-storage"
+    },
+    {
+      "id": "blobStorageIntegrations_getBlobStorageIntegrationStatus",
+      "method": "GET",
+      "path": "/api/public/integrations/blob-storage/{id}"
+    },
+    {
+      "id": "blobStorageIntegrations_deleteBlobStorageIntegration",
+      "method": "DELETE",
+      "path": "/api/public/integrations/blob-storage/{id}"
+    },
+    {
+      "id": "comments_create",
+      "method": "POST",
+      "path": "/api/public/comments"
+    },
+    {
+      "id": "comments_get",
+      "method": "GET",
+      "path": "/api/public/comments"
+    },
+    {
+      "id": "comments_get-by-id",
+      "method": "GET",
+      "path": "/api/public/comments/{commentId}"
+    },
+    {
+      "id": "datasetItems_create",
+      "method": "POST",
+      "path": "/api/public/dataset-items"
+    },
+    {
+      "id": "datasetItems_list",
+      "method": "GET",
+      "path": "/api/public/dataset-items"
+    },
+    {
+      "id": "datasetItems_get",
+      "method": "GET",
+      "path": "/api/public/dataset-items/{id}"
+    },
+    {
+      "id": "datasetItems_delete",
+      "method": "DELETE",
+      "path": "/api/public/dataset-items/{id}"
+    },
+    {
+      "id": "datasetRunItems_create",
+      "method": "POST",
+      "path": "/api/public/dataset-run-items"
+    },
+    {
+      "id": "datasetRunItems_list",
+      "method": "GET",
+      "path": "/api/public/dataset-run-items"
+    },
+    {
+      "id": "datasets_list",
+      "method": "GET",
+      "path": "/api/public/v2/datasets"
+    },
+    {
+      "id": "datasets_create",
+      "method": "POST",
+      "path": "/api/public/v2/datasets"
+    },
+    {
+      "id": "datasets_get",
+      "method": "GET",
+      "path": "/api/public/v2/datasets/{datasetName}"
+    },
+    {
+      "id": "datasets_getRun",
+      "method": "GET",
+      "path": "/api/public/datasets/{datasetName}/runs/{runName}"
+    },
+    {
+      "id": "datasets_deleteRun",
+      "method": "DELETE",
+      "path": "/api/public/datasets/{datasetName}/runs/{runName}"
+    },
+    {
+      "id": "datasets_getRuns",
+      "method": "GET",
+      "path": "/api/public/datasets/{datasetName}/runs"
+    },
+    {
+      "id": "evaluationRules_create",
+      "method": "POST",
+      "path": "/api/public/v2/evaluation-rules"
+    },
+    {
+      "id": "evaluationRules_list",
+      "method": "GET",
+      "path": "/api/public/v2/evaluation-rules"
+    },
+    {
+      "id": "evaluationRules_get",
+      "method": "GET",
+      "path": "/api/public/v2/evaluation-rules/{evaluationRuleId}"
+    },
+    {
+      "id": "evaluationRules_update",
+      "method": "PATCH",
+      "path": "/api/public/v2/evaluation-rules/{evaluationRuleId}"
+    },
+    {
+      "id": "evaluationRules_delete",
+      "method": "DELETE",
+      "path": "/api/public/v2/evaluation-rules/{evaluationRuleId}"
+    },
+    {
+      "id": "evaluators_create",
+      "method": "POST",
+      "path": "/api/public/v2/evaluators"
+    },
+    {
+      "id": "evaluators_list",
+      "method": "GET",
+      "path": "/api/public/v2/evaluators"
+    },
+    {
+      "id": "evaluators_get",
+      "method": "GET",
+      "path": "/api/public/v2/evaluators/{evaluatorId}"
+    },
+    {
+      "id": "evaluators_update",
+      "method": "PATCH",
+      "path": "/api/public/v2/evaluators/{evaluatorId}"
+    },
+    {
+      "id": "evaluators_delete",
+      "method": "DELETE",
+      "path": "/api/public/v2/evaluators/{evaluatorId}"
+    },
+    {
+      "id": "evaluators_listVersions",
+      "method": "GET",
+      "path": "/api/public/v2/evaluators/{evaluatorId}/versions"
+    },
+    {
+      "id": "experiments_list",
+      "method": "GET",
+      "path": "/api/public/experiments"
+    },
+    {
+      "id": "experiments_listItems",
+      "method": "GET",
+      "path": "/api/public/experiment-items"
+    },
+    {
+      "id": "feedback_submit",
+      "method": "POST",
+      "path": "/api/public/feedback"
+    },
+    {
+      "id": "health_health",
+      "method": "GET",
+      "path": "/api/public/health"
+    },
+    {
+      "id": "ingestion_batch",
+      "method": "POST",
+      "path": "/api/public/ingestion"
+    },
+    {
+      "id": "legacy_metricsV1_metrics",
+      "method": "GET",
+      "path": "/api/public/metrics"
+    },
+    {
+      "id": "legacy_observationsV1_get",
+      "method": "GET",
+      "path": "/api/public/observations/{observationId}"
+    },
+    {
+      "id": "legacy_observationsV1_getMany",
+      "method": "GET",
+      "path": "/api/public/observations"
+    },
+    {
+      "id": "legacy_scoreV1_delete",
+      "method": "DELETE",
+      "path": "/api/public/scores/{scoreId}"
+    },
+    {
+      "id": "llmConnections_list",
+      "method": "GET",
+      "path": "/api/public/llm-connections"
+    },
+    {
+      "id": "llmConnections_upsert",
+      "method": "PUT",
+      "path": "/api/public/llm-connections"
+    },
+    {
+      "id": "llmConnections_delete",
+      "method": "DELETE",
+      "path": "/api/public/llm-connections/{id}"
+    },
+    {
+      "id": "media_get",
+      "method": "GET",
+      "path": "/api/public/media/{mediaId}"
+    },
+    {
+      "id": "media_patch",
+      "method": "PATCH",
+      "path": "/api/public/media/{mediaId}"
+    },
+    {
+      "id": "media_getUploadUrl",
+      "method": "POST",
+      "path": "/api/public/media"
+    },
+    {
+      "id": "metrics_metrics",
+      "method": "GET",
+      "path": "/api/public/v2/metrics"
+    },
+    {
+      "id": "models_create",
+      "method": "POST",
+      "path": "/api/public/models"
+    },
+    {
+      "id": "models_list",
+      "method": "GET",
+      "path": "/api/public/models"
+    },
+    {
+      "id": "models_upsert",
+      "method": "PUT",
+      "path": "/api/public/models/{id}"
+    },
+    {
+      "id": "models_get",
+      "method": "GET",
+      "path": "/api/public/models/{id}"
+    },
+    {
+      "id": "models_delete",
+      "method": "DELETE",
+      "path": "/api/public/models/{id}"
+    },
+    {
+      "id": "observations_getMany",
+      "method": "GET",
+      "path": "/api/public/v2/observations"
+    },
+    {
+      "id": "opentelemetry_exportTraces",
+      "method": "POST",
+      "path": "/api/public/otel/v1/traces"
+    },
+    {
+      "id": "organizations_getOrganizationMemberships",
+      "method": "GET",
+      "path": "/api/public/organizations/memberships"
+    },
+    {
+      "id": "organizations_updateOrganizationMembership",
+      "method": "PUT",
+      "path": "/api/public/organizations/memberships"
+    },
+    {
+      "id": "organizations_deleteOrganizationMembership",
+      "method": "DELETE",
+      "path": "/api/public/organizations/memberships"
+    },
+    {
+      "id": "organizations_getProjectMemberships",
+      "method": "GET",
+      "path": "/api/public/projects/{projectId}/memberships"
+    },
+    {
+      "id": "organizations_updateProjectMembership",
+      "method": "PUT",
+      "path": "/api/public/projects/{projectId}/memberships"
+    },
+    {
+      "id": "organizations_deleteProjectMembership",
+      "method": "DELETE",
+      "path": "/api/public/projects/{projectId}/memberships"
+    },
+    {
+      "id": "organizations_getOrganizationProjects",
+      "method": "GET",
+      "path": "/api/public/organizations/projects"
+    },
+    {
+      "id": "organizations_getOrganizationApiKeys",
+      "method": "GET",
+      "path": "/api/public/organizations/apiKeys"
+    },
+    {
+      "id": "projects_get",
+      "method": "GET",
+      "path": "/api/public/projects"
+    },
+    {
+      "id": "projects_create",
+      "method": "POST",
+      "path": "/api/public/projects"
+    },
+    {
+      "id": "projects_update",
+      "method": "PUT",
+      "path": "/api/public/projects/{projectId}"
+    },
+    {
+      "id": "projects_delete",
+      "method": "DELETE",
+      "path": "/api/public/projects/{projectId}"
+    },
+    {
+      "id": "projects_getApiKeys",
+      "method": "GET",
+      "path": "/api/public/projects/{projectId}/apiKeys"
+    },
+    {
+      "id": "projects_createApiKey",
+      "method": "POST",
+      "path": "/api/public/projects/{projectId}/apiKeys"
+    },
+    {
+      "id": "projects_deleteApiKey",
+      "method": "DELETE",
+      "path": "/api/public/projects/{projectId}/apiKeys/{apiKeyId}"
+    },
+    {
+      "id": "promptVersion_update",
+      "method": "PATCH",
+      "path": "/api/public/v2/prompts/{name}/versions/{version}"
+    },
+    {
+      "id": "prompts_get",
+      "method": "GET",
+      "path": "/api/public/v2/prompts/{promptName}"
+    },
+    {
+      "id": "prompts_delete",
+      "method": "DELETE",
+      "path": "/api/public/v2/prompts/{promptName}"
+    },
+    {
+      "id": "prompts_list",
+      "method": "GET",
+      "path": "/api/public/v2/prompts"
+    },
+    {
+      "id": "prompts_create",
+      "method": "POST",
+      "path": "/api/public/v2/prompts"
+    },
+    {
+      "id": "scim_getServiceProviderConfig",
+      "method": "GET",
+      "path": "/api/public/scim/ServiceProviderConfig"
+    },
+    {
+      "id": "scim_getResourceTypes",
+      "method": "GET",
+      "path": "/api/public/scim/ResourceTypes"
+    },
+    {
+      "id": "scim_getSchemas",
+      "method": "GET",
+      "path": "/api/public/scim/Schemas"
+    },
+    {
+      "id": "scim_listUsers",
+      "method": "GET",
+      "path": "/api/public/scim/Users"
+    },
+    {
+      "id": "scim_createUser",
+      "method": "POST",
+      "path": "/api/public/scim/Users"
+    },
+    {
+      "id": "scim_getUser",
+      "method": "GET",
+      "path": "/api/public/scim/Users/{userId}"
+    },
+    {
+      "id": "scim_deleteUser",
+      "method": "DELETE",
+      "path": "/api/public/scim/Users/{userId}"
+    },
+    {
+      "id": "scoreConfigs_create",
+      "method": "POST",
+      "path": "/api/public/score-configs"
+    },
+    {
+      "id": "scoreConfigs_get",
+      "method": "GET",
+      "path": "/api/public/score-configs"
+    },
+    {
+      "id": "scoreConfigs_get-by-id",
+      "method": "GET",
+      "path": "/api/public/score-configs/{configId}"
+    },
+    {
+      "id": "scoreConfigs_update",
+      "method": "PATCH",
+      "path": "/api/public/score-configs/{configId}"
+    },
+    {
+      "id": "scoresV3_getManyV3",
+      "method": "GET",
+      "path": "/api/public/v3/scores"
+    },
+    {
+      "id": "scores_create",
+      "method": "POST",
+      "path": "/api/public/scores"
+    },
+    {
+      "id": "scores_get-many",
+      "method": "GET",
+      "path": "/api/public/v2/scores"
+    },
+    {
+      "id": "scores_get-by-id",
+      "method": "GET",
+      "path": "/api/public/v2/scores/{scoreId}"
+    },
+    {
+      "id": "sessions_list",
+      "method": "GET",
+      "path": "/api/public/sessions"
+    },
+    {
+      "id": "sessions_get",
+      "method": "GET",
+      "path": "/api/public/sessions/{sessionId}"
+    },
+    {
+      "id": "trace_get",
+      "method": "GET",
+      "path": "/api/public/traces/{traceId}"
+    },
+    {
+      "id": "trace_delete",
+      "method": "DELETE",
+      "path": "/api/public/traces/{traceId}"
+    },
+    {
+      "id": "trace_list",
+      "method": "GET",
+      "path": "/api/public/traces"
+    },
+    {
+      "id": "trace_deleteMultiple",
+      "method": "DELETE",
+      "path": "/api/public/traces"
+    },
+    {
+      "id": "unstable_dashboardWidgets_list",
+      "method": "GET",
+      "path": "/api/public/unstable/dashboard-widgets"
+    },
+    {
+      "id": "unstable_dashboardWidgets_create",
+      "method": "POST",
+      "path": "/api/public/unstable/dashboard-widgets"
+    },
+    {
+      "id": "unstable_dashboardWidgets_get",
+      "method": "GET",
+      "path": "/api/public/unstable/dashboard-widgets/{widgetId}"
+    },
+    {
+      "id": "unstable_dashboardWidgets_update",
+      "method": "PATCH",
+      "path": "/api/public/unstable/dashboard-widgets/{widgetId}"
+    },
+    {
+      "id": "unstable_dashboardWidgets_delete",
+      "method": "DELETE",
+      "path": "/api/public/unstable/dashboard-widgets/{widgetId}"
+    },
+    {
+      "id": "unstable_dashboards_list",
+      "method": "GET",
+      "path": "/api/public/unstable/dashboards"
+    },
+    {
+      "id": "unstable_dashboards_create",
+      "method": "POST",
+      "path": "/api/public/unstable/dashboards"
+    },
+    {
+      "id": "unstable_dashboards_get",
+      "method": "GET",
+      "path": "/api/public/unstable/dashboards/{dashboardId}"
+    },
+    {
+      "id": "unstable_dashboards_update",
+      "method": "PATCH",
+      "path": "/api/public/unstable/dashboards/{dashboardId}"
+    },
+    {
+      "id": "unstable_dashboards_delete",
+      "method": "DELETE",
+      "path": "/api/public/unstable/dashboards/{dashboardId}"
+    },
+    {
+      "id": "unstable_dashboards_addPlacement",
+      "method": "POST",
+      "path": "/api/public/unstable/dashboards/{dashboardId}/placements"
+    },
+    {
+      "id": "unstable_dashboards_updatePlacement",
+      "method": "PATCH",
+      "path": "/api/public/unstable/dashboards/{dashboardId}/placements/{placementId}"
+    },
+    {
+      "id": "unstable_dashboards_deletePlacement",
+      "method": "DELETE",
+      "path": "/api/public/unstable/dashboards/{dashboardId}/placements/{placementId}"
+    }
+  ],
+  "paths": {
+    "/api/public/annotation-queues": [
+      42,
+      141
+    ],
+    "/api/public/annotation-queues/{queueId}": [
+      142,
+      187
+    ],
+    "/api/public/annotation-queues/{queueId}/assignments": [
+      466,
+      568
+    ],
+    "/api/public/annotation-queues/{queueId}/items": [
+      188,
+      305
+    ],
+    "/api/public/annotation-queues/{queueId}/items/{itemId}": [
+      306,
+      465
+    ],
+    "/api/public/comments": [
+      752,
+      878
+    ],
+    "/api/public/comments/{commentId}": [
+      879,
+      924
+    ],
+    "/api/public/dataset-items": [
+      925,
+      1061
+    ],
+    "/api/public/dataset-items/{id}": [
+      1062,
+      1151
+    ],
+    "/api/public/dataset-run-items": [
+      1152,
+      1283
+    ],
+    "/api/public/datasets/{datasetName}/runs": [
+      1548,
+      1617
+    ],
+    "/api/public/datasets/{datasetName}/runs/{runName}": [
+      1428,
+      1547
+    ],
+    "/api/public/experiment-items": [
+      2562,
+      2698
+    ],
+    "/api/public/experiments": [
+      2439,
+      2561
+    ],
+    "/api/public/feedback": [
+      2699,
+      2752
+    ],
+    "/api/public/health": [
+      2753,
+      2793
+    ],
+    "/api/public/ingestion": [
+      2794,
+      2939
+    ],
+    "/api/public/integrations/blob-storage": [
+      569,
+      658
+    ],
+    "/api/public/integrations/blob-storage/{id}": [
+      659,
+      751
+    ],
+    "/api/public/llm-connections": [
+      3463,
+      3563
+    ],
+    "/api/public/llm-connections/{id}": [
+      3564,
+      3610
+    ],
+    "/api/public/media": [
+      3704,
+      3749
+    ],
+    "/api/public/media/{mediaId}": [
+      3611,
+      3703
+    ],
+    "/api/public/metrics": [
+      2940,
+      3050
+    ],
+    "/api/public/models": [
+      4094,
+      4192
+    ],
+    "/api/public/models/{id}": [
+      4193,
+      4332
+    ],
+    "/api/public/observations": [
+      3123,
+      3420
+    ],
+    "/api/public/observations/{observationId}": [
+      3051,
+      3122
+    ],
+    "/api/public/organizations/apiKeys": [
+      5203,
+      5244
+    ],
+    "/api/public/organizations/memberships": [
+      4872,
+      5007
+    ],
+    "/api/public/organizations/projects": [
+      5161,
+      5202
+    ],
+    "/api/public/otel/v1/traces": [
+      4779,
+      4871
+    ],
+    "/api/public/projects": [
+      5245,
+      5349
+    ],
+    "/api/public/projects/{projectId}": [
+      5350,
+      5464
+    ],
+    "/api/public/projects/{projectId}/apiKeys": [
+      5465,
+      5577
+    ],
+    "/api/public/projects/{projectId}/apiKeys/{apiKeyId}": [
+      5578,
+      5627
+    ],
+    "/api/public/projects/{projectId}/memberships": [
+      5008,
+      5160
+    ],
+    "/api/public/scim/ResourceTypes": [
+      6018,
+      6057
+    ],
+    "/api/public/scim/Schemas": [
+      6058,
+      6097
+    ],
+    "/api/public/scim/ServiceProviderConfig": [
+      5976,
+      6017
+    ],
+    "/api/public/scim/Users": [
+      6098,
+      6235
+    ],
+    "/api/public/scim/Users/{userId}": [
+      6236,
+      6327
+    ],
+    "/api/public/score-configs": [
+      6328,
+      6430
+    ],
+    "/api/public/score-configs/{configId}": [
+      6431,
+      6527
+    ],
+    "/api/public/scores": [
+      6772,
+      6819
+    ],
+    "/api/public/scores/{scoreId}": [
+      3421,
+      3462
+    ],
+    "/api/public/sessions": [
+      7110,
+      7219
+    ],
+    "/api/public/sessions/{sessionId}": [
+      7220,
+      7288
+    ],
+    "/api/public/traces": [
+      7405,
+      7796
+    ],
+    "/api/public/traces/{traceId}": [
+      7289,
+      7404
+    ],
+    "/api/public/unstable/dashboard-widgets": [
+      7797,
+      7953
+    ],
+    "/api/public/unstable/dashboard-widgets/{widgetId}": [
+      7954,
+      8150
+    ],
+    "/api/public/unstable/dashboards": [
+      8151,
+      8275
+    ],
+    "/api/public/unstable/dashboards/{dashboardId}": [
+      8276,
+      8450
+    ],
+    "/api/public/unstable/dashboards/{dashboardId}/placements": [
+      8451,
+      8529
+    ],
+    "/api/public/unstable/dashboards/{dashboardId}/placements/{placementId}": [
+      8530,
+      8664
+    ],
+    "/api/public/v2/datasets": [
+      1284,
+      1382
+    ],
+    "/api/public/v2/datasets/{datasetName}": [
+      1383,
+      1427
+    ],
+    "/api/public/v2/evaluation-rules": [
+      1618,
+      1774
+    ],
+    "/api/public/v2/evaluation-rules/{evaluationRuleId}": [
+      1775,
+      1988
+    ],
+    "/api/public/v2/evaluators": [
+      1989,
+      2136
+    ],
+    "/api/public/v2/evaluators/{evaluatorId}": [
+      2137,
+      2358
+    ],
+    "/api/public/v2/evaluators/{evaluatorId}/versions": [
+      2359,
+      2438
+    ],
+    "/api/public/v2/metrics": [
+      3750,
+      4093
+    ],
+    "/api/public/v2/observations": [
+      4333,
+      4778
+    ],
+    "/api/public/v2/prompts": [
+      5839,
+      5975
+    ],
+    "/api/public/v2/prompts/{name}/versions/{version}": [
+      5628,
+      5700
+    ],
+    "/api/public/v2/prompts/{promptName}": [
+      5701,
+      5838
+    ],
+    "/api/public/v2/scores": [
+      6820,
+      7052
+    ],
+    "/api/public/v2/scores/{scoreId}": [
+      7053,
+      7109
+    ],
+    "/api/public/v3/scores": [
+      6528,
+      6771
+    ]
+  },
+  "schemas": {
+    "AnnotationQueue": [
+      8680,
+      8707
+    ],
+    "AnnotationQueueAssignmentRequest": [
+      8815,
+      8822
+    ],
+    "AnnotationQueueItem": [
+      8708,
+      8739
+    ],
+    "AnnotationQueueObjectType": [
+      8673,
+      8679
+    ],
+    "AnnotationQueueStatus": [
+      8667,
+      8672
+    ],
+    "ApiKeyDeletionResponse": [
+      15322,
+      15330
+    ],
+    "ApiKeyList": [
+      15256,
+      15266
+    ],
+    "ApiKeyResponse": [
+      15297,
+      15321
+    ],
+    "ApiKeySummary": [
+      15267,
+      15296
+    ],
+    "ArrayOptionsEvaluationRuleFilter": [
+      11821,
+      11838
+    ],
+    "AuthenticationScheme": [
+      15677,
+      15696
+    ],
+    "BaseEvent": [
+      14001,
+      14020
+    ],
+    "BasePrompt": [
+      15484,
+      15521
+    ],
+    "BaseScore": [
+      10228,
+      10304
+    ],
+    "BaseScoreV1": [
+      10047,
+      10114
+    ],
+    "BaseScoreV3": [
+      16084,
+      16154
+    ],
+    "BlobStorageExportFieldGroup": [
+      8925,
+      8944
+    ],
+    "BlobStorageExportFrequency": [
+      8882,
+      8889
+    ],
+    "BlobStorageExportMode": [
+      8875,
+      8881
+    ],
+    "BlobStorageExportSource": [
+      8890,
+      8924
+    ],
+    "BlobStorageIntegrationDeletionResponse": [
+      9249,
+      9256
+    ],
+    "BlobStorageIntegrationFileType": [
+      8852,
+      8865
+    ],
+    "BlobStorageIntegrationFileTypeResponse": [
+      8866,
+      8874
+    ],
+    "BlobStorageIntegrationResponse": [
+      9066,
+      9158
+    ],
+    "BlobStorageIntegrationStatusResponse": [
+      9204,
+      9248
+    ],
+    "BlobStorageIntegrationType": [
+      8845,
+      8851
+    ],
+    "BlobStorageIntegrationsResponse": [
+      9159,
+      9168
+    ],
+    "BlobStorageSyncStatus": [
+      9169,
+      9203
+    ],
+    "BooleanEvaluationRuleFilter": [
+      11901,
+      11915
+    ],
+    "BooleanScore": [
+      10317,
+      10335
+    ],
+    "BooleanScoreV1": [
+      10127,
+      10145
+    ],
+    "BooleanScoreV3": [
+      16167,
+      16177
+    ],
+    "BulkConfig": [
+      15641,
+      15654
+    ],
+    "CategoricalScore": [
+      10336,
+      10355
+    ],
+    "CategoricalScoreV1": [
+      10146,
+      10165
+    ],
+    "CategoricalScoreV3": [
+      16178,
+      16188
+    ],
+    "CategoryOptionsEvaluationRuleFilter": [
+      11880,
+      11900
+    ],
+    "ChatMessage": [
+      15527,
+      15540
+    ],
+    "ChatMessageType": [
+      15541,
+      15545
+    ],
+    "ChatMessageWithPlaceholders": [
+      15522,
+      15526
+    ],
+    "ChatPrompt": [
+      15572,
+      15583
+    ],
+    "CodeEvaluator": [
+      12998,
+      13017
+    ],
+    "CodeEvaluatorSourceCodeLanguage": [
+      11476,
+      11482
+    ],
+    "CodeEvaluatorVersion": [
+      12800,
+      12819
+    ],
+    "Comment": [
+      10461,
+      10492
+    ],
+    "CommentObjectType": [
+      11250,
+      11257
+    ],
+    "ConfigCategory": [
+      10035,
+      10046
+    ],
+    "CorrectionScore": [
+      10356,
+      10371
+    ],
+    "CorrectionScoreV3": [
+      16200,
+      16210
+    ],
+    "CreateAnnotationQueueAssignmentResponse": [
+      8831,
+      8844
+    ],
+    "CreateAnnotationQueueItemRequest": [
+      8782,
+      8796
+    ],
+    "CreateAnnotationQueueRequest": [
+      8766,
+      8781
+    ],
+    "CreateBlobStorageIntegrationRequest": [
+      8945,
+      9065
+    ],
+    "CreateChatPromptRequest": [
+      15385,
+      15418
+    ],
+    "CreateChatPromptType": [
+      15584,
+      15588
+    ],
+    "CreateCodeEvaluatorRequest": [
+      13109,
+      13136
+    ],
+    "CreateCommentRequest": [
+      9257,
+      9300
+    ],
+    "CreateCommentResponse": [
+      9301,
+      9309
+    ],
+    "CreateDatasetItemRequest": [
+      11297,
+      11327
+    ],
+    "CreateDatasetRequest": [
+      11418,
+      11441
+    ],
+    "CreateDatasetRunItemRequest": [
+      11341,
+      11388
+    ],
+    "CreateEvaluationRuleRequest": [
+      12540,
+      12580
+    ],
+    "CreateEvaluatorRequest": [
+      13137,
+      13166
+    ],
+    "CreateEventBody": [
+      13722,
+      13730
+    ],
+    "CreateEventEvent": [
+      14234,
+      14262
+    ],
+    "CreateGenerationBody": [
+      13761,
+      13796
+    ],
+    "CreateGenerationEvent": [
+      14118,
+      14146
+    ],
+    "CreateLlmAsJudgeEvaluatorRequest": [
+      13065,
+      13108
+    ],
+    "CreateModelRequest": [
+      14781,
+      14881
+    ],
+    "CreateObservationEvent": [
+      14050,
+      14078
+    ],
+    "CreatePromptRequest": [
+      15380,
+      15384
+    ],
+    "CreateScoreConfigRequest": [
+      15902,
+      15945
+    ],
+    "CreateScoreRequest": [
+      16301,
+      16374
+    ],
+    "CreateScoreResponse": [
+      16385,
+      16393
+    ],
+    "CreateScoreSource": [
+      16375,
+      16384
+    ],
+    "CreateScoreValue": [
+      10450,
+      10460
+    ],
+    "CreateSpanBody": [
+      13741,
+      13750
+    ],
+    "CreateSpanEvent": [
+      14176,
+      14204
+    ],
+    "CreateTextPromptRequest": [
+      15419,
+      15450
+    ],
+    "CreateTextPromptType": [
+      15589,
+      15593
+    ],
+    "Creator": [
+      12642,
+      12656
+    ],
+    "CursorMeta": [
+      13289,
+      13296
+    ],
+    "Dataset": [
+      10493,
+      10530
+    ],
+    "DatasetItem": [
+      10531,
+      10582
+    ],
+    "DatasetItemMediaReference": [
+      10583,
+      10607
+    ],
+    "DatasetItemMediaReferenceField": [
+      10608,
+      10614
+    ],
+    "DatasetItemMediaReferenceMedia": [
+      10615,
+      10639
+    ],
+    "DatasetRun": [
+      10673,
+      10711
+    ],
+    "DatasetRunItem": [
+      10640,
+      10672
+    ],
+    "DatasetRunWithItems": [
+      10712,
+      10726
+    ],
+    "DatasetStatus": [
+      11258,
+      11263
+    ],
+    "DateTimeEvaluationRuleFilter": [
+      11754,
+      11771
+    ],
+    "DeleteAnnotationQueueAssignmentResponse": [
+      8823,
+      8830
+    ],
+    "DeleteAnnotationQueueItemResponse": [
+      8804,
+      8814
+    ],
+    "DeleteDatasetItemResponse": [
+      11288,
+      11296
+    ],
+    "DeleteDatasetRunResponse": [
+      11458,
+      11465
+    ],
+    "DeleteLlmConnectionResponse": [
+      14549,
+      14556
+    ],
+    "DeleteMembershipRequest": [
+      15078,
+      15085
+    ],
+    "DeleteTraceResponse": [
+      16572,
+      16579
+    ],
+    "DeletedEvaluationRule": [
+      12632,
+      12641
+    ],
+    "DeletedEvaluator": [
+      13297,
+      13306
+    ],
+    "Deprecation": [
+      9323,
+      9353
+    ],
+    "EmptyResponse": [
+      15884,
+      15888
+    ],
+    "EvaluationRule": [
+      12473,
+      12539
+    ],
+    "EvaluationRuleArrayOptionsFilterOperator": [
+      11735,
+      11741
+    ],
+    "EvaluationRuleAssignment": [
+      12847,
+      12865
+    ],
+    "EvaluationRuleBooleanFilterOperator": [
+      11742,
+      11747
+    ],
+    "EvaluationRuleEvaluatorAssignmentInput": [
+      12431,
+      12453
+    ],
+    "EvaluationRuleFilter": [
+      12092,
+      12297
+    ],
+    "EvaluationRuleNullFilterOperator": [
+      11748,
+      11753
+    ],
+    "EvaluationRuleNumberFilterOperator": [
+      11720,
+      11728
+    ],
+    "EvaluationRuleOptionsFilterOperator": [
+      11729,
+      11734
+    ],
+    "EvaluationRuleReadFilter": [
+      12330,
+      12341
+    ],
+    "EvaluationRuleReadFilterBase": [
+      12298,
+      12318
+    ],
+    "EvaluationRuleReadFilterWithKey": [
+      12319,
+      12329
+    ],
+    "EvaluationRuleStringFilterOperator": [
+      11711,
+      11719
+    ],
+    "EvaluationRulesPage": [
+      12617,
+      12631
+    ],
+    "Evaluator": [
+      13018,
+      13050
+    ],
+    "EvaluatorAssignment": [
+      12454,
+      12472
+    ],
+    "EvaluatorBase": [
+      12866,
+      12953
+    ],
+    "EvaluatorChatMessage": [
+      12694,
+      12706
+    ],
+    "EvaluatorChatMessageRole": [
+      12686,
+      12693
+    ],
+    "EvaluatorChatPrompt": [
+      12707,
+      12714
+    ],
+    "EvaluatorChatPromptInput": [
+      12715,
+      12721
+    ],
+    "EvaluatorModelConfig": [
+      12657,
+      12685
+    ],
+    "EvaluatorOutputDefinition": [
+      11538,
+      11593
+    ],
+    "EvaluatorOutputDefinitionBase": [
+      11594,
+      11607
+    ],
+    "EvaluatorOutputScoreType": [
+      11519,
+      11537
+    ],
+    "EvaluatorStatus": [
+      13051,
+      13064
+    ],
+    "EvaluatorType": [
+      11466,
+      11475
+    ],
+    "EvaluatorVersion": [
+      12820,
+      12846
+    ],
+    "EvaluatorVersionBase": [
+      12722,
+      12746
+    ],
+    "EvaluatorVersionsPage": [
+      13274,
+      13288
+    ],
+    "EvaluatorsPage": [
+      13259,
+      13273
+    ],
+    "Experiment": [
+      13330,
+      13381
+    ],
+    "ExperimentItem": [
+      13395,
+      13475
+    ],
+    "ExperimentItemsResponse": [
+      13382,
+      13394
+    ],
+    "ExperimentsResponse": [
+      13307,
+      13319
+    ],
+    "ExperimentsResponseMeta": [
+      13320,
+      13329
+    ],
+    "FeedbackTargetType": [
+      13476,
+      13485
+    ],
+    "FilterConfig": [
+      15655,
+      15665
+    ],
+    "GetCommentsResponse": [
+      9310,
+      9322
+    ],
+    "GetMediaResponse": [
+      14567,
+      14596
+    ],
+    "GetMediaUploadUrlRequest": [
+      14619,
+      14668
+    ],
+    "GetMediaUploadUrlResponse": [
+      14669,
+      14683
+    ],
+    "GetScoresResponse": [
+      16524,
+      16539
+    ],
+    "GetScoresResponseData": [
+      16461,
+      16523
+    ],
+    "GetScoresResponseDataBoolean": [
+      16434,
+      16442
+    ],
+    "GetScoresResponseDataCategorical": [
+      16425,
+      16433
+    ],
+    "GetScoresResponseDataCorrection": [
+      16443,
+      16451
+    ],
+    "GetScoresResponseDataNumeric": [
+      16416,
+      16424
+    ],
+    "GetScoresResponseDataText": [
+      16452,
+      16460
+    ],
+    "GetScoresResponseTraceData": [
+      16394,
+      16415
+    ],
+    "GetScoresV3Meta": [
+      16274,
+      16287
+    ],
+    "GetScoresV3Response": [
+      16288,
+      16300
+    ],
+    "HealthResponse": [
+      13531,
+      13542
+    ],
+    "IngestionError": [
+      14274,
+      14289
+    ],
+    "IngestionEvent": [
+      13543,
+      13653
+    ],
+    "IngestionResponse": [
+      14290,
+      14307
+    ],
+    "IngestionSuccess": [
+      14263,
+      14273
+    ],
+    "IngestionUsage": [
+      13668,
+      13672
+    ],
+    "LegacyEvaluationObject": [
+      12073,
+      12091
+    ],
+    "LegacyPromptVariableMapping": [
+      12032,
+      12072
+    ],
+    "LlmAdapter": [
+      14557,
+      14566
+    ],
+    "LlmAsJudgeEvaluator": [
+      12954,
+      12997
+    ],
+    "LlmAsJudgeEvaluatorVersion": [
+      12747,
+      12799
+    ],
+    "LlmConnection": [
+      14421,
+      14482
+    ],
+    "MapValue": [
+      11229,
+      11249
+    ],
+    "MediaContentType": [
+      14684,
+      14742
+    ],
+    "MembershipDeletionResponse": [
+      15103,
+      15113
+    ],
+    "MembershipRequest": [
+      15067,
+      15077
+    ],
+    "MembershipResponse": [
+      15086,
+      15102
+    ],
+    "MembershipRole": [
+      15059,
+      15066
+    ],
+    "MembershipsResponse": [
+      15114,
+      15123
+    ],
+    "MetricsV2Response": [
+      14743,
+      14760
+    ],
+    "Model": [
+      10727,
+      10861
+    ],
+    "ModelPrice": [
+      10862,
+      10870
+    ],
+    "ModelTokenizerId": [
+      14761,
+      14767
+    ],
+    "ModelUsageUnit": [
+      11210,
+      11220
+    ],
+    "NullEvaluationRuleFilter": [
+      11916,
+      11934
+    ],
+    "NumberEvaluationRuleFilter": [
+      11787,
+      11802
+    ],
+    "NumberObjectEvaluationRuleFilter": [
+      11860,
+      11879
+    ],
+    "NumericScore": [
+      10305,
+      10316
+    ],
+    "NumericScoreV1": [
+      10115,
+      10126
+    ],
+    "NumericScoreV3": [
+      16155,
+      16166
+    ],
+    "Observation": [
+      9522,
+      9634
+    ],
+    "ObservationBody": [
+      13833,
+      13893
+    ],
+    "ObservationLevel": [
+      11221,
+      11228
+    ],
+    "ObservationType": [
+      13654,
+      13667
+    ],
+    "ObservationV2": [
+      9720,
+      9940
+    ],
+    "ObservationsV2Meta": [
+      14907,
+      14917
+    ],
+    "ObservationsV2Response": [
+      14882,
+      14906
+    ],
+    "ObservationsView": [
+      9635,
+      9710
+    ],
+    "ObservationsViewSingle": [
+      9711,
+      9719
+    ],
+    "OpenAICompletionUsageSchema": [
+      14308,
+      14334
+    ],
+    "OpenAIResponseUsageSchema": [
+      14335,
+      14361
+    ],
+    "OpenAIUsage": [
+      13673,
+      13686
+    ],
+    "OptionalObservationBody": [
+      13687,
+      13721
+    ],
+    "Organization": [
+      15206,
+      15218
+    ],
+    "OrganizationApiKey": [
+      15157,
+      15185
+    ],
+    "OrganizationApiKeysResponse": [
+      15186,
+      15195
+    ],
+    "OrganizationProject": [
+      15124,
+      15146
+    ],
+    "OrganizationProjectsResponse": [
+      15147,
+      15156
+    ],
+    "OtelAttribute": [
+      15019,
+      15031
+    ],
+    "OtelAttributeValue": [
+      15032,
+      15053
+    ],
+    "OtelResource": [
+      14935,
+      14945
+    ],
+    "OtelResourceSpan": [
+      14918,
+      14934
+    ],
+    "OtelScope": [
+      14961,
+      14979
+    ],
+    "OtelScopeSpan": [
+      14946,
+      14960
+    ],
+    "OtelSpan": [
+      14980,
+      15018
+    ],
+    "OtelTraceResponse": [
+      15054,
+      15058
+    ],
+    "PaginatedAnnotationQueueItems": [
+      8753,
+      8765
+    ],
+    "PaginatedAnnotationQueues": [
+      8740,
+      8752
+    ],
+    "PaginatedDatasetItems": [
+      11328,
+      11340
+    ],
+    "PaginatedDatasetRunItems": [
+      11389,
+      11404
+    ],
+    "PaginatedDatasetRuns": [
+      11442,
+      11457
+    ],
+    "PaginatedDatasets": [
+      11405,
+      11417
+    ],
+    "PaginatedLlmConnections": [
+      14483,
+      14495
+    ],
+    "PaginatedModels": [
+      14768,
+      14780
+    ],
+    "PaginatedSessions": [
+      16540,
+      16555
+    ],
+    "PatchMediaBody": [
+      14597,
+      14618
+    ],
+    "PlaceholderMessage": [
+      15546,
+      15556
+    ],
+    "PlaceholderMessageType": [
+      15557,
+      15561
+    ],
+    "PricingTier": [
+      10968,
+      11097
+    ],
+    "PricingTierAttributeCondition": [
+      10907,
+      10933
+    ],
+    "PricingTierAttributeSource": [
+      10934,
+      10939
+    ],
+    "PricingTierCondition": [
+      10871,
+      10884
+    ],
+    "PricingTierConditionInput": [
+      10940,
+      10945
+    ],
+    "PricingTierInput": [
+      11098,
+      11198
+    ],
+    "PricingTierOperator": [
+      11199,
+      11209
+    ],
+    "PricingTierUsageCondition": [
+      10885,
+      10906
+    ],
+    "PricingTierUsageConditionInput": [
+      10946,
+      10967
+    ],
+    "Project": [
+      15219,
+      15244
+    ],
+    "ProjectDeletionResponse": [
+      15245,
+      15255
+    ],
+    "Projects": [
+      15196,
+      15205
+    ],
+    "Prompt": [
+      15451,
+      15477
+    ],
+    "PromptMeta": [
+      15344,
+      15379
+    ],
+    "PromptMetaListResponse": [
+      15331,
+      15343
+    ],
+    "PromptType": [
+      15478,
+      15483
+    ],
+    "PromptVariableMapping": [
+      12026,
+      12031
+    ],
+    "PromptVariableMappingInput": [
+      11935,
+      12001
+    ],
+    "PromptVariableMappingRead": [
+      12002,
+      12025
+    ],
+    "PromptVariableMappingSource": [
+      11483,
+      11518
+    ],
+    "PublicApiError": [
+      12406,
+      12430
+    ],
+    "PublicApiErrorCode": [
+      12342,
+      12358
+    ],
+    "PublicApiErrorDetails": [
+      12378,
+      12405
+    ],
+    "PublicApiValidationIssue": [
+      12359,
+      12377
+    ],
+    "PublicEvaluatorBooleanScore": [
+      11630,
+      11641
+    ],
+    "PublicEvaluatorCategoricalScore": [
+      11642,
+      11663
+    ],
+    "PublicEvaluatorNumericScore": [
+      11608,
+      11629
+    ],
+    "PublicEvaluatorOutputDefinition": [
+      11664,
+      11710
+    ],
+    "ResourceMeta": [
+      15666,
+      15676
+    ],
+    "ResourceType": [
+      15715,
+      15747
+    ],
+    "ResourceTypesResponse": [
+      15697,
+      15714
+    ],
+    "SchemaExtension": [
+      15748,
+      15758
+    ],
+    "SchemaResource": [
+      15777,
+      15797
+    ],
+    "SchemasResponse": [
+      15759,
+      15776
+    ],
+    "ScimEmail": [
+      15870,
+      15883
+    ],
+    "ScimFeatureSupport": [
+      15633,
+      15640
+    ],
+    "ScimName": [
+      15863,
+      15869
+    ],
+    "ScimUser": [
+      15822,
+      15848
+    ],
+    "ScimUsersListResponse": [
+      15798,
+      15821
+    ],
+    "Score": [
+      10383,
+      10449
+    ],
+    "ScoreBody": [
+      13938,
+      14000
+    ],
+    "ScoreConfig": [
+      9981,
+      10034
+    ],
+    "ScoreConfigDataType": [
+      11271,
+      11278
+    ],
+    "ScoreConfigs": [
+      15889,
+      15901
+    ],
+    "ScoreDataType": [
+      11279,
+      11287
+    ],
+    "ScoreEvent": [
+      14108,
+      14117
+    ],
+    "ScoreSource": [
+      11264,
+      11270
+    ],
+    "ScoreSubjectExperimentV3": [
+      16021,
+      16029
+    ],
+    "ScoreSubjectObservationV3": [
+      15999,
+      16011
+    ],
+    "ScoreSubjectSessionV3": [
+      16012,
+      16020
+    ],
+    "ScoreSubjectTraceV3": [
+      15990,
+      15998
+    ],
+    "ScoreSubjectV3": [
+      16030,
+      16083
+    ],
+    "ScoreV1": [
+      10177,
+      10227
+    ],
+    "ScoreV3": [
+      16211,
+      16273
+    ],
+    "ServiceProviderConfig": [
+      15594,
+      15632
+    ],
+    "Session": [
+      9488,
+      9506
+    ],
+    "SessionWithTraces": [
+      9507,
+      9521
+    ],
+    "Sort": [
+      16580,
+      16587
+    ],
+    "StringEvaluationRuleFilter": [
+      11772,
+      11786
+    ],
+    "StringObjectEvaluationRuleFilter": [
+      11839,
+      11859
+    ],
+    "StringOptionsEvaluationRuleFilter": [
+      11803,
+      11820
+    ],
+    "SubmitFeedbackRequest": [
+      13486,
+      13521
+    ],
+    "SubmitFeedbackResponse": [
+      13522,
+      13530
+    ],
+    "TextPrompt": [
+      15562,
+      15571
+    ],
+    "TextScore": [
+      10372,
+      10382
+    ],
+    "TextScoreV1": [
+      10166,
+      10176
+    ],
+    "TextScoreV3": [
+      16189,
+      16199
+    ],
+    "Trace": [
+      9354,
+      9418
+    ],
+    "TraceBody": [
+      13894,
+      13937
+    ],
+    "TraceEvent": [
+      14021,
+      14049
+    ],
+    "TraceWithDetails": [
+      9419,
+      9451
+    ],
+    "TraceWithFullDetails": [
+      9452,
+      9487
+    ],
+    "Traces": [
+      16556,
+      16571
+    ],
+    "UpdateAnnotationQueueItemRequest": [
+      8797,
+      8803
+    ],
+    "UpdateCodeEvaluatorRequest": [
+      13224,
+      13249
+    ],
+    "UpdateEvaluationRuleRequest": [
+      12581,
+      12616
+    ],
+    "UpdateEvaluatorMetadataRequest": [
+      13167,
+      13179
+    ],
+    "UpdateEvaluatorRequest": [
+      13250,
+      13258
+    ],
+    "UpdateEventBody": [
+      13731,
+      13740
+    ],
+    "UpdateGenerationBody": [
+      13797,
+      13832
+    ],
+    "UpdateGenerationEvent": [
+      14147,
+      14175
+    ],
+    "UpdateLlmAsJudgeEvaluatorRequest": [
+      13180,
+      13223
+    ],
+    "UpdateObservationEvent": [
+      14079,
+      14107
+    ],
+    "UpdateScoreConfigRequest": [
+      15946,
+      15989
+    ],
+    "UpdateSpanBody": [
+      13751,
+      13760
+    ],
+    "UpdateSpanEvent": [
+      14205,
+      14233
+    ],
+    "UpsertLlmConnectionRequest": [
+      14496,
+      14548
+    ],
+    "Usage": [
+      9941,
+      9980
+    ],
+    "UsageDetails": [
+      14362,
+      14370
+    ],
+    "UserMeta": [
+      15849,
+      15862
+    ],
+    "legacyMetricsResponse": [
+      14371,
+      14391
+    ],
+    "legacyObservations": [
+      14392,
+      14404
+    ],
+    "legacyObservationsViews": [
+      14405,
+      14420
+    ],
+    "unstableCreateDashboardPlacementRequest": [
+      16993,
+      17019
+    ],
+    "unstableCreateDashboardRequest": [
+      17158,
+      17176
+    ],
+    "unstableCreateDashboardWidgetRequest": [
+      16776,
+      16812
+    ],
+    "unstableCreatePresetPlacement": [
+      17048,
+      17075
+    ],
+    "unstableCreateWidgetPlacement": [
+      17020,
+      17047
+    ],
+    "unstableDashboard": [
+      17114,
+      17144
+    ],
+    "unstableDashboardDefinition": [
+      17104,
+      17113
+    ],
+    "unstableDashboardList": [
+      17145,
+      17157
+    ],
+    "unstableDashboardPlacement": [
+      16914,
+      16946
+    ],
+    "unstableDashboardWidget": [
+      16868,
+      16913
+    ],
+    "unstableDashboardWidgetChartConfig": [
+      16710,
+      16736
+    ],
+    "unstableDashboardWidgetChartConfigInput": [
+      16754,
+      16775
+    ],
+    "unstableDashboardWidgetChartType": [
+      16608,
+      16620
+    ],
+    "unstableDashboardWidgetDefaultSort": [
+      16737,
+      16747
+    ],
+    "unstableDashboardWidgetDimension": [
+      16637,
+      16644
+    ],
+    "unstableDashboardWidgetFilter": [
+      16656,
+      16709
+    ],
+    "unstableDashboardWidgetList": [
+      16847,
+      16859
+    ],
+    "unstableDashboardWidgetMetric": [
+      16645,
+      16655
+    ],
+    "unstableDashboardWidgetMetricAggregation": [
+      16621,
+      16636
+    ],
+    "unstableDashboardWidgetSortOrder": [
+      16748,
+      16753
+    ],
+    "unstableDashboardWidgetView": [
+      16588,
+      16595
+    ],
+    "unstableDashboardWidgetViewWithLegacy": [
+      16596,
+      16607
+    ],
+    "unstableDeleteDashboardPlacementResponse": [
+      17096,
+      17103
+    ],
+    "unstableDeleteDashboardResponse": [
+      17195,
+      17202
+    ],
+    "unstableDeleteDashboardWidgetResponse": [
+      16860,
+      16867
+    ],
+    "unstablePresetPlacement": [
+      16970,
+      16992
+    ],
+    "unstablePublicApiError": [
+      17277,
+      17294
+    ],
+    "unstablePublicApiErrorCode": [
+      17203,
+      17217
+    ],
+    "unstablePublicApiErrorDetails": [
+      17236,
+      17276
+    ],
+    "unstablePublicApiValidationIssue": [
+      17218,
+      17235
+    ],
+    "unstableUpdateDashboardPlacementRequest": [
+      17076,
+      17095
+    ],
+    "unstableUpdateDashboardRequest": [
+      17177,
+      17194
+    ],
+    "unstableUpdateDashboardWidgetRequest": [
+      16813,
+      16846
+    ],
+    "unstableWidgetPlacement": [
+      16947,
+      16969
+    ],
+    "utilsMetaResponse": [
+      17295,
+      17315
+    ]
+  },
+  "sha256": "b235737d48b117621f9d607b2beb48b135851fac7bff2aa72b50c6cc8796e9df",
+  "source": "langfuse-openapi-2026-09-17.yaml"
+}
