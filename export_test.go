@@ -105,3 +105,16 @@ func ProductionPromptCoolingDown(c *Client, name string) bool {
 	}
 	return pc.now().Before(entry.cooldownUntil)
 }
+
+// SetPromptFlightCommitHook installs the equivalent seam for a miss flight.
+// Install before starting any prompt reads.
+func SetPromptFlightCommitHook(c *Client, hook func()) {
+	c.prompts.flightCommitHook = func(promptKey) { hook() }
+}
+
+// PromptRefreshCount reports active refresh commits for deterministic tests.
+func PromptRefreshCount(c *Client) int {
+	c.prompts.mu.Lock()
+	defer c.prompts.mu.Unlock()
+	return c.prompts.refreshing
+}

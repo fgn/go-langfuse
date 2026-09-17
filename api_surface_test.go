@@ -27,6 +27,7 @@ var (
 	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationAttributes)                                                                                     = (*langfuse.Client).Event
 	_ func(*langfuse.Client, context.Context, langfuse.Score) error                                                                                                       = (*langfuse.Client).RecordScore
 	_ func(*langfuse.Client, context.Context, string, langfuse.PromptQuery) (langfuse.Prompt, error)                                                                      = (*langfuse.Client).GetPrompt
+	_ func(*langfuse.Client, string)                                                                                                                                      = (*langfuse.Client).InvalidatePromptCache
 	_ func(*langfuse.Client, context.Context) error                                                                                                                       = (*langfuse.Client).Flush
 	_ func(*langfuse.Client, context.Context) error                                                                                                                       = (*langfuse.Client).Shutdown
 
@@ -69,6 +70,7 @@ func TestPublicMethodSurface(t *testing.T) {
 		"Event",
 		"Flush",
 		"GetPrompt",
+		"InvalidatePromptCache",
 		"Observe",
 		"RecordScore",
 		"Shutdown",
