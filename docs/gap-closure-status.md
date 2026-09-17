@@ -44,6 +44,24 @@ recovery and then removed; no branch-writing development workflow remains.
 | P1 | Complete application guides, consumer checks and release preparation | Prompt guide, example, coverage and unreleased notes delivered; broader guides/release work absent | Partially delivered; required remainder unfinished |
 | Later | Organization provisioning, keys and memberships | No implementation promised | Separate backlog, outside this assignment's required application scope |
 
+## Security-gate follow-up
+
+GitHub CI run [35275636273](https://github.com/fgn/go-langfuse/actions/runs/35275636273)
+for recovery commit `6c6d5a51c003e6a6cce5a63bdee56594c1fd978e` passed the
+minimum Go 1.25.0 job, formatting, lint, root/contrib race tests, fuzz smoke
+tests, standalone-adapter checks, and credential-free Python/Go interoperability.
+Its final vulnerability scan failed on the pre-existing gRPC 1.83.0 dependency
+([GO-2026-6348](https://pkg.go.dev/vuln/GO-2026-6348)); that run was **not green**.
+
+The follow-up pins gRPC 1.83.1 in all five modules (root, OpenAI, Google Gen AI,
+integration tests, and validation) without changing the minimum Go version.
+The public dependency archive and checksums were obtained with Go checksum
+database verification enabled. Root/contrib race tests, vet, lint, standalone
+adapter tests, and module-tidiness checks were rerun locally with that patch.
+The temporary read-only dependency-transfer workflow is removed from the final
+tree. The final head's GitHub checks, not the earlier run, establish the completed
+security-gate result.
+
 ## Local verification and limits
 
 The recovered Go 1.25.13 toolchain was used with cached dependencies. The following
