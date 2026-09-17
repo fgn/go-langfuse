@@ -5,6 +5,19 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+- Add the independent synchronous `api` client and typed prompt create, get,
+  list, label deployment, and explicitly selected deletion operations. Requests
+  have bounded deadlines/bodies; only reads retry, and failed writes expose
+  ambiguous outcomes without formatting credentials or payloads.
+- Preserve prompt chat placeholders and additional message JSON fields, with
+  explicit omitted/null/empty request semantics and lossless dynamic numbers.
+- Add `Client.InvalidatePromptCache(name)` for every label/version selector of a
+  prompt. Invalidated foreground fetches and background refreshes cannot refill
+  the cache with an older result. Invalidation is local to one runtime client.
+- Add an opt-in, mock-tested prompt deployment/rollback example and a pinned
+  public API contract with an operation-level coverage ledger. This is the
+  prompt/API foundation, not completion of the broader SDK gap-closure plan.
+
 ## [0.10.0] - 2026-08-21
 
 - Add `Client.WithContentCapture` to override the client's SDK input/output

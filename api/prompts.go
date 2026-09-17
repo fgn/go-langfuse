@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -36,6 +37,9 @@ type PromptPlaceholder struct {
 type ChatEntry struct {
 	Message     *ChatMessage
 	Placeholder *PromptPlaceholder
+	// Extra preserves additional wire fields as a JSON object. It cannot
+	// override type or the selected variant's fields. Numbers stay lossless.
+	Extra json.RawMessage
 }
 
 // MessageEntry constructs an ordinary chat message, including empty content.
@@ -57,19 +61,19 @@ func (entry ChatEntry) MarshalJSON() ([]byte, error) {
 		if entry.Message.Role == "" {
 			return nil, errors.New("langfuse api: chat message requires a role")
 		}
-		return json.Marshal(struct {
+		return marshalChatEntry(struct {
 			Type    string `json:"type"`
 			Role    string `json:"role"`
 			Content string `json:"content"`
-		}{Type: "chatmessage", Role: entry.Message.Role, Content: entry.Message.Content})
+		}{Type: "chatmessage", Role: entry.Message.Role, Content: entry.Message.Content}, entry.Extra, "role", "content")
 	}
 	if entry.Placeholder.Name == "" {
 		return nil, errors.New("langfuse api: placeholder requires a name")
 	}
-	return json.Marshal(struct {
+	return marshalChatEntry(struct {
 		Type string `json:"type"`
 		Name string `json:"name"`
-	}{Type: "placeholder", Name: entry.Placeholder.Name})
+	}{Type: "placeholder", Name: entry.Placeholder.Name}, entry.Extra, "name", "role", "content")
 }
 
 // UnmarshalJSON accepts the contract's optional discriminator and infers the
@@ -89,15 +93,54 @@ func (entry *ChatEntry) UnmarshalJSON(data []byte) error {
 	if wire.Type != nil {
 		kind = *wire.Type
 	}
-	if wire.Role != nil && wire.Content != nil && wire.Name == nil && (kind == "" || kind == "chatmessage") && *wire.Role != "" {
+	if wire.Role != nil && wire.Content != nil && (wire.Name == nil || kind == "chatmessage") && (kind == "" || kind == "chatmessage") && *wire.Role != "" {
 		entry.Message = &ChatMessage{Role: *wire.Role, Content: *wire.Content}
-		return nil
+		return entry.decodeExtra(data, "type", "role", "content")
 	}
 	if wire.Name != nil && *wire.Name != "" && wire.Role == nil && wire.Content == nil && (kind == "" || kind == "placeholder") {
 		entry.Placeholder = &PromptPlaceholder{Name: *wire.Name}
-		return nil
+		return entry.decodeExtra(data, "type", "name")
 	}
 	return errors.New("langfuse api: invalid chat entry union")
+}
+
+// marshalChatEntry merges opaque fields only after validating the variant.
+func marshalChatEntry(wire any, extra json.RawMessage, reserved ...string) ([]byte, error) {
+	encoded, err := json.Marshal(wire)
+	if err != nil || len(extra) == 0 {
+		return encoded, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(extra, &fields); err != nil || fields == nil {
+		return nil, errors.New("langfuse api: chat extra fields must be a JSON object")
+	}
+	for _, key := range append(reserved, "type") {
+		if _, exists := fields[key]; exists {
+			return nil, errors.New("langfuse api: chat extra fields cannot override variant fields")
+		}
+	}
+	var base map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &base); err != nil {
+		return nil, err
+	}
+	maps.Copy(base, fields)
+	return json.Marshal(base)
+}
+
+func (entry *ChatEntry) decodeExtra(data []byte, known ...string) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for _, key := range known {
+		delete(fields, key)
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	extra, err := json.Marshal(fields)
+	entry.Extra = extra
+	return err
 }
 
 // PromptContent is exactly one text string or a non-nil chat slice. Empty text
@@ -287,7 +330,7 @@ func (s *PromptsService) Create(ctx context.Context, request CreatePromptRequest
 	}
 	err := clientFor((*service)(s)).do(ctx, "prompts_create", http.MethodPost, "/v2/prompts", nil, request, &result)
 	if err == nil && result.Name != request.Name {
-		return Prompt{}, ErrInvalidResponse
+		return Prompt{}, &RequestError{Operation: "prompts_create", Kind: "invalid response", OutcomeUnknown: true, cause: ErrInvalidResponse}
 	}
 	return result, err
 }
@@ -360,7 +403,7 @@ func (s *PromptsService) UpdateLabels(ctx context.Context, name string, version 
 	}{NewLabels: labels}
 	err = clientFor((*service)(s)).do(ctx, "promptVersion_update", http.MethodPatch, "/v2/prompts/"+path+"/versions/"+strconv.Itoa(version), nil, request, &result)
 	if err == nil && (result.Name != name || result.Version != version) {
-		return Prompt{}, ErrInvalidResponse
+		return Prompt{}, &RequestError{Operation: "promptVersion_update", Kind: "invalid response", OutcomeUnknown: true, cause: ErrInvalidResponse}
 	}
 	return result, err
 }

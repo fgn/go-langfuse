@@ -52,7 +52,8 @@ type CursorMeta struct {
 	NextCursor *string `json:"nextCursor"`
 }
 
-// CursorPage contains one page of a current cursor-based read API.
+// CursorPage contains one generic nextCursor-based page. Resource APIs may
+// use different wire metadata; this helper does not implement a resource API.
 type CursorPage[T any] struct {
 	Data []T        `json:"data"`
 	Meta CursorMeta `json:"meta"`
@@ -101,20 +102,6 @@ func pageValues(options PageOptions) (url.Values, error) {
 		options.Limit = 50
 	}
 	return url.Values{"page": {strconv.Itoa(options.Page)}, "limit": {strconv.Itoa(options.Limit)}}, nil
-}
-
-func cursorValues(options CursorOptions) (url.Values, error) {
-	if options.Limit < 0 || options.Limit > 100 || len(options.Cursor) > 16384 {
-		return nil, errors.New("langfuse api: invalid cursor or limit")
-	}
-	if options.Limit == 0 {
-		options.Limit = 50
-	}
-	query := url.Values{"limit": {strconv.Itoa(options.Limit)}}
-	if options.Cursor != "" {
-		query.Set("cursor", options.Cursor)
-	}
-	return query, nil
 }
 
 // WalkOptions bounds explicit pagination. Defaults are 100 pages, 10,000 items,

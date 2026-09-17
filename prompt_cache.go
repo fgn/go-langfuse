@@ -82,7 +82,9 @@ type promptCache struct {
 	// evict-then-miss schedule the generation guard defends against. Nil in
 	// production.
 	refreshCommitHook func(promptKey)
-	diagSlots         chan struct{}
+	// flightCommitHook is the equivalent test seam for a foreground miss.
+	flightCommitHook func(promptKey)
+	diagSlots        chan struct{}
 
 	// newFetchContext derives one fetch's context: bounded by the fetch
 	// budget, canceled by client shutdown, and, when parent is non-nil, by
@@ -253,10 +255,17 @@ func (pc *promptCache) runFlight(ctx context.Context, key promptKey, flight *pro
 	defer pc.wg.Done()
 	defer flight.cancel()
 	wire, err := pc.fetcher.Fetch(ctx, key.name, key.version, key.label)
+	if pc.flightCommitHook != nil {
+		pc.flightCommitHook(key)
+	}
 	pc.mu.Lock()
 	if err == nil {
 		flight.prompt = promptFromWire(wire)
-		pc.storeLocked(key, flight.prompt)
+		// An invalidated or abandoned flight may still finish successfully.
+		// Existing waiters may observe it, but it must never refill the cache.
+		if !flight.abandoned {
+			pc.storeLocked(key, flight.prompt)
+		}
 	} else {
 		flight.err = err
 	}

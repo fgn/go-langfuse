@@ -38,7 +38,10 @@ func testClient(t *testing.T, server *httptest.Server, modify func(*Config)) *Cl
 }
 
 func promptFixture(name string, version int) string {
-	data, _ := json.Marshal(map[string]any{"name": name, "version": version, "type": "text", "prompt": "Hi {{name}}", "config": map[string]any{}, "labels": []string{"staging"}, "tags": []string{}})
+	data, err := json.Marshal(map[string]any{"name": name, "version": version, "type": "text", "prompt": "Hi {{name}}", "config": map[string]any{}, "labels": []string{"staging"}, "tags": []string{}})
+	if err != nil {
+		panic(err) // All fixture values are JSON-compatible.
+	}
 	return string(data)
 }
 

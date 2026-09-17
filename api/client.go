@@ -36,22 +36,7 @@ type Config struct {
 // Client accesses one project. Service pointers must not be changed while the
 // client is in use. Creating a client performs no network I/O.
 type Client struct {
-	Prompts          *PromptsService
-	Datasets         *DatasetsService
-	DatasetItems     *DatasetItemsService
-	Observations     *ObservationsService
-	Scores           *ScoresService
-	Metrics          *MetricsService
-	Experiments      *ExperimentsService
-	ExperimentItems  *ExperimentItemsService
-	ScoreConfigs     *ScoreConfigsService
-	Models           *ModelsService
-	LLMConnections   *LLMConnectionsService
-	Comments         *CommentsService
-	AnnotationQueues *AnnotationQueuesService
-	Projects         *ProjectsService
-	Health           *HealthService
-	Media            *MediaService
+	Prompts *PromptsService
 
 	baseURL, publicKey, secretKey   string
 	http                            *http.Client
@@ -64,51 +49,6 @@ type service struct{ client *Client }
 
 // PromptsService manages prompt versions and deployment labels.
 type PromptsService service
-
-// DatasetsService manages dataset definitions.
-type DatasetsService service
-
-// DatasetItemsService manages current and historical dataset items.
-type DatasetItemsService service
-
-// ObservationsService reads the current observations v2 API.
-type ObservationsService service
-
-// ScoresService reads scores v3 and performs explicit synchronous score writes.
-type ScoresService service
-
-// MetricsService queries the metrics v2 API.
-type MetricsService service
-
-// ExperimentsService reads OTel-ingested experiments; it does not create runs.
-type ExperimentsService service
-
-// ExperimentItemsService reads OTel-ingested experiment items.
-type ExperimentItemsService service
-
-// ScoreConfigsService manages project score configurations.
-type ScoreConfigsService service
-
-// ModelsService manages project model definitions and pricing.
-type ModelsService service
-
-// LLMConnectionsService manages explicit provider connection settings.
-type LLMConnectionsService service
-
-// CommentsService creates and reads project comments.
-type CommentsService service
-
-// AnnotationQueuesService manages queues, items, and explicit assignments.
-type AnnotationQueuesService service
-
-// ProjectsService reads project information, not organization administration.
-type ProjectsService service
-
-// HealthService reads the server health/version endpoint.
-type HealthService service
-
-// MediaService manages explicit media records and uploads.
-type MediaService service
 
 // NewClient validates configuration without contacting a server. Empty BaseURL
 // selects the EU Cloud endpoint. HTTP is allowed for explicitly selected local
@@ -159,12 +99,7 @@ func NewClient(config Config) (*Client, error) {
 		maxResponseBytes: config.MaxResponseBytes, maxErrorBytes: config.MaxErrorBytes, maxAttempts: config.MaxAttempts,
 	}
 	s := &service{client: c}
-	c.Prompts, c.Datasets, c.DatasetItems = (*PromptsService)(s), (*DatasetsService)(s), (*DatasetItemsService)(s)
-	c.Observations, c.Scores, c.Metrics = (*ObservationsService)(s), (*ScoresService)(s), (*MetricsService)(s)
-	c.Experiments, c.ExperimentItems = (*ExperimentsService)(s), (*ExperimentItemsService)(s)
-	c.ScoreConfigs, c.Models, c.LLMConnections = (*ScoreConfigsService)(s), (*ModelsService)(s), (*LLMConnectionsService)(s)
-	c.Comments, c.AnnotationQueues = (*CommentsService)(s), (*AnnotationQueuesService)(s)
-	c.Projects, c.Health, c.Media = (*ProjectsService)(s), (*HealthService)(s), (*MediaService)(s)
+	c.Prompts = (*PromptsService)(s)
 	return c, nil
 }
 
@@ -183,7 +118,10 @@ var (
 type RequestError struct {
 	Operation string
 	Kind      string
-	cause     error
+	// OutcomeUnknown means a write was attempted without a trustworthy
+	// completion result. Reconcile with the server; do not blindly replay it.
+	OutcomeUnknown bool
+	cause          error
 }
 
 func (e RequestError) Error() string                     { return "langfuse api: " + e.Operation + ": " + e.Kind }
@@ -197,6 +135,12 @@ type ResponseError struct {
 	StatusCode    int
 	BodyTruncated bool
 	RetryAfter    time.Duration
+	// Retryable is true only for a transient response to a read operation.
+	Retryable bool
+	// OutcomeUnknown warns that a write may have committed before a 5xx.
+	OutcomeUnknown bool
+	// RequestID is a bounded token-shaped X-Request-Id value, never formatted.
+	RequestID string
 }
 
 func (e ResponseError) Error() string {
@@ -218,7 +162,7 @@ func clientFor(s *service) *Client {
 	return s.client
 }
 
-func (c *Client) do(ctx context.Context, operation, method, path string, query url.Values, body, result any) error {
+func (c *Client) do(ctx context.Context, operation, method, path string, query url.Values, body, result any) (err error) {
 	if c == nil || c.http == nil {
 		return ErrUninitialized
 	}
@@ -249,6 +193,20 @@ func (c *Client) do(ctx context.Context, operation, method, path string, query u
 	if method == http.MethodGet {
 		attempts = c.maxAttempts
 	}
+	attempted := false
+	defer func() {
+		if method == http.MethodGet || !attempted || err == nil {
+			return
+		}
+		var requestFailure *RequestError
+		if errors.As(err, &requestFailure) {
+			requestFailure.OutcomeUnknown = true
+		}
+		var responseFailure *ResponseError
+		if errors.As(err, &responseFailure) && responseFailure.StatusCode >= 500 {
+			responseFailure.OutcomeUnknown = true
+		}
+	}()
 	for attempt := range attempts {
 		req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(payload))
 		if err != nil {
@@ -263,6 +221,7 @@ func (c *Client) do(ctx context.Context, operation, method, path string, query u
 		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
+		attempted = true
 		response, requestErr := c.http.Do(req)
 		if requestErr != nil {
 			if response != nil && response.Body != nil {
@@ -289,7 +248,7 @@ func (c *Client) do(ctx context.Context, operation, method, path string, query u
 				return requestError(operation, "canceled", err)
 			}
 			delay := c.retryDelay(attempt, response.Header.Get("Retry-After"))
-			failure := &ResponseError{Operation: operation, StatusCode: response.StatusCode, BodyTruncated: int64(len(data)) > c.maxErrorBytes || readErr != nil, RetryAfter: delay}
+			failure := &ResponseError{Operation: operation, StatusCode: response.StatusCode, BodyTruncated: int64(len(data)) > c.maxErrorBytes || readErr != nil, RetryAfter: delay, Retryable: method == http.MethodGet && retryableStatus(response.StatusCode), RequestID: safeRequestID(response.Header.Get("X-Request-Id"))}
 			if attempt+1 < attempts && retryableStatus(response.StatusCode) {
 				if err := sleepRetry(ctx, delay); err != nil {
 					return requestError(operation, "canceled", err)
@@ -379,4 +338,18 @@ func escapedSegment(value string) (string, error) {
 		return strings.Repeat("%2E", len(value)), nil
 	}
 	return url.PathEscape(value), nil
+}
+
+func safeRequestID(value string) string {
+	if len(value) > 128 {
+		return ""
+	}
+	for _, ch := range value {
+		switch {
+		case ch >= 'a' && ch <= 'z', ch >= 'A' && ch <= 'Z', ch >= '0' && ch <= '9', ch == '-', ch == '_', ch == '.', ch == ':':
+		default:
+			return ""
+		}
+	}
+	return value
 }

@@ -24,11 +24,22 @@ content in fixtures, diagnostics, issues, or pull requests.
 
 ## Design boundaries
 
-The root module is intentionally small: observations, trace attributes, and
-scores. Prompt management, datasets, and administrative APIs are currently out
-of scope. Before proposing a new exported concept, explain why the same result
-cannot be achieved through `ObservationAttributes`, `TraceAttributes`,
-`Score`, or the standard OpenTelemetry span escape hatch.
+The root package owns observations, trace attributes, queued scores, and cached
+runtime prompt retrieval. Synchronous prompt authoring and project REST APIs
+belong in the separate `api` package; constructing its client must not create a
+tracer provider, queue, or worker. Provider integrations remain in contrib
+modules, with no provider SDK dependencies added to the root module.
+
+Resource APIs must be checked against the pinned OpenAPI contract, with tests
+for exact routes, request presence, pagination, retry safety, and payload-free
+errors. Run `python3 scripts/index-api-contract.py --check` after API changes.
+Update [API coverage](docs/api-coverage.md) and the
+[delivery ledger](docs/gap-closure-status.md) instead of exposing empty service
+placeholders or claiming unimplemented operations are supported.
+
+Before adding a root observation concept, explain why the existing attributes,
+queued score API, or standard OpenTelemetry span escape hatch are insufficient.
+Changes to the root public surface must update its golden and reflection tests.
 
 By contributing, you agree that your contributions are licensed under the
 Apache License 2.0 in [LICENSE](LICENSE).

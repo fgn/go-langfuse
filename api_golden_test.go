@@ -268,6 +268,8 @@ func (c *Client) Flush(ctx context.Context) error
 
 func (c *Client) GetPrompt(ctx context.Context, name string, query PromptQuery) (Prompt, error)
 
+func (c *Client) InvalidatePromptCache(name string)
+
 func (c *Client) Observe(
 	ctx context.Context,
 	name string,
