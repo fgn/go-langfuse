@@ -31,13 +31,22 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/index-api-contract.py
+          # Value receivers keep copied errors as redacted as error pointers.
+          sed -i 's/(e \*RequestError)/(e RequestError)/g; s/(e \*ResponseError)/(e ResponseError)/g' api/client.go
+          if test -f api/client_test.go; then
+            sed -i 's/context.Background()/t.Context()/g' api/client_test.go
+          fi
           task format
+          # Apply only configured mechanical lint fixes; the final check below
+          # remains authoritative and does not ignore unresolved violations.
+          ./bin/golangci-lint run --fix --timeout 2m || true
+          ./bin/golangci-lint fmt
           for module in contrib/openai contrib/googlegenai contrib/anthropic contrib/integrationtest; do
             if test -f "$module/go.mod"; then
               (cd "$module" && ../../bin/golangci-lint fmt && GOWORK=off go mod tidy)
             fi
           done
-      - name: Save only formatting and contract-index changes to the draft branch
+      - name: Save mechanical fixes and the contract index to the draft branch
         env:
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
@@ -61,6 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 scripts/index-api-contract.py --check
+          GOWORK=off go test -race -count=1 -mod=readonly -timeout=120s ./api
           task ci
           if test -f contrib/anthropic/go.mod; then
             (cd contrib/anthropic && ../../bin/golangci-lint run --timeout 2m && go vet ./... && go test -race -count=1 -timeout=120s ./...)

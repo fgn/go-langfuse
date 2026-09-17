@@ -97,6 +97,10 @@ linters:
       - linters:
           - forbidigo
         path: examples/
+      # Project API DTOs mirror the hash-pinned public contract's wire casing.
+      - linters:
+          - tagliatelle
+        path: ^api/
       # Adapter wire structs mirror provider JSON field casing exactly.
       - linters:
           - tagliatelle
