@@ -14,7 +14,7 @@ require (
 	github.com/fgn/go-langfuse/contrib/googlegenai v0.0.0
 	github.com/fgn/go-langfuse/contrib/openai v0.0.0
 	github.com/openai/openai-go/v3 v3.56.0
-	github.com/sashabaranov/go-openai v1.42.0
+	github.com/sashabaranov/go-openai v1.42.1
 	go.opentelemetry.io/proto/otlp v1.11.0
 	google.golang.org/genai v1.71.0
 	google.golang.org/protobuf v1.36.12
