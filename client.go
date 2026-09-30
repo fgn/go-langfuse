@@ -247,14 +247,15 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 	}
 	batch := sdktrace.NewBatchSpanProcessor(exporter, batchOptions...)
 	processor, err := lfprocessor.New(lfprocessor.Config{
-		Next:              batch,
-		PublicKey:         cfg.PublicKey,
-		Environment:       environment,
-		Release:           cfg.Release,
-		ContextAttributes: client.propagatedAttributes,
-		HasTraceClaim:     client.hasTraceClaim,
-		Admit:             client.admitObservation,
-		ShouldExportSpan:  cfg.ShouldExportSpan,
+		Next:                    batch,
+		PublicKey:               cfg.PublicKey,
+		Environment:             environment,
+		Release:                 cfg.Release,
+		ContextAttributes:       client.propagatedAttributes,
+		AuthoritativeAttributes: client.authoritativeAttributes,
+		HasTraceClaim:           client.hasTraceClaim,
+		Admit:                   client.admitObservation,
+		ShouldExportSpan:        cfg.ShouldExportSpan,
 	})
 	if err != nil {
 		_ = batch.Shutdown(context.Background())

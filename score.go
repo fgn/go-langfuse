@@ -83,7 +83,10 @@ type Score struct {
 }
 
 // RecordScore submits one score through the Langfuse JSON ingestion endpoint
-// using the client's credentials and environment. The score is validated
+// using the client's credentials and environment. A score that targets the
+// experiment item trace ctx belongs to (see [Client.StartExperimentItem]) is
+// recorded in the item's "sdk-experiment" environment instead, matching the
+// item's spans. The score is validated
 // synchronously, so every returned error marks a score that was not
 // accepted, and then queued for asynchronous delivery with bounded retry (network
 // errors, HTTP 408, 429, and 5xx responses, and per-item ingestion errors
@@ -111,7 +114,7 @@ func (c *Client) RecordScore(ctx context.Context, score Score) error {
 	if c.suppressScore(ctx, score) {
 		return nil
 	}
-	payload, eventID, err := c.buildScorePayload(score)
+	payload, eventID, err := c.buildScorePayload(score, c.scoreEnvironment(ctx, score))
 	if err != nil {
 		return err
 	}
@@ -120,6 +123,20 @@ func (c *Client) RecordScore(ctx context.Context, score Score) error {
 		return ErrScoreQueueFull
 	}
 	return err
+}
+
+// scoreEnvironment returns the environment a score is recorded in: the
+// experiment environment when the score targets the experiment item trace
+// that ctx belongs to, so item scores and item traces agree, and the client
+// environment otherwise.
+func (c *Client) scoreEnvironment(ctx context.Context, score Score) string {
+	if score.TraceID != "" {
+		if traceID, err := oteltrace.TraceIDFromHex(score.TraceID); err == nil &&
+			len(c.experimentAttributes(ctx, traceID)) != 0 {
+			return lfattr.ExperimentEnvironment
+		}
+	}
+	return c.environment
 }
 
 // suppressScore applies the sampling decision of the caller's context path to
@@ -237,10 +254,10 @@ func validateScore(score Score) error {
 // buildScorePayload serializes a validated score as a complete single-event
 // ingestion request, returning the envelope event ID the ingestion result
 // must account for.
-func (c *Client) buildScorePayload(score Score) ([]byte, string, error) {
+func (c *Client) buildScorePayload(score Score, environment string) ([]byte, string, error) {
 	payload := map[string]any{
 		"name":        score.Name,
-		"environment": c.environment,
+		"environment": environment,
 	}
 	if score.NumericValue != nil {
 		payload["value"] = *score.NumericValue

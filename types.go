@@ -20,6 +20,10 @@ const (
 	MaskDatasetItemInput          MaskField = "dataset item input"
 	MaskDatasetItemExpectedOutput MaskField = "dataset item expected output"
 	MaskDatasetItemMetadata       MaskField = "dataset item metadata"
+
+	MaskExperimentMetadata           MaskField = "experiment metadata"
+	MaskExperimentItemMetadata       MaskField = "experiment item metadata"
+	MaskExperimentItemExpectedOutput MaskField = "experiment item expected output"
 )
 
 // Config configures a Langfuse client.
@@ -42,7 +46,9 @@ type Config struct {
 	// inherited by every SDK observation started on the deciding context
 	// path. nil selects the default of 1.0 (export everything); a non-nil
 	// value must be finite and within [0, 1], where 0 exports no traces while
-	// scores and prompts keep working. Other values are a validation error in
+	// scores and prompts keep working; [Client.StartExperimentItem] item
+	// traces are the one exception and are always sampled. Other values are a
+	// validation error in
 	// [New]. It is ignored with a diagnostic when TracerProvider is set,
 	// where the application's sampler remains authoritative.
 	// [Client.WithSampleRate] overrides it per context path.
@@ -96,16 +102,17 @@ type Config struct {
 	DisableContentCapture bool
 
 	// Mask applies only to observation Input and Output; to trace,
-	// observation, and score Metadata; and to dataset metadata and dataset
-	// item content supplied through this Client. It receives the field and its
-	// complete typed value before serialization. Each metadata map must remain
-	// a map[string]any to be retained. It does not process identifiers, names,
-	// descriptions, schemas, model fields, StatusMessage,
-	// [Observation.RecordError] text, or third-party spans and events. Calls
-	// are synchronous and can occur concurrently, so the function must be
-	// fast, non-blocking, and concurrency-safe. A panic is recovered:
-	// telemetry omits the affected value, while a dataset write returns an
-	// error, because an omission there would keep the stored content.
+	// observation, and score Metadata; to dataset metadata and dataset item
+	// content; and to experiment metadata and expected output supplied through
+	// this Client. It receives the field and its complete typed value before
+	// serialization. Each metadata map must remain a map[string]any to be
+	// retained. It does not process identifiers, names, descriptions, schemas,
+	// model fields, StatusMessage, [Observation.RecordError] text, or
+	// third-party spans and events. Calls are synchronous and can occur
+	// concurrently, so the function must be fast, non-blocking, and
+	// concurrency-safe. A panic is recovered: telemetry omits the affected
+	// value, while dataset writes and experiment starts return an error,
+	// because an omission there would keep stale content or unlink an item.
 	Mask func(field MaskField, value any) any
 
 	envErr error

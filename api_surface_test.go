@@ -18,24 +18,25 @@ var (
 	_ func() langfuse.Config                                           = langfuse.ConfigFromEnv
 	_ func(context.Context, langfuse.Config) (*langfuse.Client, error) = langfuse.New
 
-	_ func(*langfuse.Client, context.Context, langfuse.TraceAttributes) context.Context                                                                                   = (*langfuse.Client).WithTraceAttributes
-	_ func(*langfuse.Client, context.Context, bool) context.Context                                                                                                       = (*langfuse.Client).WithContentCapture
-	_ func(*langfuse.Client, context.Context, float64) context.Context                                                                                                    = (*langfuse.Client).WithSampleRate
-	_ func(*langfuse.Client, context.Context) context.Context                                                                                                             = (*langfuse.Client).WithBaggagePropagation
-	_ func(*langfuse.Client, context.Context) context.Context                                                                                                             = (*langfuse.Client).WithTraceAttributesFromBaggage
-	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes) (context.Context, *langfuse.Observation)                  = (*langfuse.Client).StartObservation
-	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes, func(context.Context, *langfuse.Observation) error) error = (*langfuse.Client).Observe
-	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationAttributes)                                                                                     = (*langfuse.Client).Event
-	_ func(*langfuse.Client, context.Context, langfuse.Score) error                                                                                                       = (*langfuse.Client).RecordScore
-	_ func(*langfuse.Client, context.Context, string, langfuse.PromptQuery) (langfuse.Prompt, error)                                                                      = (*langfuse.Client).GetPrompt
-	_ func(*langfuse.Client, context.Context, langfuse.DatasetSpec) (langfuse.Dataset, error)                                                                             = (*langfuse.Client).UpsertDataset
-	_ func(*langfuse.Client, context.Context, string) (langfuse.Dataset, error)                                                                                           = (*langfuse.Client).GetDataset
-	_ func(*langfuse.Client, context.Context, langfuse.DatasetItemSpec) (langfuse.DatasetItem, error)                                                                     = (*langfuse.Client).UpsertDatasetItem
-	_ func(*langfuse.Client, context.Context, string) (langfuse.DatasetItem, error)                                                                                       = (*langfuse.Client).GetDatasetItem
-	_ func(*langfuse.Client, context.Context, string) error                                                                                                               = (*langfuse.Client).DeleteDatasetItem
-	_ func(*langfuse.Client, context.Context, langfuse.DatasetItemQuery) iter.Seq2[langfuse.DatasetItem, error]                                                           = (*langfuse.Client).DatasetItems
-	_ func(*langfuse.Client, context.Context) error                                                                                                                       = (*langfuse.Client).Flush
-	_ func(*langfuse.Client, context.Context) error                                                                                                                       = (*langfuse.Client).Shutdown
+	_ func(*langfuse.Client, context.Context, langfuse.TraceAttributes) context.Context                                                                                             = (*langfuse.Client).WithTraceAttributes
+	_ func(*langfuse.Client, context.Context, bool) context.Context                                                                                                                 = (*langfuse.Client).WithContentCapture
+	_ func(*langfuse.Client, context.Context, float64) context.Context                                                                                                              = (*langfuse.Client).WithSampleRate
+	_ func(*langfuse.Client, context.Context) context.Context                                                                                                                       = (*langfuse.Client).WithBaggagePropagation
+	_ func(*langfuse.Client, context.Context) context.Context                                                                                                                       = (*langfuse.Client).WithTraceAttributesFromBaggage
+	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes) (context.Context, *langfuse.Observation)                            = (*langfuse.Client).StartObservation
+	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationType, langfuse.ObservationAttributes, func(context.Context, *langfuse.Observation) error) error           = (*langfuse.Client).Observe
+	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationAttributes)                                                                                               = (*langfuse.Client).Event
+	_ func(*langfuse.Client, context.Context, langfuse.Score) error                                                                                                                 = (*langfuse.Client).RecordScore
+	_ func(*langfuse.Client, context.Context, string, langfuse.PromptQuery) (langfuse.Prompt, error)                                                                                = (*langfuse.Client).GetPrompt
+	_ func(*langfuse.Client, context.Context, langfuse.DatasetSpec) (langfuse.Dataset, error)                                                                                       = (*langfuse.Client).UpsertDataset
+	_ func(*langfuse.Client, context.Context, string) (langfuse.Dataset, error)                                                                                                     = (*langfuse.Client).GetDataset
+	_ func(*langfuse.Client, context.Context, langfuse.DatasetItemSpec) (langfuse.DatasetItem, error)                                                                               = (*langfuse.Client).UpsertDatasetItem
+	_ func(*langfuse.Client, context.Context, string) (langfuse.DatasetItem, error)                                                                                                 = (*langfuse.Client).GetDatasetItem
+	_ func(*langfuse.Client, context.Context, string) error                                                                                                                         = (*langfuse.Client).DeleteDatasetItem
+	_ func(*langfuse.Client, context.Context, langfuse.DatasetItemQuery) iter.Seq2[langfuse.DatasetItem, error]                                                                     = (*langfuse.Client).DatasetItems
+	_ func(*langfuse.Client, context.Context, langfuse.Experiment, langfuse.ExperimentItem, string, langfuse.ObservationAttributes) (context.Context, *langfuse.Observation, error) = (*langfuse.Client).StartExperimentItem
+	_ func(*langfuse.Client, context.Context) error                                                                                                                                 = (*langfuse.Client).Flush
+	_ func(*langfuse.Client, context.Context) error                                                                                                                                 = (*langfuse.Client).Shutdown
 
 	_ func(*langfuse.Observation, langfuse.ObservationAttributes) = (*langfuse.Observation).Update
 	_ func(*langfuse.Observation, error)                          = (*langfuse.Observation).RecordError
@@ -59,6 +60,8 @@ var (
 	_ error = langfuse.ErrDatasetNotFound
 	_ error = langfuse.ErrDatasetItemNotFound
 	_ error = langfuse.ErrWriteOutcomeUnknown
+	_ error = langfuse.ErrInvalidExperiment
+	_ error = langfuse.ErrExperimentItemNotExported
 	_ error = langfuse.ErrPromptNotFound
 	_ error = langfuse.ErrPromptTypeMismatch
 	_ error = langfuse.ErrScoreQueueFull
@@ -74,6 +77,9 @@ var (
 	_ langfuse.MaskField = langfuse.MaskDatasetItemInput
 	_ langfuse.MaskField = langfuse.MaskDatasetItemExpectedOutput
 	_ langfuse.MaskField = langfuse.MaskDatasetItemMetadata
+	_ langfuse.MaskField = langfuse.MaskExperimentMetadata
+	_ langfuse.MaskField = langfuse.MaskExperimentItemMetadata
+	_ langfuse.MaskField = langfuse.MaskExperimentItemExpectedOutput
 )
 
 func TestPublicMethodSurface(t *testing.T) {
@@ -90,6 +96,7 @@ func TestPublicMethodSurface(t *testing.T) {
 		"Observe",
 		"RecordScore",
 		"Shutdown",
+		"StartExperimentItem",
 		"StartObservation",
 		"UpsertDataset",
 		"UpsertDatasetItem",
@@ -263,6 +270,19 @@ func TestPublicStructSurface(t *testing.T) {
 		"SourceObservationID",
 		"PageSize",
 	})
+	assertFieldNames(t, langfuse.Experiment{}, []string{
+		"ID",
+		"Name",
+		"Description",
+		"DatasetID",
+		"Metadata",
+	})
+	assertFieldNames(t, langfuse.ExperimentItem{}, []string{
+		"ID",
+		"Version",
+		"ExpectedOutput",
+		"Metadata",
+	})
 
 	assertNoExportedFields(t, langfuse.Client{})
 	assertNoExportedFields(t, langfuse.Observation{})
@@ -335,15 +355,18 @@ func TestPublicConstantValues(t *testing.T) {
 	}
 
 	maskFields := map[langfuse.MaskField]string{
-		langfuse.MaskObservationInput:          "observation input",
-		langfuse.MaskObservationOutput:         "observation output",
-		langfuse.MaskTraceMetadata:             "trace metadata",
-		langfuse.MaskObservationMetadata:       "observation metadata",
-		langfuse.MaskScoreMetadata:             "score metadata",
-		langfuse.MaskDatasetMetadata:           "dataset metadata",
-		langfuse.MaskDatasetItemInput:          "dataset item input",
-		langfuse.MaskDatasetItemExpectedOutput: "dataset item expected output",
-		langfuse.MaskDatasetItemMetadata:       "dataset item metadata",
+		langfuse.MaskObservationInput:             "observation input",
+		langfuse.MaskObservationOutput:            "observation output",
+		langfuse.MaskTraceMetadata:                "trace metadata",
+		langfuse.MaskObservationMetadata:          "observation metadata",
+		langfuse.MaskScoreMetadata:                "score metadata",
+		langfuse.MaskDatasetMetadata:              "dataset metadata",
+		langfuse.MaskDatasetItemInput:             "dataset item input",
+		langfuse.MaskDatasetItemExpectedOutput:    "dataset item expected output",
+		langfuse.MaskDatasetItemMetadata:          "dataset item metadata",
+		langfuse.MaskExperimentMetadata:           "experiment metadata",
+		langfuse.MaskExperimentItemMetadata:       "experiment item metadata",
+		langfuse.MaskExperimentItemExpectedOutput: "experiment item expected output",
 	}
 	for got, want := range maskFields {
 		if string(got) != want {

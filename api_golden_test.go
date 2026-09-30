@@ -222,6 +222,12 @@ const MaskDatasetItemMetadata MaskField = "dataset item metadata"
 
 const MaskDatasetMetadata MaskField = "dataset metadata"
 
+const MaskExperimentItemExpectedOutput MaskField = "experiment item expected output"
+
+const MaskExperimentItemMetadata MaskField = "experiment item metadata"
+
+const MaskExperimentMetadata MaskField = "experiment metadata"
+
 const MaskObservationInput MaskField = "observation input"
 
 const MaskObservationMetadata MaskField = "observation metadata"
@@ -299,6 +305,14 @@ func (c *Client) Observe(
 func (c *Client) RecordScore(ctx context.Context, score Score) error
 
 func (c *Client) Shutdown(ctx context.Context) error
+
+func (c *Client) StartExperimentItem(
+	ctx context.Context,
+	experiment Experiment,
+	item ExperimentItem,
+	name string,
+	values ObservationAttributes,
+) (context.Context, *Observation, error)
 
 func (c *Client) StartObservation(
 	ctx context.Context,
@@ -431,6 +445,21 @@ type DatasetSpec struct {
 	ExpectedOutputSchema json.RawMessage
 }
 
+type Experiment struct {
+	ID string
+	Name string
+	Description string
+	DatasetID string
+	Metadata map[string]any
+}
+
+type ExperimentItem struct {
+	ID string
+	Version time.Time
+	ExpectedOutput any
+	Metadata map[string]any
+}
+
 type Level string
 
 type MaskField string
@@ -540,6 +569,10 @@ type Usage struct {
 var ErrDatasetItemNotFound = errors.New("langfuse: dataset item not found")
 
 var ErrDatasetNotFound = errors.New("langfuse: dataset not found")
+
+var ErrExperimentItemNotExported = errors.New("langfuse: experiment item root is not exported")
+
+var ErrInvalidExperiment = errors.New("langfuse: invalid experiment")
 
 var ErrPromptNotFound = errors.New("langfuse: prompt not found")
 
