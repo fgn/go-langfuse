@@ -24,11 +24,19 @@ content in fixtures, diagnostics, issues, or pull requests.
 
 ## Design boundaries
 
-The root module is intentionally small: observations, trace attributes, and
-scores. Prompt management, datasets, and administrative APIs are currently out
-of scope. Before proposing a new exported concept, explain why the same result
-cannot be achieved through `ObservationAttributes`, `TraceAttributes`,
-`Score`, or the standard OpenTelemetry span escape hatch.
+The root module is intentionally small: observations, trace attributes,
+scores, prompt reads, and datasets with experiments. Datasets became in scope
+because Langfuse v4 links experiment results only through
+`langfuse.experiment.*` attributes that must be authoritative on every span
+of an item trace and point at a root span ID that exists only after the span
+starts; callers cannot reproduce that reliably with `ObservationAttributes`
+or raw OpenTelemetry attributes. See
+[the design](docs/design/datasets-and-experiments.md). Experiment runners,
+evaluator frameworks, and administrative APIs (dataset listing or deletion,
+project and user management) remain out of scope. Before proposing a new
+exported concept, explain why the same result cannot be achieved through
+`ObservationAttributes`, `TraceAttributes`, `Score`, or the standard
+OpenTelemetry span escape hatch.
 
 By contributing, you agree that your contributions are licensed under the
 Apache License 2.0 in [LICENSE](LICENSE).

@@ -5,6 +5,28 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+- Add datasets: `UpsertDataset`, `GetDataset`, `UpsertDatasetItem`,
+  `GetDatasetItem`, `DeleteDatasetItem`, and the `DatasetItems` iterator over
+  the Langfuse dataset REST API. Calls are synchronous, bounded by a 30-second
+  budget, admitted through a gate that `Shutdown` cancels, and never follow
+  redirects. A write is never repeated once it may have reached the server;
+  such failures wrap the new `ErrWriteOutcomeUnknown`. Dataset content passes
+  `Config.Mask` through four new `MaskField` values and fails closed, because
+  an omitted field keeps the stored value. `DatasetItems` reads a pinned
+  cohort with `AsOf` and validates every page before yielding it.
+- Add `StartExperimentItem`, which starts one Langfuse v4 experiment item as a
+  new trace whose root observation is the item's canonical observation. Every
+  span of the item trace on the client's provider carries authoritative
+  experiment identity and the `sdk-experiment` environment; stale or foreign
+  `langfuse.experiment.*` values are removed at export. Invalid input returns
+  `ErrInvalidExperiment`, and a root that would not be exported returns
+  `ErrExperimentItemNotExported`. Experiment metadata and expected output
+  pass `Config.Mask` through three new `MaskField` values.
+- **Behavior**: in isolated mode, experiment item traces are always sampled,
+  an explicit exception to `SampleRate` and `WithSampleRate`. A score recorded
+  on an experiment item context that targets the item trace uses the
+  `sdk-experiment` environment.
+
 ## [0.10.0] - 2026-08-21
 
 - Add `Client.WithContentCapture` to override the client's SDK input/output
