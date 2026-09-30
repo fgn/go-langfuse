@@ -15,6 +15,11 @@ const (
 	MaskTraceMetadata       MaskField = "trace metadata"
 	MaskObservationMetadata MaskField = "observation metadata"
 	MaskScoreMetadata       MaskField = "score metadata"
+
+	MaskDatasetMetadata           MaskField = "dataset metadata"
+	MaskDatasetItemInput          MaskField = "dataset item input"
+	MaskDatasetItemExpectedOutput MaskField = "dataset item expected output"
+	MaskDatasetItemMetadata       MaskField = "dataset item metadata"
 )
 
 // Config configures a Langfuse client.
@@ -90,14 +95,17 @@ type Config struct {
 	// recorded.
 	DisableContentCapture bool
 
-	// Mask applies only to observation Input and Output, and to trace,
-	// observation, and score Metadata supplied through this Client. It receives
-	// the field and its complete typed value before serialization. Each metadata
-	// map must remain a map[string]any to be retained. It does not process
-	// identifiers, model fields, StatusMessage, [Observation.RecordError] text,
-	// or third-party spans and events. Calls are synchronous and can occur
-	// concurrently, so the function must be fast, non-blocking, and
-	// concurrency-safe. A panic is recovered and the affected value is omitted.
+	// Mask applies only to observation Input and Output; to trace,
+	// observation, and score Metadata; and to dataset metadata and dataset
+	// item content supplied through this Client. It receives the field and its
+	// complete typed value before serialization. Each metadata map must remain
+	// a map[string]any to be retained. It does not process identifiers, names,
+	// descriptions, schemas, model fields, StatusMessage,
+	// [Observation.RecordError] text, or third-party spans and events. Calls
+	// are synchronous and can occur concurrently, so the function must be
+	// fast, non-blocking, and concurrency-safe. A panic is recovered:
+	// telemetry omits the affected value, while a dataset write returns an
+	// error, because an omission there would keep the stored content.
 	Mask func(field MaskField, value any) any
 
 	envErr error

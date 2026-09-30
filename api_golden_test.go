@@ -202,13 +202,25 @@ func formatAPINode(t *testing.T, set *token.FileSet, node ast.Node) string {
 	return output.String()
 }
 
-const wantPublicAPI = `const LevelDebug Level = "DEBUG"
+const wantPublicAPI = `const DatasetItemActive DatasetItemStatus = "ACTIVE"
+
+const DatasetItemArchived DatasetItemStatus = "ARCHIVED"
+
+const LevelDebug Level = "DEBUG"
 
 const LevelDefault Level = "DEFAULT"
 
 const LevelError Level = "ERROR"
 
 const LevelWarning Level = "WARNING"
+
+const MaskDatasetItemExpectedOutput MaskField = "dataset item expected output"
+
+const MaskDatasetItemInput MaskField = "dataset item input"
+
+const MaskDatasetItemMetadata MaskField = "dataset item metadata"
+
+const MaskDatasetMetadata MaskField = "dataset metadata"
 
 const MaskObservationInput MaskField = "observation input"
 
@@ -262,9 +274,17 @@ const TypeSpan ObservationType = "span"
 
 const TypeTool ObservationType = "tool"
 
+func (c *Client) DatasetItems(ctx context.Context, query DatasetItemQuery) iter.Seq2[DatasetItem, error]
+
+func (c *Client) DeleteDatasetItem(ctx context.Context, id string) error
+
 func (c *Client) Event(ctx context.Context, name string, values ObservationAttributes)
 
 func (c *Client) Flush(ctx context.Context) error
+
+func (c *Client) GetDataset(ctx context.Context, name string) (Dataset, error)
+
+func (c *Client) GetDatasetItem(ctx context.Context, id string) (DatasetItem, error)
 
 func (c *Client) GetPrompt(ctx context.Context, name string, query PromptQuery) (Prompt, error)
 
@@ -286,6 +306,10 @@ func (c *Client) StartObservation(
 	observationType ObservationType,
 	values ObservationAttributes,
 ) (context.Context, *Observation)
+
+func (c *Client) UpsertDataset(ctx context.Context, spec DatasetSpec) (Dataset, error)
+
+func (c *Client) UpsertDatasetItem(ctx context.Context, spec DatasetItemSpec) (DatasetItem, error)
 
 func (c *Client) WithBaggagePropagation(ctx context.Context) context.Context
 
@@ -351,6 +375,60 @@ type Config struct {
 	Disabled bool
 	DisableContentCapture bool
 	Mask func(field MaskField, value any) any
+}
+
+type Dataset struct {
+	ID string
+	Name string
+	Description string
+	Metadata json.RawMessage
+	InputSchema json.RawMessage
+	ExpectedOutputSchema json.RawMessage
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type DatasetItem struct {
+	ID string
+	DatasetID string
+	DatasetName string
+	Status DatasetItemStatus
+	Input json.RawMessage
+	ExpectedOutput json.RawMessage
+	Metadata json.RawMessage
+	SourceTraceID string
+	SourceObservationID string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type DatasetItemQuery struct {
+	DatasetName string
+	AsOf time.Time
+	SourceTraceID string
+	SourceObservationID string
+	PageSize int
+}
+
+type DatasetItemSpec struct {
+	DatasetName string
+	ID string
+	Input any
+	ExpectedOutput any
+	Metadata map[string]any
+	SourceTraceID string
+	SourceObservationID string
+	Status DatasetItemStatus
+}
+
+type DatasetItemStatus string
+
+type DatasetSpec struct {
+	Name string
+	Description *string
+	Metadata map[string]any
+	InputSchema json.RawMessage
+	ExpectedOutputSchema json.RawMessage
 }
 
 type Level string
@@ -459,6 +537,10 @@ type Usage struct {
 	Details map[string]int64
 }
 
+var ErrDatasetItemNotFound = errors.New("langfuse: dataset item not found")
+
+var ErrDatasetNotFound = errors.New("langfuse: dataset not found")
+
 var ErrPromptNotFound = errors.New("langfuse: prompt not found")
 
 var ErrPromptTypeMismatch = errors.New("langfuse: prompt type mismatch")
@@ -468,4 +550,6 @@ var ErrScoreQueueFull = errors.New("langfuse: score queue is full")
 var ErrShutdownInProgress = errors.New("langfuse: shutdown is in progress")
 
 var ErrTracerProviderInUse = errors.New("langfuse: tracer provider already has a Langfuse client")
+
+var ErrWriteOutcomeUnknown = errors.New("langfuse: write outcome unknown")
 `

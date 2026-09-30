@@ -2,6 +2,7 @@ package langfuse_test
 
 import (
 	"context"
+	"iter"
 	"reflect"
 	"slices"
 	"testing"
@@ -27,6 +28,12 @@ var (
 	_ func(*langfuse.Client, context.Context, string, langfuse.ObservationAttributes)                                                                                     = (*langfuse.Client).Event
 	_ func(*langfuse.Client, context.Context, langfuse.Score) error                                                                                                       = (*langfuse.Client).RecordScore
 	_ func(*langfuse.Client, context.Context, string, langfuse.PromptQuery) (langfuse.Prompt, error)                                                                      = (*langfuse.Client).GetPrompt
+	_ func(*langfuse.Client, context.Context, langfuse.DatasetSpec) (langfuse.Dataset, error)                                                                             = (*langfuse.Client).UpsertDataset
+	_ func(*langfuse.Client, context.Context, string) (langfuse.Dataset, error)                                                                                           = (*langfuse.Client).GetDataset
+	_ func(*langfuse.Client, context.Context, langfuse.DatasetItemSpec) (langfuse.DatasetItem, error)                                                                     = (*langfuse.Client).UpsertDatasetItem
+	_ func(*langfuse.Client, context.Context, string) (langfuse.DatasetItem, error)                                                                                       = (*langfuse.Client).GetDatasetItem
+	_ func(*langfuse.Client, context.Context, string) error                                                                                                               = (*langfuse.Client).DeleteDatasetItem
+	_ func(*langfuse.Client, context.Context, langfuse.DatasetItemQuery) iter.Seq2[langfuse.DatasetItem, error]                                                           = (*langfuse.Client).DatasetItems
 	_ func(*langfuse.Client, context.Context) error                                                                                                                       = (*langfuse.Client).Flush
 	_ func(*langfuse.Client, context.Context) error                                                                                                                       = (*langfuse.Client).Shutdown
 
@@ -49,6 +56,9 @@ var (
 	_ func(langfuse.Prompt, map[string]any) (langfuse.Prompt, error) = langfuse.Prompt.CompileStrict
 	_ func(langfuse.Prompt, any) error                               = langfuse.Prompt.DecodeConfig
 
+	_ error = langfuse.ErrDatasetNotFound
+	_ error = langfuse.ErrDatasetItemNotFound
+	_ error = langfuse.ErrWriteOutcomeUnknown
 	_ error = langfuse.ErrPromptNotFound
 	_ error = langfuse.ErrPromptTypeMismatch
 	_ error = langfuse.ErrScoreQueueFull
@@ -60,19 +70,29 @@ var (
 	_ langfuse.MaskField = langfuse.MaskTraceMetadata
 	_ langfuse.MaskField = langfuse.MaskObservationMetadata
 	_ langfuse.MaskField = langfuse.MaskScoreMetadata
+	_ langfuse.MaskField = langfuse.MaskDatasetMetadata
+	_ langfuse.MaskField = langfuse.MaskDatasetItemInput
+	_ langfuse.MaskField = langfuse.MaskDatasetItemExpectedOutput
+	_ langfuse.MaskField = langfuse.MaskDatasetItemMetadata
 )
 
 func TestPublicMethodSurface(t *testing.T) {
 	t.Parallel()
 
 	assertMethodNames(t, (*langfuse.Client)(nil), []string{
+		"DatasetItems",
+		"DeleteDatasetItem",
 		"Event",
 		"Flush",
+		"GetDataset",
+		"GetDatasetItem",
 		"GetPrompt",
 		"Observe",
 		"RecordScore",
 		"Shutdown",
 		"StartObservation",
+		"UpsertDataset",
+		"UpsertDatasetItem",
 		"WithBaggagePropagation",
 		"WithContentCapture",
 		"WithSampleRate",
@@ -196,6 +216,54 @@ func TestPublicStructSurface(t *testing.T) {
 		"Source",
 	})
 
+	assertFieldNames(t, langfuse.DatasetSpec{}, []string{
+		"Name",
+		"Description",
+		"Metadata",
+		"InputSchema",
+		"ExpectedOutputSchema",
+	})
+	assertFieldNames(t, langfuse.Dataset{}, []string{
+		"ID",
+		"Name",
+		"Description",
+		"Metadata",
+		"InputSchema",
+		"ExpectedOutputSchema",
+		"CreatedAt",
+		"UpdatedAt",
+	})
+	assertFieldNames(t, langfuse.DatasetItemSpec{}, []string{
+		"DatasetName",
+		"ID",
+		"Input",
+		"ExpectedOutput",
+		"Metadata",
+		"SourceTraceID",
+		"SourceObservationID",
+		"Status",
+	})
+	assertFieldNames(t, langfuse.DatasetItem{}, []string{
+		"ID",
+		"DatasetID",
+		"DatasetName",
+		"Status",
+		"Input",
+		"ExpectedOutput",
+		"Metadata",
+		"SourceTraceID",
+		"SourceObservationID",
+		"CreatedAt",
+		"UpdatedAt",
+	})
+	assertFieldNames(t, langfuse.DatasetItemQuery{}, []string{
+		"DatasetName",
+		"AsOf",
+		"SourceTraceID",
+		"SourceObservationID",
+		"PageSize",
+	})
+
 	assertNoExportedFields(t, langfuse.Client{})
 	assertNoExportedFields(t, langfuse.Observation{})
 }
@@ -253,6 +321,33 @@ func TestPublicConstantValues(t *testing.T) {
 	for got, want := range promptTypes {
 		if string(got) != want {
 			t.Errorf("prompt type %q = %q, want %q", want, got, want)
+		}
+	}
+
+	statuses := map[langfuse.DatasetItemStatus]string{
+		langfuse.DatasetItemActive:   "ACTIVE",
+		langfuse.DatasetItemArchived: "ARCHIVED",
+	}
+	for got, want := range statuses {
+		if string(got) != want {
+			t.Errorf("dataset item status %q = %q, want %q", want, got, want)
+		}
+	}
+
+	maskFields := map[langfuse.MaskField]string{
+		langfuse.MaskObservationInput:          "observation input",
+		langfuse.MaskObservationOutput:         "observation output",
+		langfuse.MaskTraceMetadata:             "trace metadata",
+		langfuse.MaskObservationMetadata:       "observation metadata",
+		langfuse.MaskScoreMetadata:             "score metadata",
+		langfuse.MaskDatasetMetadata:           "dataset metadata",
+		langfuse.MaskDatasetItemInput:          "dataset item input",
+		langfuse.MaskDatasetItemExpectedOutput: "dataset item expected output",
+		langfuse.MaskDatasetItemMetadata:       "dataset item metadata",
+	}
+	for got, want := range maskFields {
+		if string(got) != want {
+			t.Errorf("mask field %q = %q, want %q", want, got, want)
 		}
 	}
 

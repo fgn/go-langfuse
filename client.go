@@ -58,15 +58,18 @@ var ErrShutdownInProgress = errors.New("langfuse: shutdown is in progress")
 // Client owns all Langfuse exporter, processor, and lifecycle state. Its zero
 // value is a safe no-op.
 type Client struct {
-	tracer      oteltrace.Tracer
-	provider    *sdktrace.TracerProvider
-	processor   *lfprocessor.Processor
-	scores      *transport.ScoresClient
-	prompts     *promptCache
-	environment string
-	owned       bool
-	reserved    bool
-	disabled    bool
+	tracer    oteltrace.Tracer
+	provider  *sdktrace.TracerProvider
+	processor *lfprocessor.Processor
+	scores    *transport.ScoresClient
+	prompts   *promptCache
+	// datasets admits dataset I/O; datasetTransport performs it.
+	datasets         *datasetGate
+	datasetTransport *transport.DatasetsClient
+	environment      string
+	owned            bool
+	reserved         bool
+	disabled         bool
 
 	disableContentCapture bool
 	mask                  func(string, any) any
@@ -204,6 +207,12 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, err
 	}
 	client.prompts = newPromptCache(promptFetcher)
+	datasetTransport, err := transport.NewDatasetsClient(transportConfig)
+	if err != nil {
+		return nil, err
+	}
+	client.datasetTransport = datasetTransport
+	client.datasets = newDatasetGate()
 	if cfg.TracerProvider != nil {
 		if !reserveBorrowedProvider(cfg.TracerProvider, client) {
 			return nil, ErrTracerProviderInUse
@@ -433,11 +442,13 @@ func (c *Client) Shutdown(ctx context.Context) error {
 		return c.currentShutdownResult()
 	}
 	c.stopped.Store(true)
-	// Stop prompt admission and cancel prompt I/O before the potentially
-	// blocking OpenTelemetry teardown below, so no prompt fetch or refresh
-	// can start or keep running once shutdown has begun; the drain itself
-	// waits at the end alongside the score queue.
+	// Stop prompt and dataset admission and cancel their I/O before the
+	// potentially blocking OpenTelemetry teardown below, so no prompt fetch,
+	// refresh, or dataset request can start or keep running once shutdown
+	// has begun; the drains themselves wait at the end alongside the score
+	// queue.
 	c.prompts.beginShutdown()
+	c.datasets.beginShutdown()
 	var result error
 	if c.owned {
 		flushErr := c.provider.ForceFlush(ctx)
@@ -446,13 +457,15 @@ func (c *Client) Shutdown(ctx context.Context) error {
 		// can otherwise leave the batch worker running forever.
 		processorErr := c.processor.Shutdown(ctx)
 		providerErr := c.provider.Shutdown(ctx)
-		result = errors.Join(flushErr, processorErr, providerErr, c.scores.Shutdown(ctx), c.prompts.shutdown(ctx))
+		result = errors.Join(flushErr, processorErr, providerErr, c.scores.Shutdown(ctx), c.prompts.shutdown(ctx),
+			c.datasets.shutdown(ctx))
 	} else {
 		flushErr := c.processor.ForceFlush(ctx)
 		shutdownErr := c.processor.Shutdown(ctx)
 		c.provider.UnregisterSpanProcessor(c.processor)
 		c.releaseReservation()
-		result = errors.Join(flushErr, shutdownErr, c.scores.Shutdown(ctx), c.prompts.shutdown(ctx))
+		result = errors.Join(flushErr, shutdownErr, c.scores.Shutdown(ctx), c.prompts.shutdown(ctx),
+			c.datasets.shutdown(ctx))
 	}
 	c.shutdownResultMu.Lock()
 	c.shutdownResult = result
