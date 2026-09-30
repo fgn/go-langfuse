@@ -25,6 +25,22 @@ type ContextAttributesFunc func(context.Context) []otelattr.KeyValue
 // application-root claim for traceID.
 type TraceClaimFunc func(context.Context, oteltrace.TraceID) bool
 
+// AuthoritativeAttributesFunc returns already-normalized attributes that own
+// a reserved namespace on span, which is being started from ctx. The
+// processor sets them at start, before export classification, and enforces
+// them at end: every other attribute in the namespace is removed from the
+// exported span and these values replace any later change. Experiment
+// identity uses it, because Langfuse reads identity from each span and a
+// stale caller or instrumentor value must not survive. It runs synchronously
+// inside Tracer.Start and must not block.
+type AuthoritativeAttributesFunc func(ctx context.Context, span sdktrace.ReadOnlySpan) []otelattr.KeyValue
+
+// ReservedAttribute reports whether key belongs to the namespace that
+// authoritative attributes own.
+func ReservedAttribute(key otelattr.Key) bool {
+	return key == lfattr.EnvironmentKey || strings.HasPrefix(string(key), lfattr.ExperimentNamespace)
+}
+
 // AdmitFunc accepts the pending admission token in ctx, confirming to the
 // starting SDK observation that this processor observed its start before any
 // teardown. expected reports whether the span passed start-time export
@@ -39,10 +55,11 @@ type Config struct {
 	Environment string
 	Release     string
 
-	ContextAttributes ContextAttributesFunc
-	HasTraceClaim     TraceClaimFunc
-	Admit             AdmitFunc
-	ShouldExportSpan  func(sdktrace.ReadOnlySpan) bool
+	ContextAttributes       ContextAttributesFunc
+	AuthoritativeAttributes AuthoritativeAttributesFunc
+	HasTraceClaim           TraceClaimFunc
+	Admit                   AdmitFunc
+	ShouldExportSpan        func(sdktrace.ReadOnlySpan) bool
 }
 
 // Processor adds Langfuse propagation and application-root attributes, then
@@ -54,16 +71,23 @@ type Processor struct {
 	environment string
 	release     string
 
-	contextAttributes ContextAttributesFunc
-	hasTraceClaim     TraceClaimFunc
-	admit             AdmitFunc
-	shouldExportSpan  func(sdktrace.ReadOnlySpan) bool
+	contextAttributes       ContextAttributesFunc
+	authoritativeAttributes AuthoritativeAttributesFunc
+	hasTraceClaim           TraceClaimFunc
+	admit                   AdmitFunc
+	shouldExportSpan        func(sdktrace.ReadOnlySpan) bool
 
 	stopped atomic.Bool
 
 	expectationsMu           sync.Mutex
 	expected                 map[spanKey]struct{}
 	expectationLimitReported atomic.Bool
+
+	// authoritative holds the attribute set each active span must export
+	// with; aborted spans map to nil and are never exported.
+	authoritativeMu            sync.Mutex
+	authoritative              map[spanKey][]otelattr.KeyValue
+	authoritativeLimitReported atomic.Bool
 
 	shutdownStarted atomic.Bool
 	shutdownDone    chan struct{}
@@ -92,16 +116,18 @@ func New(config Config) (*Processor, error) {
 	}
 
 	return &Processor{
-		next:              config.Next,
-		publicKey:         config.PublicKey,
-		environment:       config.Environment,
-		release:           config.Release,
-		contextAttributes: config.ContextAttributes,
-		hasTraceClaim:     config.HasTraceClaim,
-		admit:             config.Admit,
-		shouldExportSpan:  shouldExportSpan,
-		expected:          make(map[spanKey]struct{}),
-		shutdownDone:      make(chan struct{}),
+		next:                    config.Next,
+		publicKey:               config.PublicKey,
+		environment:             config.Environment,
+		release:                 config.Release,
+		contextAttributes:       config.ContextAttributes,
+		authoritativeAttributes: config.AuthoritativeAttributes,
+		hasTraceClaim:           config.HasTraceClaim,
+		admit:                   config.Admit,
+		shouldExportSpan:        shouldExportSpan,
+		expected:                make(map[spanKey]struct{}),
+		authoritative:           make(map[spanKey][]otelattr.KeyValue),
+		shutdownDone:            make(chan struct{}),
 	}, nil
 }
 
@@ -117,6 +143,7 @@ func (p *Processor) OnStart(parent context.Context, span sdktrace.ReadWriteSpan)
 	// may itself be instrumented, and no callback should run while holding an
 	// SDK lifecycle lock.
 	propagated := safeContextAttributes(p.contextAttributes, parent)
+	authoritative := safeAuthoritativeAttributes(p.authoritativeAttributes, parent, span)
 	claimed := safeHasTraceClaim(p.hasTraceClaim, parent, span.SpanContext().TraceID())
 
 	if p.stopped.Load() {
@@ -124,6 +151,13 @@ func (p *Processor) OnStart(parent context.Context, span sdktrace.ReadWriteSpan)
 	}
 
 	p.fillMissingAttributes(span, propagated)
+	if len(authoritative) != 0 {
+		// Set after the missing-only fill so these values replace both
+		// creation attributes and propagated defaults, before the start-time
+		// export classification below observes the span.
+		span.SetAttributes(authoritative...)
+		p.recordAuthoritative(span.SpanContext(), authoritative)
+	}
 
 	spanContext := span.SpanContext()
 	expected := spanContext.IsSampled() && safeShouldExportSpan(p.shouldExportSpan, span, false)
@@ -177,14 +211,24 @@ func (p *Processor) OnStart(parent context.Context, span sdktrace.ReadWriteSpan)
 
 // OnEnd removes start-time state and applies the final smart filter. The end
 // decision sees attributes added late by streaming/provider instrumentation.
+// A span with authoritative attributes is classified and exported as a view
+// in which they own their namespace; an aborted span is dropped.
 func (p *Processor) OnEnd(span sdktrace.ReadOnlySpan) {
 	spanContext := span.SpanContext()
+	key := spanKey{traceID: spanContext.TraceID(), spanID: spanContext.SpanID()}
 	p.expectationsMu.Lock()
-	delete(p.expected, spanKey{
-		traceID: spanContext.TraceID(),
-		spanID:  spanContext.SpanID(),
-	})
+	delete(p.expected, key)
 	p.expectationsMu.Unlock()
+	p.authoritativeMu.Lock()
+	authoritative, owned := p.authoritative[key]
+	delete(p.authoritative, key)
+	p.authoritativeMu.Unlock()
+	if owned {
+		if authoritative == nil {
+			return
+		}
+		span = authoritativeSpan{ReadOnlySpan: span, attributes: withAuthoritative(span.Attributes(), authoritative)}
+	}
 
 	if p.stopped.Load() ||
 		!p.acceptsProjectSpan(span) ||
@@ -198,6 +242,53 @@ func (p *Processor) OnEnd(span sdktrace.ReadOnlySpan) {
 
 	p.next.OnEnd(span)
 }
+
+// Abort marks an active span so that ending it exports nothing through this
+// processor, regardless of the export filter. The caller ends the span
+// immediately afterwards. Other processors on a borrowed provider still see
+// the span.
+func (p *Processor) Abort(spanContext oteltrace.SpanContext) {
+	p.authoritativeMu.Lock()
+	p.authoritative[spanKey{traceID: spanContext.TraceID(), spanID: spanContext.SpanID()}] = nil
+	p.authoritativeMu.Unlock()
+}
+
+func (p *Processor) recordAuthoritative(spanContext oteltrace.SpanContext, attributes []otelattr.KeyValue) {
+	omitted := false
+	p.authoritativeMu.Lock()
+	if len(p.authoritative) < maxActiveExpectations {
+		p.authoritative[spanKey{traceID: spanContext.TraceID(), spanID: spanContext.SpanID()}] = attributes
+	} else {
+		omitted = true
+	}
+	p.authoritativeMu.Unlock()
+	if omitted && p.authoritativeLimitReported.CompareAndSwap(false, true) {
+		diagnostic.Report("active experiment span count exceeds the tracking limit; identity is enforced at start only")
+	}
+}
+
+// withAuthoritative returns attributes with every reserved key removed and
+// authoritative appended, so late or foreign values in the namespace cannot
+// reach the exporter.
+func withAuthoritative(attributes, authoritative []otelattr.KeyValue) []otelattr.KeyValue {
+	result := make([]otelattr.KeyValue, 0, len(attributes)+len(authoritative))
+	for _, item := range attributes {
+		if !ReservedAttribute(item.Key) {
+			result = append(result, item)
+		}
+	}
+	return append(result, authoritative...)
+}
+
+// authoritativeSpan is the exported view of a span whose reserved namespace
+// is owned by authoritative attributes. Embedding the interface satisfies
+// its unexported method; every other method reads the underlying span.
+type authoritativeSpan struct {
+	sdktrace.ReadOnlySpan
+	attributes []otelattr.KeyValue
+}
+
+func (s authoritativeSpan) Attributes() []otelattr.KeyValue { return s.attributes }
 
 // ForceFlush forwards a flush only while the processor is active.
 func (p *Processor) ForceFlush(ctx context.Context) error {
@@ -238,6 +329,9 @@ func (p *Processor) Shutdown(ctx context.Context) error {
 	p.expectationsMu.Lock()
 	clear(p.expected)
 	p.expectationsMu.Unlock()
+	p.authoritativeMu.Lock()
+	clear(p.authoritative)
+	p.authoritativeMu.Unlock()
 
 	defer close(p.shutdownDone)
 	return p.next.Shutdown(ctx)
@@ -312,6 +406,23 @@ func safeContextAttributes(callback ContextAttributesFunc, ctx context.Context) 
 		}
 	}()
 	return callback(ctx)
+}
+
+func safeAuthoritativeAttributes(
+	callback AuthoritativeAttributesFunc,
+	ctx context.Context,
+	span sdktrace.ReadOnlySpan,
+) (result []otelattr.KeyValue) {
+	if callback == nil {
+		return nil
+	}
+	defer func() {
+		if recover() != nil {
+			diagnostic.Report("processor authoritative-attribute callback panicked; attributes omitted")
+			result = nil
+		}
+	}()
+	return callback(ctx, span)
 }
 
 func safeAdmit(callback AdmitFunc, ctx context.Context, expected bool) {
