@@ -762,6 +762,10 @@ func applyMask(value any, mask func(string, any) any, field string) (result any,
 	return mask(field, value), true
 }
 
+// IsNil reports whether value is nil or a nil chan, func, interface, map,
+// pointer, or slice.
+func IsNil(value any) bool { return isNil(value) }
+
 func isNil(value any) bool {
 	if value == nil {
 		return true
