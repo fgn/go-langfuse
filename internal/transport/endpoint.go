@@ -12,6 +12,7 @@ const (
 	tracesPath     = otelBasePath + "/v1/traces"
 	ingestionPath  = "/api/public/ingestion"
 	promptsPath    = "/api/public/v2/prompts"
+	apiBasePath    = "/api/public"
 )
 
 // NormalizeEndpoint converts a Langfuse host, OTLP base endpoint, or complete
@@ -82,4 +83,14 @@ func NormalizePromptsEndpoint(raw string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSuffix(traces, tracesPath) + promptsPath, nil
+}
+
+// NormalizeAPIBase converts the same accepted base URL forms into the
+// Langfuse public REST API base on the host root, without a trailing slash.
+func NormalizeAPIBase(raw string) (string, error) {
+	traces, err := NormalizeEndpoint(raw)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(traces, tracesPath) + apiBasePath, nil
 }
