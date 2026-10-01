@@ -250,19 +250,21 @@ func (c *Client) datasetFailure(ctx context.Context, notFound, err error) error 
 	if failure.NotFound && notFound != nil {
 		return notFound
 	}
-	var unknown, cause error
+	result := errors.New("langfuse: " + failure.Message)
 	if failure.OutcomeUnknown {
-		unknown = ErrWriteOutcomeUnknown
+		result = fmt.Errorf("%w: %w", result, ErrWriteOutcomeUnknown)
 	}
+	cause := failure.Cause // the operation budget expired, or nil
 	switch {
 	case ctx.Err() != nil:
 		cause = ctx.Err()
 	case c.datasets.lifecycleEnded():
 		cause = errDatasetShutdown
-	default:
-		cause = failure.Cause // the operation budget expired, or nil
 	}
-	return errors.Join(errors.New("langfuse: "+failure.Message), unknown, cause)
+	if cause != nil {
+		result = fmt.Errorf("%w: %w", result, cause)
+	}
+	return result
 }
 
 // UpsertDataset creates or updates the named dataset. A nil, panicking, or
