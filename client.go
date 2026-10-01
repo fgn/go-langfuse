@@ -58,12 +58,11 @@ var ErrShutdownInProgress = errors.New("langfuse: shutdown is in progress")
 // Client owns all Langfuse exporter, processor, and lifecycle state. Its zero
 // value is a safe no-op.
 type Client struct {
-	tracer    oteltrace.Tracer
-	provider  *sdktrace.TracerProvider
-	processor *lfprocessor.Processor
-	scores    *transport.ScoresClient
-	prompts   *promptCache
-	// datasets admits dataset I/O; datasetTransport performs it.
+	tracer           oteltrace.Tracer
+	provider         *sdktrace.TracerProvider
+	processor        *lfprocessor.Processor
+	scores           *transport.ScoresClient
+	prompts          *promptCache
 	datasets         *datasetGate
 	datasetTransport *transport.DatasetsClient
 	environment      string

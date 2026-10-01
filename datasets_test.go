@@ -59,8 +59,6 @@ func newDatasetServer(t *testing.T, handle func(w http.ResponseWriter, r *http.R
 	return server
 }
 
-// serveDataset answers every dataset route for dataset "set" and item
-// "item-1".
 func serveDataset(w http.ResponseWriter, r *http.Request, _ []byte) {
 	switch {
 	case strings.HasPrefix(r.URL.Path, "/api/public/v2/datasets"):
@@ -90,8 +88,6 @@ func newDatasetClient(t *testing.T, baseURL string, change func(*langfuse.Config
 	return client
 }
 
-// collectDatasetItems returns the yielded IDs and the terminal error, and
-// fails if anything is yielded after that error.
 func collectDatasetItems(ctx context.Context, client *langfuse.Client, query langfuse.DatasetItemQuery) ([]string, error) {
 	var ids []string
 	var final error
@@ -108,8 +104,6 @@ func collectDatasetItems(ctx context.Context, client *langfuse.Client, query lan
 	return ids, final
 }
 
-// datasetCalls invokes each public dataset operation for dataset "set" and
-// item "item-1".
 var datasetCalls = map[string]func(context.Context, *langfuse.Client) error{
 	"UpsertDataset": func(ctx context.Context, client *langfuse.Client) error {
 		_, err := client.UpsertDataset(ctx, langfuse.DatasetSpec{Name: "set", Metadata: map[string]any{"a": 1}})
@@ -781,7 +775,6 @@ func TestDatasetItemsShutdownFromLoopBody(t *testing.T) {
 	}
 }
 
-// shutdownMarshaler shuts its client down from inside serialization.
 type shutdownMarshaler struct{ client **langfuse.Client }
 
 func (m shutdownMarshaler) MarshalJSON() ([]byte, error) {

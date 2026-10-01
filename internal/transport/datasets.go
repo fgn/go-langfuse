@@ -25,8 +25,7 @@ const (
 
 // DatasetError is a dataset REST failure with static text.
 type DatasetError struct {
-	Message string
-	// NotFound marks a 404 response.
+	Message  string
 	NotFound bool
 	// OutcomeUnknown marks a write that may have been applied.
 	OutcomeUnknown bool
@@ -36,8 +35,8 @@ type DatasetError struct {
 
 func (e *DatasetError) Error() string { return "langfuse transport: " + e.Message }
 
-// DatasetsClient calls the Langfuse dataset REST API. It is stateless and
-// safe for concurrent use; admission and lifecycle live in the root package.
+// DatasetsClient calls the Langfuse dataset REST API and is safe for
+// concurrent use.
 type DatasetsClient struct {
 	base       string
 	publicKey  string
@@ -46,8 +45,7 @@ type DatasetsClient struct {
 	client     *http.Client
 }
 
-// NewDatasetsClient builds a dataset client from an already validated
-// transport configuration. It performs no network I/O.
+// NewDatasetsClient builds a dataset client from a validated configuration.
 func NewDatasetsClient(cfg Config) (*DatasetsClient, error) {
 	base, err := NormalizeAPIBase(cfg.BaseURL)
 	if err != nil {
@@ -73,9 +71,8 @@ func NewDatasetsClient(cfg Config) (*DatasetsClient, error) {
 	}, nil
 }
 
-// datasetCall describes one REST operation. op is static text used in errors.
 type datasetCall struct {
-	op     string
+	op     string // static error text
 	method string
 	url    string
 	body   []byte
@@ -231,7 +228,7 @@ type DatasetItem struct {
 }
 
 // valid normalizes JSON null to nil and reports whether the required fields
-// are present and the status is known.
+// are present.
 func (item *DatasetItem) valid() bool {
 	item.Input = nonNull(item.Input)
 	item.ExpectedOutput = nonNull(item.ExpectedOutput)
@@ -258,8 +255,8 @@ type DatasetItemPage struct {
 	} `json:"meta"`
 }
 
-// DatasetItemListQuery selects one page of dataset items. Version is the
-// already formatted as-of instant.
+// DatasetItemListQuery selects one page of dataset items. Version is a
+// formatted as-of instant.
 type DatasetItemListQuery struct {
 	DatasetName         string
 	SourceTraceID       string
@@ -305,8 +302,7 @@ func (d *DatasetsClient) GetDataset(ctx context.Context, name string) (Dataset, 
 	return send(ctx, d, call, func(dataset *Dataset) bool { return dataset.valid() && dataset.Name == name })
 }
 
-// UpsertItem posts one serialized dataset item body. When id is empty the
-// server generates one.
+// UpsertItem posts one serialized dataset item body.
 func (d *DatasetsClient) UpsertItem(ctx context.Context, body []byte, datasetName, id string) (DatasetItem, error) {
 	call := datasetCall{
 		op: "dataset item upsert", method: http.MethodPost, url: d.base + "/dataset-items",
@@ -326,7 +322,7 @@ func (d *DatasetsClient) GetItem(ctx context.Context, id string) (DatasetItem, e
 	return send(ctx, d, call, func(item *DatasetItem) bool { return item.valid() && item.ID == id })
 }
 
-// DeleteItem deletes one dataset item by ID and ignores the response body.
+// DeleteItem deletes one dataset item by ID.
 func (d *DatasetsClient) DeleteItem(ctx context.Context, id string) error {
 	_, err := d.do(ctx, datasetCall{
 		op: "dataset item delete", method: http.MethodDelete,
