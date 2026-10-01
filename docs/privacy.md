@@ -21,11 +21,10 @@ The privacy boundary is deliberately narrow:
 | Observation name/type, trace name, user/session IDs, tags, version, level, `StatusMessage`, model/parameters, usage, costs, prompt, and completion time | No | No |
 | `RecordError(err)` text and exception event | No | No |
 | `Score` metadata | No | Yes, once as the complete `map[string]any` |
-| `ExperimentItem.ExpectedOutput` | Yes, on the starting context | Yes, once per item start |
+| `ExperimentItem.ExpectedOutput` | Yes, on the starting context | Yes, once per item start, unless content capture is disabled |
 | `Experiment.Metadata` and `ExperimentItem.Metadata` (exported on every span of the item trace) | No | Yes, once per item start as the complete `map[string]any` |
-| Experiment ID, name, and description; dataset ID; item ID and version | No | No |
 | `DatasetItemSpec` input, expected output, and metadata; `DatasetSpec` metadata (REST writes) | No | Yes, once per supplied field; failure rejects the write |
-| Dataset names and descriptions, schemas, item IDs, source trace and observation IDs, and statuses | No | No |
+| Experiment and dataset IDs, names, and descriptions; dataset schemas; item versions, statuses, and source trace and observation IDs | No | No |
 | `Score` comment and value | No | No |
 | OpenTelemetry resource attributes (`resource.Default`/`OTEL_RESOURCE_ATTRIBUTES` in isolated mode; caller resource in borrowed mode) | No | No |
 | Third-party OTel span attributes and events | No | No |
@@ -45,17 +44,11 @@ fixed protocol members only; metadata key suffixes and unknown member names
 are user- or wire-controlled and appear in diagnostics as counts, never as
 text.
 
-Dataset writes are deliberate REST calls rather than telemetry, so content
-capture does not apply to them, and their masking fails closed: the server
-keeps a stored value when a field is omitted, so a masker that returns nil,
-panics, or changes a metadata map's type makes the write fail before any
-request instead of leaving the old value in place. Upserting never redacts
-earlier item versions, and deleting an item does not purge its history. Read
-results (`GetDatasetItem`, `DatasetItems`, `GetDataset`) are returned as
-stored, without masking. For experiment items, the SDK removes any other
-`langfuse.experiment.*` attribute, including ones set by third-party
-instrumentation, from item spans it exports, so the masked experiment
-metadata is the only experiment metadata this client sends.
+Dataset writes are REST calls, not telemetry: content capture does not apply,
+and masking fails closed. A nil or panicking `Mask` result fails the write
+before anything is sent, because an omitted field keeps its stored value.
+Langfuse keeps earlier item versions after an upsert or a delete. Dataset
+reads return stored content unmasked.
 
 Disabling content capture does not make metadata, model parameters, status
 messages, or errors safe. `RecordError` exports `err.Error()` as the OTel
@@ -71,10 +64,11 @@ metadata still passes through `Mask`, while score comments and values remain
 outside both the content-capture and masking controls.
 
 `Mask` receives a `MaskField` with each SDK value shown in the table. A
-metadata masker must return a `map[string]any`; returning another type omits
-that metadata. The SDK calls the masker synchronously. It must be fast,
-non-blocking, and concurrency-safe. Copy and recursively redact maps and slices
-rather than mutating caller-owned data:
+metadata masker must return a `map[string]any`. Another type omits trace,
+observation, or score metadata and fails an experiment start or a dataset
+write. The SDK calls the masker synchronously. It must be fast, non-blocking,
+and concurrency-safe. Copy and recursively redact maps and slices rather than
+mutating caller-owned data:
 
 ```go
 cfg := langfuse.ConfigFromEnv()
@@ -117,10 +111,8 @@ func redactMetadata(value any) any {
 }
 ```
 
-The example fully replaces observation input and output. Its default case
-returns nil for every other field: telemetry omits such a field, and a dataset
-write supplying one fails, the safe outcome for a masker that does not know a
-field. It assumes JSON-like `map[string]any` and `[]any` metadata. A production masker must cover every
+The example fully replaces observation input and output. It assumes JSON-like
+`map[string]any` and `[]any` metadata. A production masker must cover every
 concrete value type the application supplies, must be concurrency-safe, and
 should have tests proving its redaction policy.
 

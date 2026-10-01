@@ -214,15 +214,8 @@ provider):
 - A prompt response body and a prompt fallback: 1 MiB each. Prompt names: 500
   bytes; labels: 200 characters. These are local wire-safety bounds, not
   Langfuse validation; the server is stricter for labels.
-- Datasets (local bounds): identifiers 1 to 255 bytes; a dataset description
-  16 KiB; each item content field 1 MiB after masking; an item request 4 MiB
-  and a dataset request 1 MiB; a dataset or item response 8 MiB; a page
-  response 16 MiB (`PageSize` 1 to 100, default 20; one item always fits in a
-  page); 10,000 pages per iteration; 16 concurrent requests per client.
-- Experiments: identifiers 255 bytes, description 16 KiB, each metadata
-  object 16 KiB, expected output 256 KiB. With every field at its maximum an
-  item root stays under 100 attributes and about 3 MiB, within the owned
-  provider's 128-attribute limit and the 4 MiB request cap.
+- Dataset requests: 1 MiB per dataset write, 4 MiB per item write, and 1 MiB
+  per masked content field. Responses: 8 MiB, or 16 MiB per item page.
 
 ## Prompt management
 
@@ -304,159 +297,70 @@ into a caller-logged error. Warm the cache during startup with one
 
 ## Datasets
 
-`UpsertDataset`, `GetDataset`, `UpsertDatasetItem`, `GetDatasetItem`,
-`DeleteDatasetItem`, and `DatasetItems` call the Langfuse dataset REST API
-(`/api/public/v2/datasets` and `/api/public/dataset-items`) synchronously.
-Every call validates its input first, in every client state; then a nil,
-disabled, or shut-down client returns an error without masking, serializing,
-or sending anything. Content is masked and serialized before the request is
-admitted, so a masker or `MarshalJSON` that calls `Shutdown` never waits on
-itself. At most 16 dataset requests run concurrently per client; each HTTP
-operation (each page, for `DatasetItems`) is bounded by the caller's context,
-a 30-second budget that includes retries and `Retry-After`, and the client
-lifecycle. `Shutdown` cancels admitted dataset requests before the
-OpenTelemetry teardown. Redirects are never followed, and error text names
-only the operation and HTTP status.
+Dataset calls are synchronous. Before sending, the SDK checks only required
+names and IDs, UTF-8 and JSON validity, size limits, and masking; Langfuse
+validates the rest and rejects invalid input with HTTP 400. Error text names
+the operation and status, never content. Field rules are in the
+[package documentation](https://pkg.go.dev/github.com/fgn/go-langfuse).
 
-Reads retry network errors, 408, 429, and 5xx at most twice (500 ms and 1 s
-backoff with jitter). A write is sent at most once after it could have
-reached the server: it is retried only when the connection failed before any
-request header was written. The request body is serialized once and replayed
-exactly. Outcomes:
+A write sends only the fields that are set, and Langfuse keeps every field it
+does not receive:
 
-| Write outcome | Result |
-| --- | --- |
-| 400, 401, 403, 404, 409, 413 | rejected before it was applied |
-| any other status, a network error or cancellation after sending, or a success response that is unreadable, over the limit, or does not match the request | error wrapping `ErrWriteOutcomeUnknown` |
-| fully read and validated success | success, even if the context ends afterwards |
-
-Langfuse versions dataset items: each accepted write creates a new version
-and the last write wins. Repeating an item write with an `ID` after
-`ErrWriteOutcomeUnknown` is at-least-once (possibly an extra version, and it
-can overwrite a concurrent writer); repeating one without an `ID` can create a
-duplicate item. A 404 wraps `ErrDatasetNotFound` for `GetDataset`,
-`UpsertDatasetItem`, and `DatasetItems` (the dataset is resolved first) and
-`ErrDatasetItemNotFound` for `GetDatasetItem` and `DeleteDatasetItem`.
-Canceled or expired contexts are visible to `errors.Is`.
-
-Field presence on writes:
-
-| Field | Not supplied | Supplied |
+| Field | Not sent when | Notes |
 | --- | --- | --- |
-| `DatasetSpec.Description` | nil keeps the stored value | replaces it; a pointer to `""` clears it |
-| `DatasetSpec.Metadata` | nil keeps | replaces; `{}` for an empty map (Langfuse cannot clear it) |
-| `DatasetSpec.InputSchema`, `ExpectedOutputSchema` | nil keeps | a JSON object replaces; JSON `null` removes |
-| `DatasetItemSpec.Input`, `ExpectedOutput`, `Metadata` | nil keeps (new items store null) | replaces; cannot be cleared |
-| `DatasetItemSpec.Status`, source IDs | empty keeps (new items are ACTIVE) | replaces |
+| `DatasetSpec.Description` | nil | a pointer to `""` clears it |
+| `DatasetSpec.Metadata` | nil | cannot be cleared; an empty map stores `{}` |
+| `DatasetSpec.InputSchema`, `ExpectedOutputSchema` | empty | JSON `null` removes the schema |
+| `DatasetItemSpec.Input`, `ExpectedOutput`, `Metadata` | nil, including typed nil | cannot be cleared; null on a new item |
+| `DatasetItemSpec.ID` | empty | every call creates a new item |
+| `DatasetItemSpec.Status`, `SourceTraceID`, `SourceObservationID` | empty | a new item is `ACTIVE` |
 
-Supplied content passes `Config.Mask` exactly once per field
-(`MaskDatasetItemInput`, `MaskDatasetItemExpectedOutput`,
-`MaskDatasetItemMetadata`, `MaskDatasetMetadata`). Because an omitted field
-keeps the stored value, masking fails closed: a nil result, a panic, a
-metadata result that is not a `map[string]any`, a value that serializes to
-JSON `null`, invalid `json.RawMessage`, or an oversized value is an error
-before any request. `DisableContentCapture` does not apply to dataset writes.
-Upserting does not redact earlier item versions, and `DeleteDatasetItem`
-writes a deletion marker: earlier versions, their media, and experiment
-observations that referenced the item remain.
+| `MaskField` | Value | Called |
+| --- | --- | --- |
+| `MaskDatasetMetadata` | `DatasetSpec.Metadata` | once per write that sends it |
+| `MaskDatasetItemInput`, `MaskDatasetItemExpectedOutput`, `MaskDatasetItemMetadata` | `DatasetItemSpec` content | once per write that sends it |
+| `MaskExperimentMetadata`, `MaskExperimentItemMetadata` | `Experiment.Metadata`, `ExperimentItem.Metadata` | once per item start, when not empty |
+| `MaskExperimentItemExpectedOutput` | `ExperimentItem.ExpectedOutput` | once per item start, when content capture is on |
 
-`DatasetItems` returns an iterator over the dataset's ACTIVE items. No request
-is sent until the loop starts; each page is one request, and breaking out of
-the loop sends no further requests. `AsOf` reads the item versions valid at
-that instant, sent as UTC with millisecond precision; it must not be more than
-a minute in the future, and it only takes effect on a Langfuse server that
-uses its versioned dataset implementation (the default). Every page is
-validated before its items are yielded: page number and size must match the
-request, the totals must match the first page, only the last page may be
-short and it must hold exactly the remainder, items must belong to the
-query, and no item ID may repeat. A violation, including a dataset edited
-during an unpinned read, ends the loop with one error; items yielded before
-it are not a complete cohort.
+A write is sent once and never retried:
 
-Returned `DatasetItem` content fields are the server's JSON, verbatim (a
-string is a quoted JSON string), and nil when absent or null.
+| Failure | Result |
+| --- | --- |
+| HTTP 400, 401, 403, 404, 409, or 413 | not applied |
+| Any other status (including 3xx, since redirects are not followed, and 408, 422, 429, 5xx), a network error, cancellation in flight, or an unreadable, oversized, or invalid success response | wraps `ErrWriteOutcomeUnknown`; it may have been applied |
+
+With `AsOf`, `DatasetItems` returns the item versions valid at that instant
+and sets each item's `Version` to it; `item.ExperimentItem()` carries that
+version into `StartExperimentItem`. Without `AsOf` the read is best effort:
+items written during the loop can be skipped or repeated. The iterator stops
+at the server's `totalPages` or an empty page and does not check pages for
+duplicates or consistency.
 
 ## Experiments
 
-`StartExperimentItem` starts the root observation of one experiment item as
-the root of a new trace and returns a context that carries the item's
-identity. Langfuse v4 lists an experiment item only through the span whose ID
-equals the item's `langfuse.experiment.item.root_observation_id`, and reads
-identity from every span separately; the method produces exactly that:
+`StartExperimentItem` starts the item root in a new trace, then sets the item
+identity and environment `sdk-experiment` on it. Spans that later start in
+the item trace on this client's tracer provider, from a context derived from
+the returned one, get the identity and environment at start: child
+observations, evaluators after `End`, and other instrumentation.
 
-- The root is a `span` observation with `values` as its input and fields.
-  Its real span ID becomes the root pointer before the export filter or any
-  child sees the span. End it when the task finishes: Langfuse measures item
-  latency on it. Evaluators may keep using the returned context after `End`;
-  their spans add to item cost, not latency.
-- Every span started from the returned context in the item trace, on the
-  provider that runs this client's processor, carries the experiment ID and
-  name, dataset ID, item ID and version, root pointer, the experiment and
-  item metadata, and `langfuse.environment` `sdk-experiment`. The description
-  and expected output are on the root only. Those values own the
-  `langfuse.experiment.*` namespace and the environment when this client
-  exports the span: other values set by the caller, an instrumentor, or a
-  later `SetAttributes` are removed or replaced, and `WithTraceAttributes`
-  cannot change the environment of item spans. Other processors on a
-  borrowed provider still see the original span.
-- Spans on another provider are neither stamped nor exported by this client.
-  In isolated mode that includes instrumentation registered on the global
-  provider; use a borrowed provider (as the `contrib` packages do) or SDK
-  generations inside items. A context detached into a new trace carries no
-  identity, and a nested `StartExperimentItem` starts a new trace with its
-  own identity.
-- In isolated mode the item trace is always sampled, an explicit exception to
-  `SampleRate` and `WithSampleRate` (including 0) for that trace only; the
-  returned context keeps the caller's rate for later traces. With a borrowed
-  provider the application's sampler decides.
-- A score recorded on the returned context that targets the item trace uses
-  the `sdk-experiment` environment; other scores keep `Config.Environment`.
+- Sampling: isolated mode always samples the item trace, whatever
+  `SampleRate` or `WithSampleRate` says; later traces from the returned
+  context use the caller's rate. In borrowed mode the application's sampler
+  decides, and a dropped root returns `ErrExperimentItemNotExported`.
+- Scores: a score recorded with an item context whose `TraceID` is the item
+  trace uses environment `sdk-experiment`, not `Config.Environment`.
+- After start, these attributes are the caller's: later changes by the
+  caller or by instrumentation are exported as they are.
 
-Results: success returns the item context, the root observation, and nil.
-Invalid input returns an error wrapping `ErrInvalidExperiment` and starts
-nothing. A root that a borrowed sampler does not sample (including
-`RecordOnly`), that `ShouldExportSpan` rejects at start, or whose identity a
-borrowed provider's attribute limits dropped or truncated, is ended and
-suppressed, returning `ErrExperimentItemNotExported`. A stopped client returns
-an error. Every error comes with a no-op observation and a context without
-experiment identity or an ambient span, so a task that still runs forms a new
-unlinked trace. A nil or disabled client validates the input and returns the
-context, a no-op observation, and nil.
+Known limits:
 
-A started item can still be lost like any span: by a full span queue, export
-failure, a span that never ends, or ending it after `Shutdown`. End all item
-work before `Flush` or `Shutdown`, and reconcile the expected item count
-through `GET /api/public/experiment-items` when completeness matters.
-
-Identifiers (`Experiment.ID`, `Name`, `DatasetID`, `ExperimentItem.ID`) must
-be 1 to 255 bytes of valid UTF-8 without control characters. Use one
-`Experiment.ID` for every item of a run, and a stable item ID across runs:
-`DatasetItem.ID` for a Langfuse dataset. `Version` should be the `AsOf` the
-item was read with. The description is limited to 16 KiB.
-
-Experiment metadata, item metadata, and expected output each pass
-`Config.Mask` once per item start (`MaskExperimentMetadata`,
-`MaskExperimentItemMetadata`, `MaskExperimentItemExpectedOutput`). A nil
-result omits the field; a panic or a metadata result of another type is an
-error. Expected output also follows the starting context's content-capture
-decision. It is encoded like observation input: strings verbatim, other
-values as JSON; a `json.RawMessage` holding a JSON string is sent as the
-decoded string and other raw JSON as compact JSON with exact number digits.
-It is limited to 256 KiB.
-
-Each metadata map is exported as one JSON object, which Langfuse flattens
-into dotted keys. The SDK normalizes every leaf to a string first, as the
-official Python SDK's dotted attributes do: strings verbatim, numbers with
-their exact JSON digits, booleans as `true` or `false`, arrays as compact
-JSON; null leaves and empty objects are dropped. Key paths must be valid
-UTF-8 of at most 200 bytes without empty, `__proto__`, `constructor`, or
-`prototype` segments, objects may nest 32 levels, two keys that flatten to
-the same path (`"a.b"` next to `{"a": {"b": …}}`) are an error, and each
-encoded object is limited to 16 KiB. Decode dataset item metadata with
-`json.Decoder.UseNumber` to keep large numbers exact.
-
-Experiment identity does not cross process boundaries;
-`WithBaggagePropagation` ignores it.
+- An item can go missing or unlinked with no error when a `ShouldExportSpan`
+  filter rejects the root, or when a borrowed provider's attribute limits
+  drop identity attributes.
+- Spans on another tracer provider, such as global-provider instrumentation
+  in isolated mode, get no identity and are not exported by this client.
+- Identity does not cross process boundaries.
 
 ## Buffering and backpressure
 
@@ -496,9 +400,8 @@ and delivers queued scores; when its context ends first, undelivered scores
 are dropped with diagnostics. Short-lived jobs and serverless handlers can
 call `Flush` before returning if the client must remain usable; `Flush` also
 waits for queued scores, including one mid-retry, bounded by its context.
-`Shutdown` cancels in-flight prompt and dataset requests before tearing down
-OpenTelemetry and waits for them to return; later dataset calls fail without
-sending anything.
+`Shutdown` first cancels in-flight prompt and dataset requests and waits for
+them; later dataset calls fail without sending anything.
 
 In borrowed mode, shut down the Langfuse client before the application's
 tracer provider; the client never shuts down unrelated processors or
@@ -547,10 +450,9 @@ different kinds of work different rates in one process.
   parents, any path a foreign span has joined, and all borrowed-mode
   scores.
 - Detached contexts start a new trace root and re-decide with the surviving
-  requested rate. `SampleRate: 0` exports no traces while scores and prompts
-  keep working, except experiment item traces started with
-  `StartExperimentItem`, which isolated mode always samples;
-  `Disabled: true` remains the complete no-op.
+  requested rate. `SampleRate: 0` exports no traces except experiment items
+  while scores and prompts keep working; `Disabled: true` remains the
+  complete no-op.
 
 ## Current limitations
 
@@ -584,8 +486,7 @@ different kinds of work different rates in one process.
   and diagnosed without including their payload.
 - Batch export improves application latency but cannot survive an abrupt
   process exit. Graceful shutdown is required.
-- Multiple projects on one provider and administrative APIs remain out of
-  scope; datasets cover item curation and reads, not dataset listing or
-  deletion, and experiment results are read through the Langfuse API. Tail sampling (keep-all-errors) is not provided: the outcome is unknown when the trace
+- Multiple projects on one provider and administrative APIs remain
+  out of scope. Tail sampling (keep-all-errors) is not provided: the outcome is unknown when the trace
   root starts; use `WithSampleRate(ctx, 1)` for requests known to matter up
   front.

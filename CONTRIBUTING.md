@@ -25,16 +25,11 @@ content in fixtures, diagnostics, issues, or pull requests.
 ## Design boundaries
 
 The root module is intentionally small: observations, trace attributes,
-scores, prompt reads, and datasets with experiments. Datasets became in scope
-because Langfuse v4 links experiment results only through
-`langfuse.experiment.*` attributes that must be authoritative on every span
-of an item trace and point at a root span ID that exists only after the span
-starts; callers cannot reproduce that reliably with `ObservationAttributes`
-or raw OpenTelemetry attributes. See
-[the design](docs/design/datasets-and-experiments.md). Experiment runners,
-evaluator frameworks, and administrative APIs (dataset listing or deletion,
-project and user management) remain out of scope. Before proposing a new
-exported concept, explain why the same result cannot be achieved through
+scores, prompt reads, and datasets with experiments. Datasets and experiments
+are in scope because linking an experiment item needs span attributes that
+only the SDK can set as each span starts. Experiment runners, evaluator
+frameworks, and administrative APIs remain out of scope. Before proposing a
+new exported concept, explain why the same result cannot be achieved through
 `ObservationAttributes`, `TraceAttributes`, `Score`, or the standard
 OpenTelemetry span escape hatch.
 
