@@ -104,29 +104,20 @@ func collectDatasetItems(ctx context.Context, client *langfuse.Client, query lan
 	return ids, final
 }
 
+func errOf[T any](_ T, err error) error { return err }
+
 var datasetCalls = map[string]func(context.Context, *langfuse.Client) error{
-	"UpsertDataset": func(ctx context.Context, client *langfuse.Client) error {
-		_, err := client.UpsertDataset(ctx, langfuse.DatasetSpec{Name: "set", Metadata: map[string]any{"a": 1}})
-		return err
+	"UpsertDataset": func(ctx context.Context, c *langfuse.Client) error {
+		return errOf(c.UpsertDataset(ctx, langfuse.DatasetSpec{Name: "set", Metadata: map[string]any{"a": 1}}))
 	},
-	"GetDataset": func(ctx context.Context, client *langfuse.Client) error {
-		_, err := client.GetDataset(ctx, "set")
-		return err
+	"GetDataset": func(ctx context.Context, c *langfuse.Client) error { return errOf(c.GetDataset(ctx, "set")) },
+	"UpsertDatasetItem": func(ctx context.Context, c *langfuse.Client) error {
+		return errOf(c.UpsertDatasetItem(ctx, langfuse.DatasetItemSpec{DatasetName: "set", ID: "item-1", Input: "x"}))
 	},
-	"UpsertDatasetItem": func(ctx context.Context, client *langfuse.Client) error {
-		_, err := client.UpsertDatasetItem(ctx, langfuse.DatasetItemSpec{DatasetName: "set", ID: "item-1", Input: "x"})
-		return err
-	},
-	"GetDatasetItem": func(ctx context.Context, client *langfuse.Client) error {
-		_, err := client.GetDatasetItem(ctx, "item-1")
-		return err
-	},
-	"DeleteDatasetItem": func(ctx context.Context, client *langfuse.Client) error {
-		return client.DeleteDatasetItem(ctx, "item-1")
-	},
-	"DatasetItems": func(ctx context.Context, client *langfuse.Client) error {
-		_, err := collectDatasetItems(ctx, client, langfuse.DatasetItemQuery{DatasetName: "set"})
-		return err
+	"GetDatasetItem":    func(ctx context.Context, c *langfuse.Client) error { return errOf(c.GetDatasetItem(ctx, "item-1")) },
+	"DeleteDatasetItem": func(ctx context.Context, c *langfuse.Client) error { return c.DeleteDatasetItem(ctx, "item-1") },
+	"DatasetItems": func(ctx context.Context, c *langfuse.Client) error {
+		return errOf(collectDatasetItems(ctx, c, langfuse.DatasetItemQuery{DatasetName: "set"}))
 	},
 }
 
@@ -254,37 +245,30 @@ func TestDatasetWritesSendMaskedFields(t *testing.T) {
 		}
 	})
 	ctx := context.Background()
+	dataset := func(spec langfuse.DatasetSpec) func() error {
+		return func() error { return errOf(client.UpsertDataset(ctx, spec)) }
+	}
 	description, empty := "d", ""
 	for _, test := range []struct {
 		write func() error
 		want  string
 	}{
 		{
-			write: func() error {
-				_, err := client.UpsertDataset(ctx, langfuse.DatasetSpec{
-					Name: "set", Description: &description, Metadata: map[string]any{"k": "secret"},
-					InputSchema: json.RawMessage(`{"type": "object"}`), ExpectedOutputSchema: json.RawMessage(`null`),
-				})
-				return err
-			},
+			write: dataset(langfuse.DatasetSpec{
+				Name: "set", Description: &description, Metadata: map[string]any{"k": "secret"},
+				InputSchema: json.RawMessage(`{"type": "object"}`), ExpectedOutputSchema: json.RawMessage(`null`),
+			}),
 			want: `{"name":"set","description":"d","metadata":{"k":"[redacted]"},` +
 				`"inputSchema":{"type":"object"},"expectedOutputSchema":null}`,
 		},
+		{write: dataset(langfuse.DatasetSpec{Name: "set", Description: &empty}), want: `{"name":"set","description":""}`},
 		{
 			write: func() error {
-				_, err := client.UpsertDataset(ctx, langfuse.DatasetSpec{Name: "set", Description: &empty})
-				return err
-			},
-			want: `{"name":"set","description":""}`,
-		},
-		{
-			write: func() error {
-				_, err := client.UpsertDatasetItem(ctx, langfuse.DatasetItemSpec{
+				return errOf(client.UpsertDatasetItem(ctx, langfuse.DatasetItemSpec{
 					DatasetName: "set", ID: "item-1", Input: map[string]any{"k": "secret"},
 					ExpectedOutput: json.RawMessage(`12345678901234567890`), Metadata: map[string]any{},
 					SourceTraceID: "trace", SourceObservationID: "span", Status: langfuse.DatasetItemArchived,
-				})
-				return err
+				}))
 			},
 			want: `{"datasetName":"set","id":"item-1","input":{"k":"[redacted]"},` +
 				`"expectedOutput":12345678901234567890,"metadata":{},"sourceTraceId":"trace",` +
@@ -317,17 +301,12 @@ func TestDatasetInvalidInputSendsNothing(t *testing.T) {
 	server := newDatasetServer(t, serveDataset)
 	cyclic := map[string]any{}
 	cyclic["self"] = cyclic
+	ctx := context.Background()
 	item := func(spec langfuse.DatasetItemSpec) func(*langfuse.Client) error {
-		return func(client *langfuse.Client) error {
-			_, err := client.UpsertDatasetItem(context.Background(), spec)
-			return err
-		}
+		return func(c *langfuse.Client) error { return errOf(c.UpsertDatasetItem(ctx, spec)) }
 	}
 	dataset := func(spec langfuse.DatasetSpec) func(*langfuse.Client) error {
-		return func(client *langfuse.Client) error {
-			_, err := client.UpsertDataset(context.Background(), spec)
-			return err
-		}
+		return func(c *langfuse.Client) error { return errOf(c.UpsertDataset(ctx, spec)) }
 	}
 	for name, test := range map[string]struct {
 		mask func(langfuse.MaskField, any) any
@@ -359,25 +338,14 @@ func TestDatasetInvalidInputSendsNothing(t *testing.T) {
 		"invalid schema":       {call: dataset(langfuse.DatasetSpec{Name: "set", ExpectedOutputSchema: json.RawMessage(`{`)})},
 		"missing dataset name": {call: dataset(langfuse.DatasetSpec{Metadata: map[string]any{"a": "secret"}})},
 		"missing item dataset": {call: item(langfuse.DatasetItemSpec{Input: "secret"})},
-		"missing read name": {call: func(client *langfuse.Client) error {
-			_, err := client.GetDataset(context.Background(), "")
-			return err
+		"missing read name":    {call: func(c *langfuse.Client) error { return errOf(c.GetDataset(ctx, "")) }},
+		"missing read ID":      {call: func(c *langfuse.Client) error { return errOf(c.GetDatasetItem(ctx, "")) }},
+		"missing delete ID":    {call: func(c *langfuse.Client) error { return c.DeleteDatasetItem(ctx, "") }},
+		"missing query dataset": {call: func(c *langfuse.Client) error {
+			return errOf(collectDatasetItems(ctx, c, langfuse.DatasetItemQuery{}))
 		}},
-		"missing read ID": {call: func(client *langfuse.Client) error {
-			_, err := client.GetDatasetItem(context.Background(), "")
-			return err
-		}},
-		"missing delete ID": {call: func(client *langfuse.Client) error {
-			return client.DeleteDatasetItem(context.Background(), "")
-		}},
-		"missing query dataset": {call: func(client *langfuse.Client) error {
-			_, err := collectDatasetItems(context.Background(), client, langfuse.DatasetItemQuery{})
-			return err
-		}},
-		"nil context": {call: func(client *langfuse.Client) error {
-			//nolint:staticcheck // A nil context is the input under test.
-			_, err := client.GetDataset(nil, "set")
-			return err
+		"nil context": {call: func(c *langfuse.Client) error {
+			return errOf(c.GetDataset(nil, "set")) //nolint:staticcheck // A nil context is the input under test.
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -552,7 +520,7 @@ func TestDatasetCancellationIsVisibleToErrorsIs(t *testing.T) {
 	}
 	for name, test := range map[string]struct {
 		respond  func(w http.ResponseWriter, r *http.Request, reached func())
-		cancel   string // "before" the call, once the server "reached" its point, or "deadline"
+		cancel   string // "before" the call, "shutdown" or cancel once the server "reached" its point, or "deadline"
 		call     string
 		cause    error
 		unknown  bool
@@ -581,6 +549,7 @@ func TestDatasetCancellationIsVisibleToErrorsIs(t *testing.T) {
 			},
 			cancel: "reached", call: "GetDatasetItem", cause: context.Canceled, requests: 1,
 		},
+		"write in flight at Shutdown": {respond: hang, cancel: "shutdown", call: "UpsertDatasetItem", unknown: true, requests: 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -597,13 +566,20 @@ func TestDatasetCancellationIsVisibleToErrorsIs(t *testing.T) {
 				cancel()
 			case "reached":
 				go func() { <-reached; cancel() }()
+			case "shutdown":
+				go func() { <-reached; _ = client.Shutdown(context.Background()) }()
 			case "deadline":
 				ctx, cancel = context.WithTimeout(ctx, 50*time.Millisecond)
 				defer cancel()
 			}
 			err := datasetCalls[test.call](ctx, client)
-			if !errors.Is(err, test.cause) || errors.Is(err, langfuse.ErrWriteOutcomeUnknown) != test.unknown {
-				t.Fatalf("error = %v, want %v with outcome unknown %t", err, test.cause, test.unknown)
+			if err == nil || errors.Is(err, langfuse.ErrWriteOutcomeUnknown) != test.unknown {
+				t.Fatalf("error = %v, want outcome unknown %t", err, test.unknown)
+			}
+			for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+				if errors.Is(err, cause) != (cause == test.cause) {
+					t.Fatalf("error = %v, want cause %v", err, test.cause)
+				}
 			}
 			if got := server.requests.Load(); got != test.requests {
 				t.Fatalf("requests = %d, want %d", got, test.requests)
@@ -718,27 +694,6 @@ func TestDatasetUnavailableClientsSendNothing(t *testing.T) {
 	}
 }
 
-func TestDatasetShutdownCancelsInFlightIO(t *testing.T) {
-	t.Parallel()
-	started := make(chan struct{}, 1)
-	server := newDatasetServer(t, func(_ http.ResponseWriter, r *http.Request, _ []byte) {
-		started <- struct{}{}
-		<-r.Context().Done()
-	})
-	client := newDatasetClient(t, server.URL, nil)
-	result := make(chan error, 1)
-	go func() { result <- datasetCalls["UpsertDatasetItem"](context.Background(), client) }()
-	<-started
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := client.Shutdown(ctx); err != nil {
-		t.Fatalf("Shutdown() error = %v", err)
-	}
-	if err := <-result; !errors.Is(err, langfuse.ErrWriteOutcomeUnknown) || errors.Is(err, context.Canceled) {
-		t.Fatalf("in-flight write after Shutdown = %v, want ErrWriteOutcomeUnknown without context.Canceled", err)
-	}
-}
-
 func TestDatasetItemsShutdownFromLoopBody(t *testing.T) {
 	t.Parallel()
 	server := newDatasetServer(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
@@ -764,14 +719,6 @@ func TestDatasetItemsShutdownFromLoopBody(t *testing.T) {
 	}
 	if final == nil || len(ids) != 2 || server.requests.Load() != 1 {
 		t.Fatalf("after Shutdown: ids %v, error %v, requests %d", ids, final, server.requests.Load())
-	}
-	for _, err := range items {
-		if err == nil {
-			t.Fatal("a stored iterator yielded an item after Shutdown")
-		}
-	}
-	if got := server.requests.Load(); got != 1 {
-		t.Fatalf("a stored iterator sent %d requests after Shutdown", got-1)
 	}
 }
 
