@@ -100,18 +100,17 @@ type Config struct {
 	// recorded.
 	DisableContentCapture bool
 
-	// Mask applies only to observation Input and Output; to trace,
-	// observation, and score Metadata; to dataset metadata and dataset item
-	// content; and to experiment metadata and expected output supplied through
-	// this Client. It receives the field and its complete typed value before
-	// serialization. Each metadata map must remain a map[string]any to be
-	// retained. It does not process identifiers, names, descriptions, schemas,
-	// model fields, StatusMessage, [Observation.RecordError] text, or
-	// third-party spans and events. Calls are synchronous and can occur
-	// concurrently, so the function must be fast, non-blocking, and
-	// concurrency-safe. A panic is recovered: telemetry omits the affected
-	// value, while dataset writes and experiment starts return an error,
-	// because an omission there would keep stale content or unlink an item.
+	// Mask redacts content before it leaves the process. It receives each value
+	// exactly as the caller supplied it, including json.RawMessage, and returns
+	// a replacement that is serialized the same way; metadata arrives and must
+	// stay a map[string]any. A nil return omits the value. A panic omits it from
+	// telemetry but fails an experiment start. Dataset writes fail on either,
+	// because an omitted dataset field keeps its stored value. Mask covers
+	// observation input and output, all metadata, dataset item content, and
+	// experiment expected output; it never sees identifiers, names,
+	// descriptions, schemas, model fields, StatusMessage,
+	// [Observation.RecordError] text, or third-party spans. Calls are
+	// synchronous and concurrent, so Mask must be fast and concurrency-safe.
 	Mask func(field MaskField, value any) any
 
 	envErr error
