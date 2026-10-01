@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -138,9 +140,11 @@ func (d *DatasetsClient) attempt(ctx context.Context, call datasetCall) (
 		if cause := ctx.Err(); cause != nil {
 			return nil, false, 0, canceledError(call, cause, call.write)
 		}
+		var dial *net.OpError
+		sent := !errors.As(err, &dial) || dial.Op != "dial"
 		return nil, !call.write, 0, &DatasetError{
 			Message:        "the " + call.op + " request failed",
-			OutcomeUnknown: call.write,
+			OutcomeUnknown: call.write && sent,
 		}
 	}
 	defer func() { _ = response.Body.Close() }()
