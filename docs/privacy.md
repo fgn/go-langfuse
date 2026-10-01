@@ -79,10 +79,11 @@ func redactSDKValue(field langfuse.MaskField, value any) any {
 	case langfuse.MaskObservationInput, langfuse.MaskObservationOutput:
 		return "[redacted]"
 	case langfuse.MaskTraceMetadata, langfuse.MaskObservationMetadata, langfuse.MaskScoreMetadata,
+		langfuse.MaskDatasetMetadata, langfuse.MaskDatasetItemMetadata,
 		langfuse.MaskExperimentMetadata, langfuse.MaskExperimentItemMetadata:
 		return redactMetadata(value)
 	default:
-		return nil
+		return value
 	}
 }
 
@@ -111,7 +112,9 @@ func redactMetadata(value any) any {
 }
 ```
 
-The example fully replaces observation input and output. It assumes JSON-like
+The example fully replaces observation input and output and returns other
+values unchanged; returning nil would omit them, or fail a dataset write. It
+assumes JSON-like
 `map[string]any` and `[]any` metadata. A production masker must cover every
 concrete value type the application supplies, must be concurrency-safe, and
 should have tests proving its redaction policy.

@@ -326,8 +326,8 @@ A write is sent once and never retried:
 
 | Failure | Result |
 | --- | --- |
-| HTTP 400, 401, 403, 404, 409, or 413 | not applied |
-| Any other status (including 3xx, since redirects are not followed, and 408, 422, 429, 5xx), a network error, cancellation in flight, or an unreadable, oversized, or invalid success response | wraps `ErrWriteOutcomeUnknown`; it may have been applied |
+| HTTP 400, 401, 403, 404, 409, or 413, or no connection (the dial error is wrapped) | not applied |
+| Any other status (including 3xx, since redirects are not followed, and 408, 422, 429, 5xx), a connection lost after sending, cancellation in flight, or an unreadable, oversized, or invalid success response | wraps `ErrWriteOutcomeUnknown`; it may have been applied |
 
 With `AsOf`, `DatasetItems` returns the item versions valid at that instant
 and sets each item's `Version` to it; `item.ExperimentItem()` carries that
