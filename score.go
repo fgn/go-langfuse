@@ -83,11 +83,10 @@ type Score struct {
 }
 
 // RecordScore submits one score through the Langfuse JSON ingestion endpoint
-// using the client's credentials and environment. A score that targets the
-// experiment item trace ctx belongs to (see [Client.StartExperimentItem]) is
-// recorded in the item's "sdk-experiment" environment instead, matching the
-// item's spans. The score is validated
-// synchronously, so every returned error marks a score that was not
+// using the client's credentials and environment; a score for the experiment
+// item trace that ctx belongs to uses the item's "sdk-experiment" environment
+// instead. The score is validated synchronously, so every returned error
+// marks a score that was not
 // accepted, and then queued for asynchronous delivery with bounded retry (network
 // errors, HTTP 408, 429, and 5xx responses, and per-item ingestion errors
 // with those statuses, using the same backoff defaults as observation
@@ -125,10 +124,6 @@ func (c *Client) RecordScore(ctx context.Context, score Score) error {
 	return err
 }
 
-// scoreEnvironment returns the environment a score is recorded in: the
-// experiment environment when the score targets the experiment item trace
-// that ctx belongs to, so item scores and item traces agree, and the client
-// environment otherwise.
 func (c *Client) scoreEnvironment(ctx context.Context, score Score) string {
 	if score.TraceID != "" {
 		if traceID, err := oteltrace.TraceIDFromHex(score.TraceID); err == nil &&

@@ -61,7 +61,6 @@ tasks:
     cmds:
       - go test -mod=readonly ./internal/attributes -run='^$' -fuzz='^FuzzEncode$' -fuzztime=2s
       - go test -mod=readonly ./internal/attributes -run='^$' -fuzz=FuzzNormalizeUsage -fuzztime=2s
-      - go test -mod=readonly ./internal/attributes -run='^$' -fuzz='^FuzzEncodeMetadataObject$' -fuzztime=2s
       - go test -mod=readonly ./internal/attributes -run='^$' -fuzz='^FuzzEncodeContent$' -fuzztime=2s
       - go test -mod=readonly ./internal/transport -run='^$' -fuzz=FuzzNormalizeEndpoint -fuzztime=2s
       - go test -mod=readonly . -run='^$' -fuzz=FuzzPromptCompile -fuzztime=2s

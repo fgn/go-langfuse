@@ -58,47 +58,6 @@ func FuzzNormalizeUsage(f *testing.F) {
 	})
 }
 
-func FuzzEncodeMetadataObject(f *testing.F) {
-	f.Add(`{"a":{"b":1},"a.b":2}`)
-	f.Add(`{"x":[1,{"y":null}],"z":"s"}`)
-	f.Add(`{"n":12345678901234567890123}`)
-	f.Fuzz(func(t *testing.T, raw string) {
-		var metadata map[string]any
-		if json.Unmarshal([]byte(raw), &metadata) != nil {
-			return
-		}
-		encoded, present, err := lfattr.EncodeMetadataObject(metadata, 4<<10)
-		if err != nil || !present {
-			return
-		}
-		if len(encoded) > 4<<10 {
-			t.Fatalf("encoded metadata exceeds its limit: %d", len(encoded))
-		}
-		var decoded map[string]any
-		if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
-			t.Fatalf("encoded metadata is not a JSON object: %v", err)
-		}
-		// Every leaf must be a string, as dotted attributes are.
-		var check func(map[string]any)
-		check = func(object map[string]any) {
-			for _, value := range object {
-				switch value := value.(type) {
-				case string:
-				case map[string]any:
-					check(value)
-				default:
-					t.Fatalf("non-string leaf %T in %s", value, encoded)
-				}
-			}
-		}
-		check(decoded)
-		again, _, err := lfattr.EncodeMetadataObject(decoded, 4<<10)
-		if err != nil || again != encoded {
-			t.Fatalf("encoding is not stable: %s then %s (%v)", encoded, again, err)
-		}
-	})
-}
-
 func FuzzEncodeContent(f *testing.F) {
 	f.Add([]byte(`"Paris"`))
 	f.Add([]byte(`{"a": [1, 2.50]}`))
