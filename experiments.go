@@ -51,9 +51,8 @@ type Experiment struct {
 	// [DatasetItem.DatasetID]. Leave it empty for local data.
 	DatasetID string
 	// Metadata is passed to Config.Mask as MaskExperimentMetadata once per
-	// item start and exported as one JSON object on every span of the item
-	// trace, which Langfuse flattens into dotted keys. The encoded object is
-	// limited to 16 KiB, and no two keys may flatten to the same path.
+	// item start and exported as one JSON object of at most 16 KiB on every
+	// span of the item trace.
 	Metadata map[string]any
 }
 
@@ -359,7 +358,7 @@ func (c *Client) experimentMetadata(field MaskField, metadata map[string]any) (s
 			wrapped: []error{ErrInvalidExperiment},
 		}
 	}
-	encoded, present, err := lfattr.EncodeMetadataObject(object, maxExperimentMetadataBytes)
+	encoded, present, err := lfattr.EncodeContent(object, maxExperimentMetadataBytes)
 	if err != nil {
 		return "", false, experimentContentError(field, err)
 	}
@@ -384,11 +383,8 @@ func (c *Client) maskExperimentValue(field MaskField, value any) (masked any, er
 
 func experimentContentError(field MaskField, cause error) error {
 	reason := "could not be serialized"
-	switch {
-	case errors.Is(cause, lfattr.ErrContentTooLarge):
+	if errors.Is(cause, lfattr.ErrContentTooLarge) {
 		reason = "exceeds its size limit"
-	case errors.Is(cause, lfattr.ErrMetadataShape):
-		reason = "has an invalid, reserved, or colliding key path"
 	}
 	return &datasetError{
 		message: "langfuse: invalid experiment: " + string(field) + " " + reason,

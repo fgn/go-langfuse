@@ -96,8 +96,7 @@ func TestExperimentWireItemTraceCarriesAuthoritativeIdentity(t *testing.T) {
 	spans := exportObservationWireSpans(t, client, receiver, 5)
 	rootWire := observationWireSpanNamed(t, spans, "item-task")
 	assertObservationWireIdentity(t, rootWire.span, root.TraceID(), root.ID(), "")
-	// Leaves are normalized to strings, as Python's dotted attributes are.
-	metadataJSON := `{"model":"m-1","nested":{"depth":"2"}}`
+	metadataJSON := `{"model":"m-1","nested":{"depth":2}}`
 	shared := map[string]any{
 		experimentIDKey:      "run-2026-10-01",
 		experimentNameKey:    "triage-v2",
@@ -356,6 +355,10 @@ func TestExperimentWireTwoClientsShareAContext(t *testing.T) {
 	}
 }
 
+type experimentNullJSON struct{}
+
+func (experimentNullJSON) MarshalJSON() ([]byte, error) { return []byte("null"), nil }
+
 func TestExperimentWireExpectedOutputEncoding(t *testing.T) {
 	client, receiver := newObservationWireClient(t, nil)
 	cases := map[string]struct {
@@ -370,6 +373,8 @@ func TestExperimentWireExpectedOutputEncoding(t *testing.T) {
 		"raw string":          {value: json.RawMessage(`"Paris"`), want: "Paris"},
 		"raw object":          {value: json.RawMessage(" {\"n\": 12345678901234567890} "), want: `{"n":12345678901234567890}`},
 		"raw null":            {value: json.RawMessage(`null`), want: nil},
+		"raw empty":           {value: json.RawMessage(" "), want: nil},
+		"null marshaler":      {value: experimentNullJSON{}, want: nil},
 		"nil":                 {value: nil, want: nil},
 		"typed nil":           {value: map[string]any(nil), want: nil},
 	}
@@ -491,12 +496,6 @@ func TestExperimentRejectsInvalidInputAtomically(t *testing.T) {
 		"invalid UTF-8":        {experiment: func(e *langfuse.Experiment) { e.DatasetID = "\xff" }},
 		"long description":     {experiment: func(e *langfuse.Experiment) { e.Description = strings.Repeat("d", 16<<10+1) }},
 		"version out of range": {item: func(i *langfuse.ExperimentItem) { i.Version = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC) }},
-		"colliding metadata paths": {experiment: func(e *langfuse.Experiment) {
-			e.Metadata = map[string]any{"a.b": 1, "a": map[string]any{"b": 2}}
-		}},
-		"reserved metadata segment": {item: func(i *langfuse.ExperimentItem) {
-			i.Metadata = map[string]any{"x": map[string]any{"__proto__": 1}}
-		}},
 		"oversized metadata": {experiment: func(e *langfuse.Experiment) {
 			e.Metadata = map[string]any{"blob": strings.Repeat("m", 16<<10)}
 		}},
@@ -511,6 +510,9 @@ func TestExperimentRejectsInvalidInputAtomically(t *testing.T) {
 		"invalid raw expected output": {item: func(i *langfuse.ExperimentItem) {
 			i.ExpectedOutput = json.RawMessage(`{"a":`)
 		}},
+		"invalid UTF-8 expected output": {item: func(i *langfuse.ExperimentItem) { i.ExpectedOutput = "\xff" }},
+		"unsupported expected output":   {item: func(i *langfuse.ExperimentItem) { i.ExpectedOutput = func() {} }},
+		"panicking marshaler":           {item: func(i *langfuse.ExperimentItem) { i.ExpectedOutput = edgePanickingJSON{} }},
 		"mask panic": {mask: func(field langfuse.MaskField, value any) any {
 			if field == langfuse.MaskExperimentItemExpectedOutput {
 				panic("PANIC-PAYLOAD")
@@ -756,44 +758,6 @@ func TestExperimentWireBorrowedLimitsThatDropIdentityReject(t *testing.T) {
 	}
 	if got := len(receiver.Requests()); got != 0 {
 		t.Fatalf("an item root without complete identity was exported in %d requests", got)
-	}
-}
-
-type deepMetadata struct{}
-
-func (deepMetadata) MarshalJSON() ([]byte, error) {
-	return []byte(strings.Repeat(`{"a":`, 40) + "1" + strings.Repeat("}", 40)), nil
-}
-
-func TestExperimentWireMetadataNormalization(t *testing.T) {
-	client, receiver := newObservationWireClient(t, nil)
-	experiment := wireExperiment()
-	experiment.Metadata = map[string]any{
-		"big":   json.Number("9007199254740993"),
-		"null":  nil,
-		"flag":  true,
-		"list":  []any{1, "a<b", nil},
-		"raw":   json.RawMessage(`{"x": 1.50, "y": null}`),
-		"empty": map[string]any{},
-		"text":  "Paris",
-	}
-	_, root, err := client.StartExperimentItem(context.Background(), experiment, wireExperimentItem(),
-		"normalized", langfuse.ObservationAttributes{})
-	if err != nil {
-		t.Fatalf("StartExperimentItem() error = %v", err)
-	}
-	root.End()
-	spans := exportObservationWireSpans(t, client, receiver, 1)
-	want := `{"big":"9007199254740993","flag":"true","list":"[1,\"a<b\",null]","raw":{"x":"1.50"},"text":"Paris"}`
-	if got := wireAttributes(t, spans, "normalized")[experimentMetaKey]; got != want {
-		t.Fatalf("normalized metadata = %s\nwant %s", got, want)
-	}
-
-	deep := wireExperiment()
-	deep.Metadata = map[string]any{"deep": deepMetadata{}}
-	if _, _, err := client.StartExperimentItem(context.Background(), deep, wireExperimentItem(), "deep",
-		langfuse.ObservationAttributes{}); !errors.Is(err, langfuse.ErrInvalidExperiment) {
-		t.Fatalf("metadata nested past the depth limit through a custom marshaler = %v", err)
 	}
 }
 
