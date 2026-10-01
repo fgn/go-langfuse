@@ -25,9 +25,8 @@ type ContextAttributesFunc func(context.Context) []otelattr.KeyValue
 // application-root claim for traceID.
 type TraceClaimFunc func(context.Context, oteltrace.TraceID) bool
 
-// ExperimentAttributesFunc returns already-normalized experiment item
-// attributes for a span of traceID started from ctx. They replace any value
-// the span was started with.
+// ExperimentAttributesFunc returns the experiment item attributes that
+// replace a starting span's own values.
 type ExperimentAttributesFunc func(context.Context, oteltrace.TraceID) []otelattr.KeyValue
 
 // AdmitFunc accepts the pending admission token in ctx, confirming to the

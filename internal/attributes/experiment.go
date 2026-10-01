@@ -7,7 +7,8 @@ import (
 	"unicode/utf8"
 )
 
-// Langfuse v4 experiment attributes, read from every span of an item trace.
+// Langfuse v4 experiment attributes. The server reads them from every span
+// of an item trace.
 const (
 	ExperimentIDKey                    = "langfuse.experiment.id"
 	ExperimentNameKey                  = "langfuse.experiment.name"
@@ -20,8 +21,7 @@ const (
 	ExperimentItemRootObservationIDKey = "langfuse.experiment.item.root_observation_id"
 	ExperimentItemExpectedOutputKey    = "langfuse.experiment.item.expected_output"
 
-	// ExperimentEnvironment is the environment both official SDKs force on
-	// every span of an experiment item trace.
+	// ExperimentEnvironment is the environment of every experiment item span.
 	ExperimentEnvironment = "sdk-experiment"
 )
 
@@ -32,11 +32,10 @@ var (
 	ErrContentTooLarge = errors.New("content exceeds its size limit")
 )
 
-// EncodeContent encodes value in the string-preserving content form within
-// limit. Nil values, empty raw messages, and JSON null are absent. Strings
-// are sent verbatim; a json.RawMessage holding a JSON string is sent as the
-// decoded string, as the official SDKs decode stored JSON, and other raw
-// JSON compacted with its exact number tokens. Other values are JSON.
+// EncodeContent encodes value in the string-preserving content form. Nil
+// and JSON null are absent. A json.RawMessage JSON string is sent as the
+// decoded string, as the official SDKs decode stored JSON; other raw JSON
+// keeps its exact number tokens.
 func EncodeContent(value any, limit int) (encoded string, present bool, err error) {
 	if isNil(value) {
 		return "", false, nil

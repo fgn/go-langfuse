@@ -46,9 +46,8 @@ type Config struct {
 	// inherited by every SDK observation started on the deciding context
 	// path. nil selects the default of 1.0 (export everything); a non-nil
 	// value must be finite and within [0, 1], where 0 exports no traces while
-	// scores and prompts keep working; [Client.StartExperimentItem] item
-	// traces are the one exception and are always sampled. Other values are a
-	// validation error in
+	// scores and prompts keep working. [Client.StartExperimentItem] item
+	// traces are always sampled. Other values are a validation error in
 	// [New]. It is ignored with a diagnostic when TracerProvider is set,
 	// where the application's sampler remains authoritative.
 	// [Client.WithSampleRate] overrides it per context path.

@@ -14,13 +14,11 @@ import (
 	lfattr "github.com/fgn/go-langfuse/internal/attributes"
 )
 
-// ErrInvalidExperiment reports that [Client.StartExperimentItem] rejected
-// its input: an invalid identifier or version, or metadata or expected
-// output that could not be masked, encoded, or bounded.
+// ErrInvalidExperiment reports that [Client.StartExperimentItem] rejected its input.
 var ErrInvalidExperiment = errors.New("langfuse: invalid experiment")
 
 // ErrExperimentItemNotExported reports that a borrowed provider's sampler
-// did not sample an experiment item root, so Langfuse cannot list the item.
+// dropped an experiment item root.
 var ErrExperimentItemNotExported = errors.New("langfuse: experiment item root is not exported")
 
 var errExperimentAfterShutdown = errors.New("langfuse: experiment item started after client shutdown")
@@ -34,20 +32,17 @@ const (
 
 // Experiment identifies one experiment run.
 type Experiment struct {
-	// ID groups the items of one run; use the same ID for every item.
-	// Required: at most 255 bytes of valid UTF-8 without control characters.
+	// ID is shared by every item of the run. Required: at most 255 bytes of
+	// valid UTF-8 without control characters.
 	ID string
-	// Name is the run name shown in Langfuse. Required; same rules as ID.
+	// Name is the run name. Required; same rules as ID.
 	Name string
-	// Description is optional, at most 16 KiB, exported on each item root,
-	// and not masked.
+	// Description is optional, at most 16 KiB, and not masked.
 	Description string
-	// DatasetID links the run to a Langfuse dataset. Leave it empty for
-	// local data.
+	// DatasetID links the run to a Langfuse dataset; empty for local data.
 	DatasetID string
-	// Metadata is masked as MaskExperimentMetadata once per item start and
-	// exported as a JSON object of at most 16 KiB on every span of the item
-	// trace. A Mask result of nil omits it.
+	// Metadata is masked as MaskExperimentMetadata and exported as a JSON
+	// object of at most 16 KiB on every span of the item trace.
 	Metadata map[string]any
 }
 
@@ -56,16 +51,15 @@ type ExperimentItem struct {
 	// ID identifies the item across runs, such as [DatasetItem.ID].
 	// Required; same rules as Experiment.ID.
 	ID string
-	// Version is the DatasetItemQuery.AsOf the item was read at. Zero omits
-	// it.
+	// Version is the DatasetItemQuery.AsOf the item was read at; zero omits it.
 	Version time.Time
-	// ExpectedOutput is exported on the item root, at most 256 KiB, masked
-	// as MaskExperimentItemExpectedOutput, and omitted when content capture
-	// is off. Strings are sent verbatim, a json.RawMessage holding a JSON
-	// string as that string, and other values as JSON.
+	// ExpectedOutput is masked as MaskExperimentItemExpectedOutput, at most
+	// 256 KiB, and omitted when content capture is off. Strings are sent
+	// verbatim, a json.RawMessage JSON string as that string, and other
+	// values as JSON.
 	ExpectedOutput any
-	// Metadata follows the rules of Experiment.Metadata, masked as
-	// MaskExperimentItemMetadata.
+	// Metadata is masked as MaskExperimentItemMetadata, with the rules of
+	// Experiment.Metadata.
 	Metadata map[string]any
 }
 
@@ -79,17 +73,14 @@ type experimentState struct {
 // StartExperimentItem starts the root observation of one experiment item in
 // a new trace and returns a context that carries the item's identity.
 //
-// Langfuse lists the returned observation as the item and measures item
-// latency on it, so end it when the task finishes; evaluators may keep using
-// the returned context after End. Spans started from that context in the
-// item trace, on the provider running this client's processor, get the item
-// identity and langfuse.environment "sdk-experiment" at start. Later changes
-// to those attributes are the caller's.
-//
-// Isolated mode always samples the item trace. With a borrowed provider, a
-// root its sampler drops returns [ErrExperimentItemNotExported]. Any error
-// returns a no-op observation and a context without the item identity or an
-// ambient span. A nil or disabled client only validates the input.
+// End the observation when the task finishes; Langfuse measures item latency
+// on it. Spans started from the returned context in the item trace on this
+// client's provider, including evaluators after End, get the item identity
+// and langfuse.environment "sdk-experiment" at start. Isolated mode always
+// samples the item trace; a borrowed provider's sampler that drops the root
+// yields [ErrExperimentItemNotExported]. On error the observation is a no-op
+// and the context carries neither the item identity nor an ambient span. A
+// nil or disabled client only validates the input.
 func (c *Client) StartExperimentItem(
 	ctx context.Context,
 	experiment Experiment,
@@ -129,8 +120,7 @@ func (c *Client) StartExperimentItem(
 	return context.WithValue(itemCtx, experimentContextKey{client: c}, state), root, nil
 }
 
-// failedExperimentContext drops the ambient span as well as the identity,
-// so a rejected task runs as a new, unlinked trace.
+// Dropping the ambient span too makes a rejected task a new, unlinked trace.
 func (c *Client) failedExperimentContext(ctx context.Context) context.Context {
 	return oteltrace.ContextWithSpanContext(c.withoutExperiment(ctx), oteltrace.SpanContext{})
 }
@@ -145,8 +135,6 @@ func (c *Client) withoutExperiment(ctx context.Context) context.Context {
 	return context.WithValue(ctx, experimentContextKey{client: c}, (*experimentState)(nil))
 }
 
-// experimentAttributes returns the item attributes for a span of traceID
-// started from ctx, or nil when ctx carries no item of that trace.
 func (c *Client) experimentAttributes(ctx context.Context, traceID oteltrace.TraceID) []attribute.KeyValue {
 	if c == nil || ctx == nil || !traceID.IsValid() {
 		return nil
@@ -158,8 +146,6 @@ func (c *Client) experimentAttributes(ctx context.Context, traceID oteltrace.Tra
 	return state.attributes
 }
 
-// experimentAttributeSets masks and encodes the item once. shared goes on
-// every span of the item trace, rootOnly on the item root alone.
 func (c *Client) experimentAttributeSets(
 	ctx context.Context,
 	experiment Experiment,
@@ -213,8 +199,6 @@ func (c *Client) experimentAttributeSets(
 	return shared, rootOnly, nil
 }
 
-// experimentMetadata masks and encodes one metadata map. A nil mask result
-// omits it; any other non-map result is an error.
 func (c *Client) experimentMetadata(field MaskField, metadata map[string]any) (string, bool, error) {
 	if len(metadata) == 0 {
 		return "", false, nil

@@ -61,8 +61,6 @@ func (c *Client) StartObservation(
 	return c.startObservation(ctx, name, observationType, values, false)
 }
 
-// startObservation starts an observation, or with experimentRoot an
-// experiment item root: a new trace that isolated mode always samples.
 func (c *Client) startObservation(
 	ctx context.Context,
 	name string,
