@@ -113,7 +113,7 @@ func (c *Client) WithTraceAttributes(ctx context.Context, values TraceAttributes
 		// The request-scoped environment also updates the current recording
 		// span — an already-started borrowed server span included — matching
 		// the official SDKs' propagate-attributes semantics.
-		c.stampEnvironmentAttribute(ctx, next.environment)
+		stampEnvironmentAttribute(ctx, next.environment)
 	}
 	return c.syncBaggage(result, false, false)
 }

@@ -58,53 +58,24 @@ func (c *Client) StartObservation(
 	observationType ObservationType,
 	values ObservationAttributes,
 ) (context.Context, *Observation) {
-	ctx, started := c.startObservation(ctx, name, observationType, values, observationStart{})
-	return ctx, started.observation
+	return c.startObservation(ctx, name, observationType, values, false)
 }
 
-// observationStart carries the internal extensions an experiment item root
-// needs; the zero value is an ordinary StartObservation.
-type observationStart struct {
-	// root starts the span as the root of a new trace, ignoring any
-	// ambient span in ctx.
-	root bool
-	// leading attributes are placed immediately after the observation-type
-	// key, so a provider's attribute count limit drops optional content
-	// before them. They are bounded by their producer, outside the
-	// observation's aggregate payload budget.
-	leading []attribute.KeyValue
-	// sampleRate, when non-nil, is the client-scoped sample rate installed
-	// on the context passed to Tracer.Start only. It never reaches the
-	// returned context.
-	sampleRate *float64
-	// rootToken, when non-nil, is visible to the processor's OnStart for
-	// this span only; the returned context shadows it.
-	rootToken *experimentRootToken
-}
-
-// startedObservation reports the result of startObservation beside the
-// returned context. admitted and
-// expected mirror the processor's synchronous admission result.
-type startedObservation struct {
-	observation *Observation
-	span        oteltrace.Span
-	admitted    bool
-	expected    bool
-}
-
+// startObservation starts an observation, or with experimentRoot an
+// experiment item root: a new trace that isolated mode always samples.
 func (c *Client) startObservation(
 	ctx context.Context,
 	name string,
 	observationType ObservationType,
 	values ObservationAttributes,
-	start observationStart,
-) (context.Context, startedObservation) {
+	experimentRoot bool,
+) (context.Context, *Observation) {
 	if c == nil || c.isDisabled() || ctx == nil {
-		return ctx, startedObservation{observation: &Observation{}}
+		return ctx, &Observation{}
 	}
 	if c.stopped.Load() {
 		c.reportStoppedOnce()
-		return ctx, startedObservation{observation: &Observation{}}
+		return ctx, &Observation{}
 	}
 	if name == "" {
 		diagnostic.Report("observation name is empty; using \"observation\"")
@@ -126,38 +97,26 @@ func (c *Client) startObservation(
 		diagnostic.Report("observation attributes exceed the aggregate size limit; remaining fields omitted")
 	}
 	parentSpanContext := oteltrace.SpanFromContext(ctx).SpanContext()
-	if start.root {
+	if experimentRoot {
 		parentSpanContext = oteltrace.SpanContext{}
 	}
-	leading := start.leading
-	if !start.root {
-		// An SDK observation inside an experiment item trace carries the
-		// item identity as creation attributes too, so low borrowed
-		// attribute limits drop optional content before linkage.
-		leading = c.experimentAttributes(ctx, parentSpanContext.TraceID())
-	}
-	experimentTrace := len(leading) != 0
-	if experimentTrace {
-		// The item environment is authoritative: a later WithTraceAttributes
-		// on this observation's context must not replace it.
+	if experimentRoot || c.experimentAttributes(ctx, parentSpanContext.TraceID()) != nil {
+		// Trace state re-applied by a later WithTraceAttributes must not
+		// move an item span out of the experiment environment.
 		if explicit == nil {
 			explicit = make(map[string]struct{})
 		}
 		explicit[lfattr.EnvironmentKey] = struct{}{}
-		ordered := make([]attribute.KeyValue, 0, len(spanAttributes)+len(leading))
-		ordered = append(ordered, spanAttributes[0])
-		ordered = append(ordered, leading...)
-		spanAttributes = append(ordered, spanAttributes[1:]...)
 	}
 	if c.stopped.Load() {
 		c.reportStoppedOnce()
-		return ctx, startedObservation{observation: &Observation{}}
+		return ctx, &Observation{}
 	}
 	options := []oteltrace.SpanStartOption{oteltrace.WithAttributes(spanAttributes...)}
 	if !values.StartTime.IsZero() {
 		options = append(options, oteltrace.WithTimestamp(values.StartTime))
 	}
-	if start.root {
+	if experimentRoot {
 		options = append(options, oteltrace.WithNewRoot())
 	}
 	// Admission: the Langfuse processor accepts this token from its OnStart,
@@ -168,20 +127,14 @@ func (c *Client) startObservation(
 	// down.
 	token := &observationAdmission{}
 	startCtx := context.WithValue(ctx, admissionTokenContextKey{client: c}, token)
-	if start.sampleRate != nil {
-		startCtx = context.WithValue(startCtx, sampleRateContextKey{client: c}, *start.sampleRate)
-	}
-	if start.rootToken != nil {
-		startCtx = context.WithValue(startCtx, experimentRootContextKey{client: c}, start.rootToken)
+	alwaysSample := experimentRoot && c.owned
+	if alwaysSample {
+		startCtx = context.WithValue(startCtx, sampleRateContextKey{client: c}, 1.0)
 	}
 	spanCtx, span := c.tracer.Start(startCtx, name, options...)
-	if start.rootToken != nil {
-		spanCtx = context.WithValue(spanCtx, experimentRootContextKey{client: c}, (*experimentRootToken)(nil))
-	}
-	if start.sampleRate != nil {
-		// Restore the caller's rate so the override cannot decide a later,
-		// unrelated trace started from the returned context. Descendants of
-		// this span inherit its recorded decision instead.
+	if alwaysSample {
+		// Descendants inherit the root's decision; a later trace started
+		// from the returned context uses the caller's rate.
 		spanCtx = context.WithValue(spanCtx, sampleRateContextKey{client: c}, ctx.Value(sampleRateContextKey{client: c}))
 	}
 	if span.IsRecording() {
@@ -192,13 +145,13 @@ func (c *Client) startObservation(
 			// OnEnd, and refuse the start.
 			span.End()
 			c.reportStoppedOnce()
-			return ctx, startedObservation{observation: &Observation{}}
+			return ctx, &Observation{}
 		}
 	} else if c.stopped.Load() {
 		// A sampled-out span runs no OnStart, so the stopped re-check alone
 		// closes the shutdown race; nothing needs exporting either way.
 		c.reportStoppedOnce()
-		return ctx, startedObservation{observation: &Observation{}}
+		return ctx, &Observation{}
 	}
 	if values.Level == LevelError {
 		span.SetStatus(codes.Error, values.StatusMessage)
@@ -225,12 +178,7 @@ func (c *Client) startObservation(
 	// rebuilt so a new sampled root replaces the outbound trace claim and a
 	// sampled-out root stops exporting one that no longer matches.
 	spanCtx = c.syncBaggage(spanCtx, false, false)
-	return spanCtx, startedObservation{
-		observation: observation,
-		span:        span,
-		admitted:    token.admitted.Load(),
-		expected:    token.expected.Load(),
-	}
+	return spanCtx, observation
 }
 
 // nextTraceDecision derives the trace decision the started span publishes on

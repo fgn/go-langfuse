@@ -9,9 +9,6 @@ import (
 
 // Langfuse v4 experiment attributes, read from every span of an item trace.
 const (
-	// ExperimentNamespace prefixes every experiment attribute.
-	ExperimentNamespace = "langfuse.experiment."
-
 	ExperimentIDKey                    = "langfuse.experiment.id"
 	ExperimentNameKey                  = "langfuse.experiment.name"
 	ExperimentDescriptionKey           = "langfuse.experiment.description"

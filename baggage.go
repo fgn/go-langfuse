@@ -243,7 +243,7 @@ func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Con
 	}
 	result = c.syncBaggage(result, true, false)
 	if environmentAccepted {
-		c.stampEnvironmentAttribute(result, state.environment)
+		stampEnvironmentAttribute(result, state.environment)
 	}
 	return result
 }
@@ -498,9 +498,8 @@ func parseBaggageTraceID(value string) (oteltrace.TraceID, bool) {
 	return id, err == nil && id.IsValid()
 }
 
-func (c *Client) stampEnvironmentAttribute(ctx context.Context, environment string) {
-	if environment == "" || c.inExperimentTrace(ctx) {
-		// An experiment item trace keeps its authoritative environment.
+func stampEnvironmentAttribute(ctx context.Context, environment string) {
+	if environment == "" {
 		return
 	}
 	if span := oteltrace.SpanFromContext(ctx); span.IsRecording() {
