@@ -34,10 +34,12 @@ const (
 
 // Experiment identifies one experiment run.
 type Experiment struct {
-	// ID is shared by every item of the run. Required: at most 255 bytes of
-	// valid UTF-8 without control characters.
+	// ID identifies the run and is shared by all its items; use a new ID for
+	// every run. Required: at most 255 bytes of valid UTF-8 without control
+	// characters.
 	ID string
-	// Name is the run name. Required; same rules as ID.
+	// Name labels the run in Langfuse and may repeat across runs. Required;
+	// same rules as ID.
 	Name string
 	// Description is optional, at most 16 KiB, and not masked.
 	Description string

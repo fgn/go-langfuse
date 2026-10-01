@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -454,14 +455,15 @@ func TestDatasetResponseOutcomes(t *testing.T) {
 	}
 }
 
-func TestDatasetWriteThatNeverConnectsIsNotUnknown(t *testing.T) {
+func TestDatasetWriteThatNeverConnectsReportsTheDialError(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.NotFoundHandler())
 	server.Close()
 	client := newDatasetClient(t, server.URL, nil)
 	_, err := client.UpsertDataset(context.Background(), langfuse.DatasetSpec{Name: "set"})
-	if err == nil || errors.Is(err, langfuse.ErrWriteOutcomeUnknown) {
-		t.Fatalf("UpsertDataset() error = %v, want a failure without ErrWriteOutcomeUnknown", err)
+	var dial *net.OpError
+	if !errors.As(err, &dial) || errors.Is(err, langfuse.ErrWriteOutcomeUnknown) {
+		t.Fatalf("UpsertDataset() error = %v, want the dial error without ErrWriteOutcomeUnknown", err)
 	}
 }
 

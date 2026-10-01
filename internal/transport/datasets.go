@@ -31,7 +31,7 @@ type DatasetError struct {
 	NotFound bool
 	// OutcomeUnknown marks a write that may have been applied.
 	OutcomeUnknown bool
-	// Cause is the context error when the request context ended.
+	// Cause is the network or context error behind the failure, if any.
 	Cause error
 }
 
@@ -110,7 +110,7 @@ func (d *DatasetsClient) do(ctx context.Context, call datasetCall) ([]byte, erro
 }
 
 func canceledError(call datasetCall, cause error, unknown bool) error {
-	return &DatasetError{Message: "the " + call.op + " request was canceled", OutcomeUnknown: unknown, Cause: cause}
+	return &DatasetError{Message: "the " + call.op + " request did not finish", OutcomeUnknown: unknown, Cause: cause}
 }
 
 func (d *DatasetsClient) attempt(ctx context.Context, call datasetCall) (
@@ -140,11 +140,16 @@ func (d *DatasetsClient) attempt(ctx context.Context, call datasetCall) (
 		if cause := ctx.Err(); cause != nil {
 			return nil, false, 0, canceledError(call, cause, call.write)
 		}
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err // the URL can carry caller-supplied names
+		}
 		var dial *net.OpError
 		sent := !errors.As(err, &dial) || dial.Op != "dial"
 		return nil, !call.write, 0, &DatasetError{
 			Message:        "the " + call.op + " request failed",
 			OutcomeUnknown: call.write && sent,
+			Cause:          err,
 		}
 	}
 	defer func() { _ = response.Body.Close() }()

@@ -79,7 +79,8 @@ type DatasetItemSpec struct {
 	// DatasetName is required.
 	DatasetName string
 	// ID selects the item to update; when empty, every request creates a new
-	// item.
+	// item. IDs are unique per project, so an ID already used in another
+	// dataset fails with status 409, as does a concurrent edit of the item.
 	ID string
 	// Input, ExpectedOutput, and Metadata are masked as MaskDatasetItemInput,
 	// MaskDatasetItemExpectedOutput, and MaskDatasetItemMetadata, and are
@@ -114,7 +115,8 @@ type DatasetItem struct {
 }
 
 // ExperimentItem returns the item for [Client.StartExperimentItem], pinned
-// to its Version. It fails when the stored metadata is not a JSON object.
+// to its Version; an item read without AsOf runs unpinned. It fails when the
+// stored metadata is not a JSON object.
 func (i DatasetItem) ExperimentItem() (ExperimentItem, error) {
 	item := ExperimentItem{ID: i.ID, Version: i.Version}
 	if len(i.ExpectedOutput) != 0 {
@@ -273,7 +275,7 @@ func (c *Client) datasetFailure(ctx context.Context, notFound, err error) error 
 	}
 	result := errors.New("langfuse: " + failure.Message)
 	if failure.OutcomeUnknown {
-		result = fmt.Errorf("%w: %w", result, ErrWriteOutcomeUnknown)
+		result = fmt.Errorf("%w: %s", ErrWriteOutcomeUnknown, failure.Message)
 	}
 	cause := failure.Cause // the operation budget expired, or nil
 	switch {
@@ -453,7 +455,7 @@ func (c *Client) DatasetItems(ctx context.Context, query DatasetItemQuery) iter.
 			}
 			for _, wire := range page.Items {
 				item := datasetItemFromWire(wire)
-				item.Version = query.AsOf
+				item.Version = query.AsOf.UTC().Truncate(time.Millisecond)
 				if !yield(item, nil) {
 					return
 				}
