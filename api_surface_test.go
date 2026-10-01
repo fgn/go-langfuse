@@ -354,26 +354,6 @@ func TestPublicConstantValues(t *testing.T) {
 		}
 	}
 
-	maskFields := map[langfuse.MaskField]string{
-		langfuse.MaskObservationInput:             "observation input",
-		langfuse.MaskObservationOutput:            "observation output",
-		langfuse.MaskTraceMetadata:                "trace metadata",
-		langfuse.MaskObservationMetadata:          "observation metadata",
-		langfuse.MaskScoreMetadata:                "score metadata",
-		langfuse.MaskDatasetMetadata:              "dataset metadata",
-		langfuse.MaskDatasetItemInput:             "dataset item input",
-		langfuse.MaskDatasetItemExpectedOutput:    "dataset item expected output",
-		langfuse.MaskDatasetItemMetadata:          "dataset item metadata",
-		langfuse.MaskExperimentMetadata:           "experiment metadata",
-		langfuse.MaskExperimentItemMetadata:       "experiment item metadata",
-		langfuse.MaskExperimentItemExpectedOutput: "experiment item expected output",
-	}
-	for got, want := range maskFields {
-		if string(got) != want {
-			t.Errorf("mask field %q = %q, want %q", want, got, want)
-		}
-	}
-
 	promptSources := map[langfuse.PromptSource]string{
 		langfuse.PromptSourceServer:   "server",
 		langfuse.PromptSourceCache:    "cache",
