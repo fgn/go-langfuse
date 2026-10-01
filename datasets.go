@@ -6,10 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"strings"
 	"sync"
 	"time"
-	"unicode"
 	"unicode/utf8"
 
 	lfattr "github.com/fgn/go-langfuse/internal/attributes"
@@ -199,15 +197,6 @@ func (g *datasetGate) shutdown(ctx context.Context) error {
 		return fmt.Errorf("langfuse: dataset shutdown: %w", ctx.Err())
 	}
 }
-
-type datasetError struct {
-	message string
-	wrapped []error
-}
-
-func (e *datasetError) Error() string { return e.message }
-
-func (e *datasetError) Unwrap() []error { return e.wrapped }
 
 func (c *Client) datasetReady(ctx context.Context, invalid error) error {
 	if ctx == nil {
@@ -520,15 +509,6 @@ func isNilValue(value any) bool {
 		return len(raw) == 0
 	}
 	return lfattr.IsNil(value)
-}
-
-func containsControl(value string) bool {
-	return strings.ContainsFunc(value, unicode.IsControl)
-}
-
-func validDatasetInstant(t time.Time) bool {
-	year := t.UTC().Year()
-	return year >= 0 && year <= 9999
 }
 
 // formatDatasetInstant renders the millisecond UTC form the server stores.

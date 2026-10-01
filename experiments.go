@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -432,4 +434,22 @@ func validateExperiment(experiment Experiment, item ExperimentItem) error {
 		}
 	}
 	return nil
+}
+
+type datasetError struct {
+	message string
+	wrapped []error
+}
+
+func (e *datasetError) Error() string { return e.message }
+
+func (e *datasetError) Unwrap() []error { return e.wrapped }
+
+func containsControl(value string) bool {
+	return strings.ContainsFunc(value, unicode.IsControl)
+}
+
+func validDatasetInstant(t time.Time) bool {
+	year := t.UTC().Year()
+	return year >= 0 && year <= 9999
 }
