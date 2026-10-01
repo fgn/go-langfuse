@@ -38,6 +38,8 @@ var (
 	_ func(*langfuse.Client, context.Context) error                                                                                                                                 = (*langfuse.Client).Flush
 	_ func(*langfuse.Client, context.Context) error                                                                                                                                 = (*langfuse.Client).Shutdown
 
+	_ func(langfuse.DatasetItem) (langfuse.ExperimentItem, error) = langfuse.DatasetItem.ExperimentItem
+
 	_ func(*langfuse.Observation, langfuse.ObservationAttributes) = (*langfuse.Observation).Update
 	_ func(*langfuse.Observation, error)                          = (*langfuse.Observation).RecordError
 	_ func(*langfuse.Observation)                                 = (*langfuse.Observation).End
@@ -262,6 +264,7 @@ func TestPublicStructSurface(t *testing.T) {
 		"SourceObservationID",
 		"CreatedAt",
 		"UpdatedAt",
+		"Version",
 	})
 	assertFieldNames(t, langfuse.DatasetItemQuery{}, []string{
 		"DatasetName",

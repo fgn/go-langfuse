@@ -335,6 +335,8 @@ func (c *Client) WithTraceAttributes(ctx context.Context, values TraceAttributes
 
 func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Context
 
+func (i DatasetItem) ExperimentItem() (ExperimentItem, error)
+
 func (o *Observation) End()
 
 func (o *Observation) EndAt(at time.Time)
@@ -414,6 +416,7 @@ type DatasetItem struct {
 	SourceObservationID string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	Version time.Time
 }
 
 type DatasetItemQuery struct {

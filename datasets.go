@@ -1,6 +1,7 @@
 package langfuse
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -107,6 +108,26 @@ type DatasetItem struct {
 	SourceObservationID string
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
+	// Version is the DatasetItemQuery.AsOf the item was read at; zero when
+	// read without one.
+	Version time.Time
+}
+
+// ExperimentItem returns the item for [Client.StartExperimentItem], pinned
+// to its Version. It fails when the stored metadata is not a JSON object.
+func (i DatasetItem) ExperimentItem() (ExperimentItem, error) {
+	item := ExperimentItem{ID: i.ID, Version: i.Version}
+	if len(i.ExpectedOutput) != 0 {
+		item.ExpectedOutput = i.ExpectedOutput
+	}
+	if len(i.Metadata) != 0 {
+		decoder := json.NewDecoder(bytes.NewReader(i.Metadata))
+		decoder.UseNumber()
+		if err := decoder.Decode(&item.Metadata); err != nil {
+			return ExperimentItem{}, fmt.Errorf("%w: dataset item metadata is not a JSON object", ErrInvalidExperiment)
+		}
+	}
+	return item, nil
 }
 
 // DatasetItemQuery selects the items of one dataset for [Client.DatasetItems].
@@ -430,8 +451,10 @@ func (c *Client) DatasetItems(ctx context.Context, query DatasetItemQuery) iter.
 				yield(DatasetItem{}, err)
 				return
 			}
-			for _, item := range page.Items {
-				if !yield(datasetItemFromWire(item), nil) {
+			for _, wire := range page.Items {
+				item := datasetItemFromWire(wire)
+				item.Version = query.AsOf
+				if !yield(item, nil) {
 					return
 				}
 			}

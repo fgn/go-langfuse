@@ -648,6 +648,34 @@ func TestDatasetItemsPages(t *testing.T) {
 	}
 }
 
+func TestDatasetItemsConvertToPinnedExperimentItems(t *testing.T) {
+	t.Parallel()
+	server := newDatasetServer(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
+		_, _ = io.WriteString(w, itemsPage(1, "a"))
+	})
+	client := newDatasetClient(t, server.URL, nil)
+	asOf := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	for item, err := range client.DatasetItems(context.Background(), langfuse.DatasetItemQuery{DatasetName: "set", AsOf: asOf}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := item.ExperimentItem()
+		want := langfuse.ExperimentItem{
+			ID:             "a",
+			Version:        asOf,
+			ExpectedOutput: json.RawMessage(`"Paris"`),
+			Metadata:       map[string]any{"m": json.Number("12345678901234567890")},
+		}
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("ExperimentItem() = %#v, %v; want %#v", got, err, want)
+		}
+	}
+	_, err := langfuse.DatasetItem{ID: "a", Metadata: json.RawMessage(`"text"`)}.ExperimentItem()
+	if !errors.Is(err, langfuse.ErrInvalidExperiment) {
+		t.Fatalf("non-object metadata error = %v, want ErrInvalidExperiment", err)
+	}
+}
+
 func TestDatasetItemsIsLazyAndStopsOnBreak(t *testing.T) {
 	t.Parallel()
 	server := newDatasetServer(t, func(w http.ResponseWriter, _ *http.Request, _ []byte) {
