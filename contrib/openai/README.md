@@ -35,7 +35,10 @@ cfg.HTTPClient = httpClient
 
 Every recognized call now records a generation or embedding
 observation, parented by whatever observation is in the request
-context. Without the adapter, each of these fields is code you write
+context. When the request context's active span belongs to another
+backend, `lf.WithParent(ctx, parent)` nests the call under a Langfuse
+observation from another context path without re-parenting that
+backend's spans. Without the adapter, each of these fields is code you write
 and maintain by hand for every provider call site:
 
 | Field | Source |

@@ -165,6 +165,19 @@ handoff even though the background work is a separate trace. This contract is
 locked by the SDK's tests. The span-context reset is shared OpenTelemetry
 state: other tracers using the detached context also start new traces.
 
+`Client.WithParent(ctx, parent)` is the inverse bridge: observations started
+directly on the returned context become children of `parent`, in its trace,
+while `ctx`'s active OpenTelemetry span stays in place for other tracers. Use
+it when instrumented work, such as an HTTP client call observed by a contrib
+transport, runs under an application span that exports to another backend
+while its Langfuse parent lives on a detached path. Each started observation
+returns its ordinary context, so its children nest normally. The children
+inherit `parent`'s root claim and, in isolated mode, its sampling decision; a
+borrowed provider's sampler stays authoritative. Score-suppression authority
+that `ctx`'s path already lost in `parent`'s trace is never restored. Content
+capture, cancellation, trace attributes, and baggage opt-in come from `ctx`,
+not from `parent`'s former path.
+
 ## Observation semantics
 
 For generations and embeddings, keep the model, input, output, usage, cost,
