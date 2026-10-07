@@ -40,6 +40,7 @@ type call struct {
 	modelParameters map[string]any
 
 	responseModel string
+	responseID    string
 	usage         *langfuse.Usage
 	finishReasons []string
 	unaryOutput   any
@@ -128,6 +129,9 @@ func (c *call) FeedEvent(data []byte) wiretap.EventVerdict {
 	if chunk.Model != "" {
 		c.responseModel = chunk.Model
 	}
+	if id, ok := decodeResponseID(chunk.ID); ok {
+		c.responseID = id
+	}
 	if chunk.Usage != nil {
 		c.usage = mapUsage(chunk.Usage)
 	}
@@ -166,6 +170,9 @@ func (c *call) FinishUnary(body []byte, httpStatus int) {
 	}
 	if response.Model != "" {
 		c.responseModel = response.Model
+	}
+	if id, ok := decodeResponseID(response.ID); ok {
+		c.responseID = id
 	}
 	if response.Usage != nil {
 		c.usage = mapUsage(response.Usage)
@@ -215,6 +222,9 @@ func (c *call) Result() wiretap.Result {
 	}
 	if c.embeddings > 0 {
 		metadata["embeddings"] = c.embeddings
+	}
+	if c.responseID != "" {
+		metadata["response_id"] = c.responseID
 	}
 	if len(metadata) > 0 {
 		result.Metadata = metadata
@@ -391,6 +401,7 @@ func (a *choiceAccumulator) render() any {
 }
 
 type streamChunk struct {
+	ID      json.RawMessage `json:"id"`
 	Model   string          `json:"model"`
 	Error   json.RawMessage `json:"error"`
 	Usage   *wireUsage      `json:"usage"`
@@ -430,6 +441,7 @@ func isRealError(raw json.RawMessage) bool {
 }
 
 type unaryResponse struct {
+	ID      json.RawMessage   `json:"id"`
 	Model   string            `json:"model"`
 	Usage   *wireUsage        `json:"usage"`
 	Choices []unaryChoice     `json:"choices"`

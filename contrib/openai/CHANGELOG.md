@@ -11,6 +11,12 @@ follows Semantic Versioning independently of the core module.
   so the fixed failure category survives a core client with content capture
   disabled. Failed calls no longer record an exception event; the failure
   stays in the level, the status message, and the OTel span status.
+- Record the provider's response identifier (`chatcmpl-...`, `resp_...`) as
+  `response_id` metadata for chat completions and Responses calls, unary and
+  streaming, including Responses streams interrupted after `response.created`
+  and oversized bodies recovered by the bounded scanner, so an observation can
+  be matched to provider-side logs. The value is syntactically validated (128
+  characters of `[A-Za-z0-9._:-]`) and governed by the metadata masker.
 
 ## [0.2.0] - 2026-08-15
 

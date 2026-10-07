@@ -46,7 +46,7 @@ and maintain by hand for every provider call site:
 | Input / output | request messages and response content, media replaced by placeholders, tool calls as distinct structured calls |
 | Time-to-first-token | first semantic output delta of a stream |
 | Status | wire-provable only: `http <code>`, `incomplete`, `canceled`, `closed_early`, `telemetry_partial` |
-| Metadata | provider, route, API version, finish reason, HTTP status, `azure.deployment` |
+| Metadata | provider, route, API version, finish reason, HTTP status, `azure.deployment`, `response_id` |
 
 Runnable end-to-end examples (working without OpenAI credentials via
 built-in synthetic servers):
@@ -132,7 +132,11 @@ larger than the 512 KiB capture cap is omitted entirely, never
 truncated; individual streaming events are additionally bounded at
 256 KiB, and an oversized event is discarded whole (including any
 usage fields inside it) with a `telemetry_partial` warning while
-framing and terminal detection continue. `WithoutContentExport()` keeps usage and model but drops
+framing and terminal detection continue. The `response_id` metadata is a syntactically
+validated provider identifier, not content: it stays in metadata when the core
+client disables content capture and when the adapter uses
+`WithoutContentExport()`, and `Config.Mask` governs it as observation metadata.
+`WithoutContentExport()` keeps usage and model but drops
 Input/Output; `WithoutBodyInspection()` prevents body reading
 completely. A disabled core client (`LANGFUSE_TRACING_ENABLED=false`)
 disables inspection, not only export.

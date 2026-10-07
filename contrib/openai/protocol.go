@@ -1,6 +1,7 @@
 package langfuseopenai
 
 import (
+	"encoding/json"
 	"net/url"
 	"strings"
 
@@ -85,4 +86,31 @@ func azureDeployment(escapedPath string) (string, bool) {
 		return "", false
 	}
 	return segment, true
+}
+
+// validResponseID is a syntactic check for provider identifier shapes. It is
+// not a confidentiality boundary: response_id is metadata, exported with
+// content export disabled and governed by the observation-metadata masker.
+func validResponseID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.', r == ':':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// decodeResponseID reads an optional id member on its own, so a malformed
+// id is omitted without discarding the rest of the response.
+func decodeResponseID(raw json.RawMessage) (string, bool) {
+	var id string
+	if len(raw) == 0 || json.Unmarshal(raw, &id) != nil || !validResponseID(id) {
+		return "", false
+	}
+	return id, true
 }
