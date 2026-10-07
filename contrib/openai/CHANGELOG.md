@@ -5,6 +5,9 @@ follows Semantic Versioning independently of the core module.
 
 ## [Unreleased]
 
+- Update `google.golang.org/grpc` to v1.83.1 for GO-2026-6348 (heap exhaustion
+  through fragmented HTTP/2 DATA frames).
+
 ## [0.2.0] - 2026-08-15
 
 - Observe the OpenAI Responses API (`/responses`, unary and streaming)
