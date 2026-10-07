@@ -21,6 +21,14 @@ follows Semantic Versioning independently of the core module.
   Input for chat completions and Responses: each function tool's name,
   description, and parameter schema, with other tool types as fixed
   placeholders. Off by default; Input stays under content capture and Mask.
+- Keep the request context for the base transport when it holds a valid span
+  (local or remote, recording or not) whose reported tracer provider differs
+  from the generation's, as with an isolated Langfuse provider next to the
+  application's: application instrumentation inside the transport stays on
+  the application trace instead of joining the Langfuse generation. This
+  changes behavior for remote-only parents and for span wrappers that report
+  their own provider, even with a borrowed provider. Spanless requests and
+  spans reporting the generation's provider keep the generation's context.
 
 ## [0.2.0] - 2026-08-15
 
