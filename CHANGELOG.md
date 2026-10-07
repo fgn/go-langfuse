@@ -5,6 +5,8 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-07
+
 - Update `google.golang.org/grpc` to v1.83.1 for GO-2026-6348 (heap exhaustion
   through fragmented HTTP/2 DATA frames).
 - **Breaking**: `RecordError` treats error text as content. With content

@@ -5,6 +5,8 @@ follows Semantic Versioning independently of the core module.
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-07
+
 - Update `google.golang.org/grpc` to v1.83.1 for GO-2026-6348 (heap exhaustion
   through fragmented HTTP/2 DATA frames).
 - Record HTTP and protocol failures through `Level` and `StatusMessage` only,
