@@ -32,8 +32,9 @@ var modelParameterAllowlist = map[string]bool{
 
 // call accumulates one attempt's parsed request and response.
 type call struct {
-	route      wiretap.Route
-	captureCap int
+	route           wiretap.Route
+	captureCap      int
+	toolDefinitions bool
 
 	input           any
 	requestModel    string
@@ -94,6 +95,11 @@ func (c *call) ParseRequest(body []byte) {
 			var messages []any
 			if json.Unmarshal(raw, &messages) == nil {
 				c.input = sanitizeMessages(messages)
+			}
+			if raw, ok := request["tools"]; ok && c.toolDefinitions && c.input != nil {
+				tools, partial := sanitizeToolDefinitions(raw, true)
+				c.partial = c.partial || partial
+				c.input = map[string]any{"messages": c.input, "tools": tools}
 			}
 		} else if raw, ok := request["prompt"]; ok {
 			var prompt any

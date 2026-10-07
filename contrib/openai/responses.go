@@ -79,8 +79,9 @@ var knownResponsesInputTypes = map[string]bool{
 // typed SSE events with terminal-authoritative output, and the bounded
 // over-cap salvage scanner.
 type responsesCall struct {
-	route      wiretap.Route
-	captureCap int
+	route           wiretap.Route
+	captureCap      int
+	toolDefinitions bool
 
 	// Request.
 	input           any
@@ -173,6 +174,13 @@ func (c *responsesCall) ParseRequest(body []byte) {
 			input["prompt"] = prompt
 		} else {
 			c.partial = true
+		}
+	}
+	if raw, ok := request["tools"]; ok && c.toolDefinitions {
+		tools, partial := sanitizeToolDefinitions(raw, false)
+		c.partial = c.partial || partial
+		if tools != nil {
+			input["tools"] = tools
 		}
 	}
 	if len(input) != 0 {

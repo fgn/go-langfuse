@@ -136,7 +136,12 @@ framing and terminal detection continue. The `response_id` metadata is a syntact
 validated provider identifier, not content: it stays in metadata when the core
 client disables content capture and when the adapter uses
 `WithoutContentExport()`, and `Config.Mask` governs it as observation metadata.
-`WithoutContentExport()` keeps usage and model but drops
+Request tool definitions are not
+exported unless `WithToolDefinitions()` is set; it adds each function tool's
+name, description, and parameter schema to Input, still under capture and
+Mask. Well-formed tools of other types become `{"type": ..., "omitted": true}`
+placeholders by policy; malformed or oversized definitions and tools beyond the
+first 128 mark the call `telemetry_partial`. `WithoutContentExport()` keeps usage and model but drops
 Input/Output; `WithoutBodyInspection()` prevents body reading
 completely. A disabled core client (`LANGFUSE_TRACING_ENABLED=false`)
 disables inspection, not only export.

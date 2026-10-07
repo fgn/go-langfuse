@@ -15,7 +15,8 @@ import (
 // path prefixes. Response retrieval (/responses/{id}), input-items
 // listing, and background polling pass through unobserved.
 type protocol struct {
-	captureCap int
+	captureCap      int
+	toolDefinitions bool
 }
 
 func (p protocol) Recognize(u *url.URL) (wiretap.Route, bool) {
@@ -46,9 +47,11 @@ func (p protocol) Recognize(u *url.URL) (wiretap.Route, bool) {
 
 func (p protocol) NewCall(route wiretap.Route) wiretap.Call {
 	if route.Name == "openai.responses" {
-		return newResponsesCall(route, p.captureCap)
+		call := newResponsesCall(route, p.captureCap)
+		call.toolDefinitions = p.toolDefinitions
+		return call
 	}
-	return &call{route: route, captureCap: p.captureCap}
+	return &call{route: route, captureCap: p.captureCap, toolDefinitions: p.toolDefinitions}
 }
 
 // classifyProvider labels the wire endpoint truthfully; unknown hosts
