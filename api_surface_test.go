@@ -60,6 +60,7 @@ var (
 	_ langfuse.MaskField = langfuse.MaskTraceMetadata
 	_ langfuse.MaskField = langfuse.MaskObservationMetadata
 	_ langfuse.MaskField = langfuse.MaskScoreMetadata
+	_ langfuse.MaskField = langfuse.MaskErrorMessage
 )
 
 func TestPublicMethodSurface(t *testing.T) {

@@ -7,6 +7,15 @@ Versioning once the first release is tagged.
 
 - Update `google.golang.org/grpc` to v1.83.1 for GO-2026-6348 (heap exhaustion
   through fragmented HTTP/2 DATA frames).
+- **Breaking**: `RecordError` treats error text as content. With content
+  capture disabled for an observation, it no longer calls `err.Error()` and
+  exports the payload-free `"error"` as the status and exception message, with
+  the Go error type. With capture enabled, the text passes through `Mask` as
+  the new `MaskErrorMessage` field. `Observe` inherits the change. Record a
+  payload-free failure category with `Update` (`Level`, `StatusMessage`).
+  Update `contrib/openai` and `contrib/googlegenai` together with this release:
+  older adapters record their fixed failure categories (`http 429`, ...)
+  through `RecordError`, which now exports `"error"` when capture is disabled.
 
 ## [0.10.0] - 2026-08-21
 

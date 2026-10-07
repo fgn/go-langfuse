@@ -423,9 +423,13 @@ func acceptedExplicitAttributes(explicit map[string]struct{}, attributes []attri
 
 // RecordError records an exception and marks the observation as failed. It
 // does not end the observation. At most eight exception events are retained;
-// later calls are omitted with one diagnostic. The error text is explicitly
-// supplied content and is not processed by Config.Mask. Invalid UTF-8 or text
-// over 64 KiB is replaced by the payload-free string "error".
+// later calls are omitted with one diagnostic. Error text is content: it is
+// exported only when content capture is enabled for the observation, and then
+// passes through Config.Mask as [MaskErrorMessage]. Otherwise, and when the
+// text is invalid UTF-8, over 64 KiB, or masked to anything but a string, the
+// status and exception message are the payload-free string "error". The
+// exception type is always recorded. For a payload-free failure category,
+// set Level and StatusMessage through [Observation.Update] instead.
 func (o *Observation) RecordError(err error) {
 	if o == nil || err == nil || o.client == nil || o.span == nil {
 		return
@@ -460,7 +464,7 @@ func (o *Observation) RecordError(err error) {
 	o.errorEvents++
 	o.mu.Unlock()
 
-	message := safeErrorMessage(err)
+	message := o.errorMessage(err)
 	if o.client.stopped.Load() {
 		o.client.reportStoppedOnce()
 		return
@@ -502,19 +506,47 @@ func errorType(err error) string {
 	return typeOf.PkgPath() + "." + typeOf.Name()
 }
 
-func safeErrorMessage(err error) (message string) {
+func (o *Observation) errorMessage(err error) string {
+	if !o.contentCapture {
+		return "error"
+	}
+	message, ok := errorText(err)
+	if !ok || o.client.mask == nil {
+		return message
+	}
+	masked, ok := maskErrorMessage(o.client.mask, message)
+	if !ok || !utf8.ValidString(masked) || len(masked) > lfattr.MaxErrorMessageBytes {
+		return "error"
+	}
+	return masked
+}
+
+func maskErrorMessage(mask func(string, any) any, message string) (masked string, ok bool) {
+	defer func() {
+		if recover() != nil {
+			diagnostic.Report("masker panicked; error message replaced")
+			masked, ok = "", false
+		}
+	}()
+	masked, ok = mask(string(MaskErrorMessage), message).(string)
+	return masked, ok
+}
+
+// errorText reports whether err's text is usable; otherwise it returns the
+// payload-free "error". A literal "error" text is usable, so it is still masked.
+func errorText(err error) (message string, ok bool) {
 	defer func() {
 		if recover() != nil {
 			diagnostic.Report("error string method panicked; generic error recorded")
-			message = "error"
+			message, ok = "error", false
 		}
 	}()
 	message = err.Error()
 	if !utf8.ValidString(message) || len(message) > lfattr.MaxErrorMessageBytes {
 		diagnostic.Report("error string is invalid or exceeds the internal size limit; generic error recorded")
-		return "error"
+		return "error", false
 	}
-	return message
+	return message, true
 }
 
 func normalizeObservationStrings(values ObservationAttributes) ObservationAttributes {

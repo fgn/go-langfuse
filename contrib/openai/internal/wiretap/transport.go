@@ -196,9 +196,6 @@ func (t *Transport) finalizeTransportError(ctx context.Context, obs *langfuse.Ob
 		level = langfuse.LevelWarning
 	}
 	obs.Update(langfuse.ObservationAttributes{Level: level, StatusMessage: status})
-	if level == langfuse.LevelError {
-		obs.RecordError(errors.New(status))
-	}
 	safeEndAt(obs, time.Now())
 }
 
@@ -298,9 +295,6 @@ func (t *Transport) newFinalizer(
 			update.StatusMessage = "telemetry_partial"
 		}
 		obs.Update(update)
-		if update.Level == langfuse.LevelError {
-			obs.RecordError(errors.New(update.StatusMessage))
-		}
 	}
 }
 

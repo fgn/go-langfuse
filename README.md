@@ -245,7 +245,7 @@ The [prompts example](examples/prompts/main.go) runs this flow end to end.
 ## Content capture
 
 `Config.DisableContentCapture` is the client default for SDK-supplied
-observation input and output. `WithContentCapture` overrides that default on
+observation input and output, and for `RecordError` text. `WithContentCapture` overrides that default on
 one client-scoped context tree. Resolve the application policy before the
 first observation and pass the returned context to all child work:
 
@@ -269,9 +269,9 @@ observation.End()
 Absence of an override retains the client default. A child context inherits the
 override, but a context from another client does not. Each observation stores
 the effective decision when it starts, so later `Update` calls use the same
-policy. The switch controls only `ObservationAttributes.Input` and `Output`;
-audit metadata, status and error text, score comments and values, and resource
-attributes separately. It does not sanitize third-party OpenTelemetry spans.
+policy. The switch controls only `ObservationAttributes.Input` and `Output` and
+`RecordError` text; audit metadata, status messages, score comments and values,
+and resource attributes separately. It does not sanitize third-party OpenTelemetry spans.
 Use the default isolated tracer provider when Langfuse observations must not
 also reach another telemetry backend.
 
@@ -409,10 +409,11 @@ in the [OpenAI adapter README](contrib/openai/README.md) and the
 
 The SDK never inspects function arguments, HTTP bodies, or model clients;
 it exports only fields explicitly supplied by the caller.
-`LANGFUSE_CONTENT_CAPTURE_ENABLED=false` drops SDK-supplied input and output.
-`Config.Mask` receives a `MaskField` and transforms input, output, and metadata
-before export. Identifiers, model data, status messages, error text, and
-third-party spans sit outside both controls; the exact boundary and a masker
+`LANGFUSE_CONTENT_CAPTURE_ENABLED=false` drops SDK-supplied input and output,
+and replaces `RecordError` text with `"error"`. `Config.Mask` receives a
+`MaskField` and transforms input, output, error text, and metadata before
+export. Identifiers, model data, status messages, and third-party spans sit
+outside both controls; the exact boundary and a masker
 example are in the [privacy guide](docs/privacy.md).
 
 ## Documentation
