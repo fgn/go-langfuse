@@ -210,6 +210,8 @@ const LevelError Level = "ERROR"
 
 const LevelWarning Level = "WARNING"
 
+const MaskErrorMessage MaskField = "error message"
+
 const MaskObservationInput MaskField = "observation input"
 
 const MaskObservationMetadata MaskField = "observation metadata"

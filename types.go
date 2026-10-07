@@ -15,6 +15,7 @@ const (
 	MaskTraceMetadata       MaskField = "trace metadata"
 	MaskObservationMetadata MaskField = "observation metadata"
 	MaskScoreMetadata       MaskField = "score metadata"
+	MaskErrorMessage        MaskField = "error message"
 )
 
 // Config configures a Langfuse client.
@@ -83,21 +84,23 @@ type Config struct {
 	Disabled bool
 
 	// DisableContentCapture removes Input and Output supplied through
-	// ObservationAttributes by default. [Client.WithContentCapture] can override
-	// this setting for observations started on one client-scoped context path.
+	// ObservationAttributes, and [Observation.RecordError] text, by default.
+	// [Client.WithContentCapture] can override this setting for observations
+	// started on one client-scoped context path.
 	// It does not remove content emitted by third-party OpenTelemetry
 	// instrumentation. Identifiers, metadata, model data, and usage are still
 	// recorded.
 	DisableContentCapture bool
 
-	// Mask applies only to observation Input and Output, and to trace,
-	// observation, and score Metadata supplied through this Client. It receives
-	// the field and its complete typed value before serialization. Each metadata
-	// map must remain a map[string]any to be retained. It does not process
-	// identifiers, model fields, StatusMessage, [Observation.RecordError] text,
-	// or third-party spans and events. Calls are synchronous and can occur
+	// Mask applies only to observation Input and Output, [Observation.RecordError]
+	// text, and trace, observation, and score Metadata supplied through this
+	// Client. It receives the field and its complete typed value before
+	// serialization. Each metadata map must remain a map[string]any and error
+	// text a string to be retained. It does not process identifiers, model
+	// fields, StatusMessage, or third-party spans and events. Calls are synchronous and can occur
 	// concurrently, so the function must be fast, non-blocking, and
-	// concurrency-safe. A panic is recovered and the affected value is omitted.
+	// concurrency-safe. A panic is recovered and the affected value is omitted;
+	// for error text the payload-free "error" is recorded instead.
 	Mask func(field MaskField, value any) any
 
 	envErr error

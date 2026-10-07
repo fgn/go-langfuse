@@ -211,7 +211,7 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		client.reserved = true
 		client.provider = cfg.TracerProvider
 		if cfg.DisableContentCapture {
-			diagnostic.Report("content capture is disabled only for SDK-supplied input and output; third-party OpenTelemetry content is unchanged")
+			diagnostic.Report("content capture is disabled only for SDK-supplied input, output, and error text; third-party OpenTelemetry content is unchanged")
 		}
 		if cfg.SampleRate != nil {
 			diagnostic.Report("sample rate is ignored on a borrowed tracer provider; the application's sampler remains authoritative")

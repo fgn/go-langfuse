@@ -7,8 +7,8 @@ metadata, model parameters, status messages, and errors can also contain
 sensitive data.
 
 Set `LANGFUSE_CONTENT_CAPTURE_ENABLED=false`, or configure
-`DisableContentCapture`, to drop SDK-supplied `Input` and `Output` while still
-recording every other field. `Client.WithContentCapture` can override that
+`DisableContentCapture`, to drop SDK-supplied `Input` and `Output` and replace
+`RecordError` text with `"error"` while still recording every other field. `Client.WithContentCapture` can override that
 default for observations started on one client-scoped local context tree. Each
 observation retains the decision made at start for all later `Update` calls.
 The privacy boundary is deliberately narrow:
@@ -19,7 +19,8 @@ The privacy boundary is deliberately narrow:
 | `ObservationAttributes.Metadata` | No | Yes, once as the complete `map[string]any` |
 | `TraceAttributes.Metadata` | No | Yes, once as the complete `map[string]any` |
 | Observation name/type, trace name, user/session IDs, tags, version, level, `StatusMessage`, model/parameters, usage, costs, prompt, and completion time | No | No |
-| `RecordError(err)` text and exception event | No | No |
+| `RecordError(err)` text (status and exception-event message) | Yes, replaced by `"error"` | Yes, as `MaskErrorMessage`, unless content capture is disabled |
+| `RecordError(err)` exception type | No | No |
 | `Score` metadata | No | Yes, once as the complete `map[string]any` |
 | `Score` comment and value | No | No |
 | OpenTelemetry resource attributes (`resource.Default`/`OTEL_RESOURCE_ATTRIBUTES` in isolated mode; caller resource in borrowed mode) | No | No |
@@ -40,12 +41,16 @@ fixed protocol members only; metadata key suffixes and unknown member names
 are user- or wire-controlled and appear in diagnostics as counts, never as
 text.
 
-Disabling content capture does not make metadata, model parameters, status
-messages, or errors safe. `RecordError` exports `err.Error()` as the OTel
-status description, Langfuse status message, and exception-event message. Use
-payload-free error values or sanitize an error before passing it to
-`RecordError`; never put credentials, PHI, prompts, or completions in an error
-or `StatusMessage`.
+Disabling content capture does not make metadata, model parameters, or status
+messages safe. Error text is content: provider and application errors often
+echo request or response text. With content capture disabled, `RecordError`
+never calls `err.Error()`; the OTel status description, Langfuse status
+message, and exception-event message are the payload-free `"error"`, and only
+the Go error type is exported. With capture enabled, the text passes through
+`Mask` as `MaskErrorMessage`; a masker that returns anything but a string, or
+panics, yields `"error"`. To record a known payload-free failure category in
+any mode, set `Level` and `StatusMessage` through `Update`. Never put
+credentials, PHI, prompts, or completions in a `StatusMessage`.
 
 `WithContentCapture` is local process state, not an authorization system or a
 cross-process propagation mechanism. Call it only after the application has
@@ -67,6 +72,8 @@ func redactSDKValue(field langfuse.MaskField, value any) any {
 	switch field {
 	case langfuse.MaskObservationInput, langfuse.MaskObservationOutput:
 		return "[redacted]"
+	case langfuse.MaskErrorMessage:
+		return "[redacted error]"
 	case langfuse.MaskTraceMetadata, langfuse.MaskObservationMetadata, langfuse.MaskScoreMetadata:
 		return redactMetadata(value)
 	default:

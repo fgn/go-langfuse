@@ -13,7 +13,7 @@
 | `LANGFUSE_RELEASE` | Application release stamped on observations |
 | `LANGFUSE_SAMPLE_RATE` | Fraction of traces exported in isolated mode, `[0, 1]`; unset keeps everything |
 | `LANGFUSE_TRACING_ENABLED` | Set to `false` for a complete no-op client |
-| `LANGFUSE_CONTENT_CAPTURE_ENABLED` | Set to `false` to drop SDK input/output |
+| `LANGFUSE_CONTENT_CAPTURE_ENABLED` | Set to `false` to drop SDK input/output and replace `RecordError` text with `"error"` |
 
 Export buffering is tuned only through `Config`; it has no environment
 variables:
@@ -200,8 +200,9 @@ provider):
   order, at most 64 unique values and 16 KiB per trace context.
 - Each JSON-serialized input, output, metadata value, model-parameter map, or
   cost map: 1 MiB. Direct text (names, model names, versions, prompts, status
-  messages): 16 KiB. `RecordError` replaces invalid UTF-8 or text over 64 KiB
-  with `"error"`.
+  messages): 16 KiB. `RecordError` exports `"error"` when content capture is
+  disabled, and replaces invalid UTF-8, text over 64 KiB, or a non-string
+  `MaskErrorMessage` result with `"error"`.
 - Observation payload attributes: 2 MiB in aggregate; lower-priority fields
   over the budget are omitted with a payload-free diagnostic. One OTLP request
   is capped at 4 MiB, with automatic splitting described under

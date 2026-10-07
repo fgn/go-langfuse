@@ -159,9 +159,9 @@ func (c *Client) WithSampleRate(ctx context.Context, fraction float64) context.C
 // this context path. The decision is client-scoped, inherited by child
 // contexts, and fixed on each observation when it starts so later
 // [Observation.Update] calls use the same policy. It controls only
-// [ObservationAttributes.Input] and [ObservationAttributes.Output]; metadata,
-// errors, scores, and third-party OpenTelemetry data keep their documented
-// policies.
+// [ObservationAttributes.Input], [ObservationAttributes.Output], and
+// [Observation.RecordError] text; metadata, status messages, scores, and
+// third-party OpenTelemetry data keep their documented policies.
 func (c *Client) WithContentCapture(ctx context.Context, enabled bool) context.Context {
 	if c == nil || c.isDisabled() || ctx == nil {
 		return ctx

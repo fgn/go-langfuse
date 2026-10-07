@@ -7,6 +7,10 @@ follows Semantic Versioning independently of the core module.
 
 - Update `google.golang.org/grpc` to v1.83.1 for GO-2026-6348 (heap exhaustion
   through fragmented HTTP/2 DATA frames).
+- Record HTTP and protocol failures through `Level` and `StatusMessage` only,
+  so the fixed failure category survives a core client with content capture
+  disabled. Failed calls no longer record an exception event; the failure
+  stays in the level, the status message, and the OTel span status.
 
 ## [0.1.1] - 2026-08-15
 
