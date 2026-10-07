@@ -29,6 +29,11 @@ type Observation struct {
 	// zero when the span started at the current time. It is written once
 	// before the handle is shared and is read without the lock.
 	startTime time.Time
+	// decision and claim are the trace decision and application-root claim
+	// this observation's own context carries, so a child started through
+	// [Client.WithParent] inherits them even after this observation ends.
+	decision traceDecision
+	claim    traceClaim
 	// contentCapture is the immutable policy resolved from the starting
 	// context. Updates do not accept a context, so retaining the decision here
 	// prevents the observation's payload policy from changing over its lifetime.
@@ -99,9 +104,16 @@ func (c *Client) StartObservation(
 	// re-enter Shutdown, so admission is decided by the component being torn
 	// down.
 	token := &observationAdmission{}
-	parentSpanContext := oteltrace.SpanFromContext(ctx).SpanContext()
+	startCtx := ctx
+	if parent := c.parentOverride(ctx); parent != nil {
+		startCtx = oteltrace.ContextWithSpan(ctx, parent.span)
+		startCtx = context.WithValue(startCtx, traceDecisionContextKey{client: c}, c.overrideDecision(ctx, parent))
+		startCtx = context.WithValue(startCtx, traceClaimContextKey{client: c}, parent.claim)
+		startCtx = context.WithValue(startCtx, parentContextKey{client: c}, (*Observation)(nil))
+	}
+	parentSpanContext := oteltrace.SpanFromContext(startCtx).SpanContext()
 	spanCtx, span := c.tracer.Start(
-		context.WithValue(ctx, admissionTokenContextKey{client: c}, token), name, options...,
+		context.WithValue(startCtx, admissionTokenContextKey{client: c}, token), name, options...,
 	)
 	if span.IsRecording() {
 		if !token.admitted.Load() || c.stopped.Load() {
@@ -134,17 +146,38 @@ func (c *Client) StartObservation(
 		attributeSizes: attributeSizes,
 		attributeBytes: attributeBytes,
 	}
+	observation.decision = c.nextTraceDecision(startCtx, parentSpanContext, span.SpanContext())
 	spanCtx = context.WithValue(spanCtx, observationContextKey{client: c}, observation)
-	spanCtx = context.WithValue(spanCtx, traceDecisionContextKey{client: c},
-		c.nextTraceDecision(ctx, parentSpanContext, span.SpanContext()))
+	spanCtx = context.WithValue(spanCtx, traceDecisionContextKey{client: c}, observation.decision)
 	if span.IsRecording() && span.SpanContext().IsSampled() && token.expected.Load() {
 		spanCtx = c.withTraceClaim(spanCtx, span.SpanContext().TraceID())
 	}
+	observation.claim = c.traceClaimState(spanCtx)
 	// On a propagation-marked path the returned context's baggage is
 	// rebuilt so a new sampled root replaces the outbound trace claim and a
 	// sampled-out root stops exporting one that no longer matches.
 	spanCtx = c.syncBaggage(spanCtx, false, false)
 	return spanCtx, observation
+}
+
+// overrideDecision inherits parent's sampling result for a WithParent start.
+// It never restores score-suppression authority that ctx's own path already
+// lost in parent's trace: a non-authoritative decision for that trace, or an
+// ambient span in that trace that is not the path's last SDK span, is a
+// foreign hop. An ambient span in another trace does not downgrade.
+func (c *Client) overrideDecision(ctx context.Context, parent *Observation) traceDecision {
+	decision := parent.decision
+	previous, known := ctx.Value(traceDecisionContextKey{client: c}).(traceDecision)
+	known = known && previous.traceID == decision.traceID
+	if known && !previous.authoritative {
+		decision.authoritative = false
+	}
+	ambient := oteltrace.SpanFromContext(ctx).SpanContext()
+	if ambient.IsValid() && ambient.TraceID() == decision.traceID &&
+		(!known || previous.lastSDKSpanID != ambient.SpanID()) {
+		decision.authoritative = false
+	}
+	return decision
 }
 
 // nextTraceDecision derives the trace decision the started span publishes on

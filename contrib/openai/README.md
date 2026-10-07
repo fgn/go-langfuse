@@ -35,7 +35,18 @@ cfg.HTTPClient = httpClient
 
 Every recognized call now records a generation or embedding
 observation, parented by whatever observation is in the request
-context. Without the adapter, each of these fields is code you write
+context. When the request context's active span belongs to another
+backend, `lf.WithParent(ctx, parent)` (added in the next core minor release) nests
+the call under a Langfuse observation from another context path.
+Instrumentation outside the Langfuse transport starts from the incoming
+request context. Instrumentation inside it, in the base transport,
+receives the request context when that context holds a valid span
+(local or remote, recording or not) whose reported tracer provider
+differs from the generation's, as with an isolated Langfuse provider
+next to the application's; it then stays on the application trace.
+Otherwise it receives the generation's context and parents under the
+generation. Langfuse observations started inside a preserved request
+context follow that context's own parent selection. Without the adapter, each of these fields is code you write
 and maintain by hand for every provider call site:
 
 | Field | Source |
@@ -46,7 +57,7 @@ and maintain by hand for every provider call site:
 | Input / output | request messages and response content, media replaced by placeholders, tool calls as distinct structured calls |
 | Time-to-first-token | first semantic output delta of a stream |
 | Status | wire-provable only: `http <code>`, `incomplete`, `canceled`, `closed_early`, `telemetry_partial` |
-| Metadata | provider, route, API version, finish reason, HTTP status, `azure.deployment` |
+| Metadata | provider, route, API version, finish reason, HTTP status, `azure.deployment`, `response_id` |
 
 Runnable end-to-end examples (working without OpenAI credentials via
 built-in synthetic servers):
@@ -132,7 +143,16 @@ larger than the 512 KiB capture cap is omitted entirely, never
 truncated; individual streaming events are additionally bounded at
 256 KiB, and an oversized event is discarded whole (including any
 usage fields inside it) with a `telemetry_partial` warning while
-framing and terminal detection continue. `WithoutContentExport()` keeps usage and model but drops
+framing and terminal detection continue. The `response_id` metadata is a syntactically
+validated provider identifier, not content: it stays in metadata when the core
+client disables content capture and when the adapter uses
+`WithoutContentExport()`, and `Config.Mask` governs it as observation metadata.
+Request tool definitions are not
+exported unless `WithToolDefinitions()` is set; it adds each function tool's
+name, description, and parameter schema to Input, still under capture and
+Mask. Well-formed tools of other types become `{"type": ..., "omitted": true}`
+placeholders by policy; malformed or oversized definitions and tools beyond the
+first 128 mark the call `telemetry_partial`. `WithoutContentExport()` keeps usage and model but drops
 Input/Output; `WithoutBodyInspection()` prevents body reading
 completely. A disabled core client (`LANGFUSE_TRACING_ENABLED=false`)
 disables inspection, not only export.

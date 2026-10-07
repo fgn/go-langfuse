@@ -16,6 +16,11 @@ Versioning once the first release is tagged.
   Update `contrib/openai` and `contrib/googlegenai` together with this release:
   older adapters record their fixed failure categories (`http 429`, ...)
   through `RecordError`, which now exports `"error"` when capture is disabled.
+- Add `Client.WithParent`, which starts observations on a context as children
+  of an observation from another context path, with its trace, root claim,
+  and (with the SDK-owned provider) sampling decision, without changing the
+  context's active OpenTelemetry span. It lets a contrib transport record a
+  call under a Langfuse parent while another backend's span stays active.
 
 ## [0.10.0] - 2026-08-21
 

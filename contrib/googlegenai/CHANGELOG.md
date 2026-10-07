@@ -11,6 +11,14 @@ follows Semantic Versioning independently of the core module.
   so the fixed failure category survives a core client with content capture
   disabled. Failed calls no longer record an exception event; the failure
   stays in the level, the status message, and the OTel span status.
+- Keep the request context for the base transport when it holds a valid span
+  (local or remote, recording or not) whose reported tracer provider differs
+  from the generation's, as with an isolated Langfuse provider next to the
+  application's: application instrumentation inside the transport stays on
+  the application trace instead of joining the Langfuse generation. This
+  changes behavior for remote-only parents and for span wrappers that report
+  their own provider, even with a borrowed provider. Spanless requests and
+  spans reporting the generation's provider keep the generation's context.
 
 ## [0.1.1] - 2026-08-15
 

@@ -26,6 +26,7 @@ const maxScanDepth = 64
 // object fields are capped on raw JSON bytes of the value. The raw
 // retention buffer allows escape expansion for string fields.
 var scanFieldCaps = map[string]int{
+	"id":                 128,
 	"type":               64,
 	"status":             64,
 	"model":              256,
@@ -37,7 +38,7 @@ var scanFieldCaps = map[string]int{
 // scanFieldIsString marks fields whose cap applies to the decoded
 // string value rather than raw object bytes.
 var scanFieldIsString = map[string]bool{
-	"type": true, "status": true, "model": true,
+	"id": true, "type": true, "status": true, "model": true,
 }
 
 // rawCapFor is the raw retention bound: string fields may expand every

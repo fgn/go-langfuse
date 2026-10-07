@@ -13,6 +13,7 @@ import (
 
 	"github.com/fgn/go-langfuse"
 	"github.com/fgn/go-langfuse/internal/diagnostic"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 // maxSSEEvent bounds one buffered SSE event; larger events abandon
@@ -94,8 +95,9 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// The clone carries the observation context so downstream spans
 	// (auth transports, inner otelhttp) parent under the generation,
 	// and, on the unsampled path, inherit the dropped trace rather
-	// than making a fresh sampling decision.
-	clone := req.Clone(obsCtx)
+	// than making a fresh sampling decision, unless the request carries
+	// a span from another tracer provider (see exchangeContext).
+	clone := req.Clone(exchangeContext(req.Context(), obsCtx))
 
 	// Sampled-out attempts skip all capture (no recorder, no parser,
 	// no masker) but keep honest lifetimes: the observation ends when
@@ -399,4 +401,22 @@ func safeResult(parser Call) (result Result) {
 // error handler, matching the core SDK's diagnostic channel.
 func diagnose(message string) {
 	diagnostic.Report("contrib: " + message)
+}
+
+// exchangeContext keeps the request context for the base transport when it
+// carries a valid span (local or remote, recording or not) whose reported
+// tracer provider differs from the generation's, as with an isolated
+// Langfuse provider next to the application's: inner application
+// instrumentation then keeps its own parent and sampling instead of joining
+// a Langfuse trace its backend never receives. A wrapper that reports its
+// own provider counts as different, so its parent is kept too. Otherwise
+// the generation's context is used. The generation always reports the
+// SDK's comparable provider pointer, so the comparison cannot panic.
+func exchangeContext(requestCtx, observationCtx context.Context) context.Context {
+	ambient := oteltrace.SpanFromContext(requestCtx)
+	if ambient.SpanContext().IsValid() &&
+		ambient.TracerProvider() != oteltrace.SpanFromContext(observationCtx).TracerProvider() {
+		return requestCtx
+	}
+	return observationCtx
 }

@@ -293,6 +293,8 @@ func (c *Client) WithBaggagePropagation(ctx context.Context) context.Context
 
 func (c *Client) WithContentCapture(ctx context.Context, enabled bool) context.Context
 
+func (c *Client) WithParent(ctx context.Context, parent *Observation) context.Context
+
 func (c *Client) WithSampleRate(ctx context.Context, fraction float64) context.Context
 
 func (c *Client) WithTraceAttributes(ctx context.Context, values TraceAttributes) context.Context
