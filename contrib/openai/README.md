@@ -36,7 +36,7 @@ cfg.HTTPClient = httpClient
 Every recognized call now records a generation or embedding
 observation, parented by whatever observation is in the request
 context. When the request context's active span belongs to another
-backend, `lf.WithParent(ctx, parent)` (added in the next core minor release) nests
+backend, `lf.WithParent(ctx, parent)` (core v0.11.0 or later) nests
 the call under a Langfuse observation from another context path.
 Instrumentation outside the Langfuse transport starts from the incoming
 request context. Instrumentation inside it, in the base transport,
