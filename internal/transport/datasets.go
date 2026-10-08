@@ -10,8 +10,11 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -140,16 +143,12 @@ func (d *DatasetsClient) attempt(ctx context.Context, call datasetCall) (
 		if cause := ctx.Err(); cause != nil {
 			return nil, false, 0, canceledError(call, cause, call.write)
 		}
-		var urlErr *url.Error
-		if errors.As(err, &urlErr) {
-			err = urlErr.Err // the URL can carry caller-supplied names
-		}
 		var dial *net.OpError
 		sent := !errors.As(err, &dial) || dial.Op != "dial"
 		return nil, !call.write, 0, &DatasetError{
 			Message:        "the " + call.op + " request failed",
 			OutcomeUnknown: call.write && sent,
-			Cause:          err,
+			Cause:          safeCause(err),
 		}
 	}
 	defer func() { _ = response.Body.Close() }()
@@ -181,6 +180,22 @@ func (d *DatasetsClient) attempt(ctx context.Context, call datasetCall) (
 		}
 	}
 	return body, false, 0, nil
+}
+
+// safeCause keeps the part of a request error whose text cannot carry the
+// URL or response bytes: a network operation error, or a timeout. Parse
+// errors for a malformed response quote the offending bytes, so they and
+// anything else are dropped.
+func safeCause(err error) error {
+	var operation *net.OpError
+	if errors.As(err, &operation) {
+		return operation
+	}
+	var timeout interface{ Timeout() bool }
+	if errors.As(err, &timeout) && timeout.Timeout() {
+		return os.ErrDeadlineExceeded
+	}
+	return nil
 }
 
 // writeRejectedBeforeCommit reports statuses Langfuse returns for a write
@@ -259,9 +274,22 @@ func nonNull(raw json.RawMessage) json.RawMessage {
 //nolint:tagliatelle // Langfuse wire keys are camelCase.
 type DatasetItemPage struct {
 	Items []DatasetItem `json:"data"`
-	Meta  *struct {
-		TotalPages int `json:"totalPages"`
-	} `json:"meta"`
+	Meta  *PageMeta     `json:"meta"`
+}
+
+// PageMeta is the pagination metadata of a page response.
+//
+//nolint:tagliatelle // Langfuse wire keys are camelCase.
+type PageMeta struct {
+	TotalPages int `json:"totalPages"`
+}
+
+// Pages returns the reported page count, or 0 without metadata.
+func (meta *PageMeta) Pages() int {
+	if meta == nil {
+		return 0
+	}
+	return meta.TotalPages
 }
 
 // DatasetItemListQuery selects one page of dataset items. Version is a
@@ -366,6 +394,250 @@ func (d *DatasetsClient) ListItems(ctx context.Context, query DatasetItemListQue
 		}
 		for index := range page.Items {
 			if !page.Items[index].valid() {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// DatasetPage is one decoded page of datasets.
+//
+//nolint:tagliatelle // Langfuse wire keys are camelCase.
+type DatasetPage struct {
+	Datasets []Dataset `json:"data"`
+	Meta     *PageMeta `json:"meta"`
+}
+
+// ListDatasets reads one page of datasets.
+func (d *DatasetsClient) ListDatasets(ctx context.Context, page, limit int) (DatasetPage, error) {
+	values := url.Values{}
+	values.Set("page", strconv.Itoa(page))
+	values.Set("limit", strconv.Itoa(limit))
+	call := datasetCall{
+		op: "dataset list", method: http.MethodGet,
+		url: d.base + "/v2/datasets?" + values.Encode(), limit: datasetPageResponseLimit,
+	}
+	return send(ctx, d, call, func(page *DatasetPage) bool {
+		if page.Datasets == nil || page.Meta == nil {
+			return false
+		}
+		for index := range page.Datasets {
+			if !page.Datasets[index].valid() {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// DatasetRunItem is one decoded dataset run item link.
+//
+//nolint:tagliatelle // Langfuse wire keys are camelCase.
+type DatasetRunItem struct {
+	DatasetRunID   string `json:"datasetRunId"`
+	DatasetRunName string `json:"datasetRunName"`
+	DatasetItemID  string `json:"datasetItemId"`
+	TraceID        string `json:"traceId"`
+	ObservationID  string `json:"observationId"`
+}
+
+// CreateRunItem posts one serialized dataset run item body and returns the
+// dataset run the item was linked to. The response must echo the request's
+// run, item, trace, and observation and carry a usable run ID; anything else
+// is an invalid response to a write that may have been applied.
+func (d *DatasetsClient) CreateRunItem(ctx context.Context, body []byte, want DatasetRunItem) (DatasetRunItem, error) {
+	call := datasetCall{
+		op: "dataset run item create", method: http.MethodPost, url: d.base + "/dataset-run-items",
+		body: body, write: true, limit: datasetResponseLimit,
+	}
+	return send(ctx, d, call, func(item *DatasetRunItem) bool {
+		return validIdentifier(item.DatasetRunID) && item.DatasetRunName == want.DatasetRunName &&
+			item.DatasetItemID == want.DatasetItemID && item.TraceID == want.TraceID &&
+			item.ObservationID == want.ObservationID
+	})
+}
+
+// validIdentifier is the SDK's rule for experiment identifiers: 1 to 255
+// bytes of valid UTF-8 without control characters.
+func validIdentifier(value string) bool {
+	return value != "" && len(value) <= 255 && utf8.ValidString(value) &&
+		!strings.ContainsFunc(value, unicode.IsControl)
+}
+
+// ScoreRecord is one decoded score of an experiment read, in the v3 score
+// shape.
+//
+//nolint:tagliatelle // Langfuse wire keys are camelCase.
+type ScoreRecord struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	DataType    string          `json:"dataType"`
+	Value       json.RawMessage `json:"value"`
+	Comment     string          `json:"comment"`
+	ConfigID    string          `json:"configId"`
+	Metadata    json.RawMessage `json:"metadata"`
+	Environment string          `json:"environment"`
+	Timestamp   time.Time       `json:"timestamp"`
+	Subject     *struct {
+		Kind    string `json:"kind"`
+		ID      string `json:"id"`
+		TraceID string `json:"traceId"`
+	} `json:"subject"`
+}
+
+// valid checks the v3 score union: the value's JSON type must match the data
+// type, and a subject must name its target.
+func (score *ScoreRecord) valid() bool {
+	score.Metadata = nonNull(score.Metadata)
+	if score.ID == "" || score.Name == "" {
+		return false
+	}
+	value := bytes.TrimSpace(score.Value)
+	if len(value) == 0 || string(value) == "null" {
+		return false
+	}
+	switch score.DataType {
+	case "NUMERIC":
+		var number float64
+		if value[0] == '"' || json.Unmarshal(value, &number) != nil {
+			return false
+		}
+	case "BOOLEAN":
+		if string(value) != "true" && string(value) != "false" {
+			return false
+		}
+	case "CATEGORICAL", "TEXT", "CORRECTION":
+		var text string
+		if json.Unmarshal(value, &text) != nil {
+			return false
+		}
+	default:
+		return false
+	}
+	if subject := score.Subject; subject != nil {
+		switch subject.Kind {
+		case "trace", "observation", "session", "experiment":
+		default:
+			return false
+		}
+		if subject.ID == "" || subject.Kind != "observation" && subject.TraceID != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// ExperimentRecord is one decoded experiment.
+//
+//nolint:tagliatelle // Langfuse wire keys are camelCase.
+type ExperimentRecord struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	StartTime   time.Time       `json:"startTime"`
+	EndTime     time.Time       `json:"endTime"`
+	ItemCount   int             `json:"itemCount"`
+	DatasetID   string          `json:"datasetId"`
+	Metadata    json.RawMessage `json:"metadata"`
+	Scores      []ScoreRecord   `json:"scores"`
+}
+
+func (experiment *ExperimentRecord) valid() bool {
+	experiment.Metadata = nonNull(experiment.Metadata)
+	return experiment.ID != "" && experiment.Name != "" && !experiment.StartTime.IsZero() && experiment.ItemCount >= 0 &&
+		validScores(experiment.Scores)
+}
+
+// ExperimentItemRecord is one decoded experiment item.
+//
+//nolint:tagliatelle // Langfuse wire keys are camelCase.
+type ExperimentItemRecord struct {
+	ID                    string          `json:"id"`
+	TraceID               string          `json:"traceId"`
+	StartTime             time.Time       `json:"startTime"`
+	EndTime               *time.Time      `json:"endTime"`
+	Level                 string          `json:"level"`
+	Environment           string          `json:"environment"`
+	ExperimentID          string          `json:"experimentId"`
+	ExperimentName        string          `json:"experimentName"`
+	ExperimentItemID      string          `json:"experimentItemId"`
+	ExperimentDatasetID   string          `json:"experimentDatasetId"`
+	ExperimentItemVersion *time.Time      `json:"experimentItemVersion"`
+	Input                 json.RawMessage `json:"input"`
+	Output                json.RawMessage `json:"output"`
+	ExpectedOutput        json.RawMessage `json:"expectedOutput"`
+	Metadata              json.RawMessage `json:"metadata"`
+	ItemMetadata          json.RawMessage `json:"experimentItemMetadata"`
+	ExperimentMetadata    json.RawMessage `json:"experimentMetadata"`
+	ExperimentDescription string          `json:"experimentDescription"`
+	Scores                []ScoreRecord   `json:"scores"`
+}
+
+func (item *ExperimentItemRecord) valid() bool {
+	for _, field := range []*json.RawMessage{
+		&item.Input, &item.Output, &item.ExpectedOutput, &item.Metadata, &item.ItemMetadata, &item.ExperimentMetadata,
+	} {
+		*field = nonNull(*field)
+	}
+	return item.ID != "" && item.TraceID != "" && item.ExperimentID != "" && item.ExperimentItemID != "" &&
+		!item.StartTime.IsZero() && validScores(item.Scores)
+}
+
+func validScores(scores []ScoreRecord) bool {
+	for index := range scores {
+		if !scores[index].valid() {
+			return false
+		}
+	}
+	return true
+}
+
+// CursorPage is one decoded cursor-paginated page.
+type CursorPage[T any] struct {
+	Data []T         `json:"data"`
+	Meta *CursorMeta `json:"meta"`
+}
+
+// CursorMeta is the pagination metadata of a cursor page.
+type CursorMeta struct {
+	Cursor string `json:"cursor"`
+}
+
+// Next returns the cursor of the next page, or "" after the last page.
+func (meta *CursorMeta) Next() string {
+	if meta == nil {
+		return ""
+	}
+	return meta.Cursor
+}
+
+// ListExperiments reads one page of experiments.
+func (d *DatasetsClient) ListExperiments(ctx context.Context, query url.Values) (CursorPage[ExperimentRecord], error) {
+	return listCursorPage(ctx, d, "experiment list", "/experiments", query,
+		func(record *ExperimentRecord) bool { return record.valid() })
+}
+
+// ListExperimentItems reads one page of experiment items.
+func (d *DatasetsClient) ListExperimentItems(
+	ctx context.Context, query url.Values,
+) (CursorPage[ExperimentItemRecord], error) {
+	return listCursorPage(ctx, d, "experiment item list", "/experiment-items", query,
+		func(record *ExperimentItemRecord) bool { return record.valid() })
+}
+
+func listCursorPage[T any](
+	ctx context.Context, d *DatasetsClient, op, path string, query url.Values, valid func(*T) bool,
+) (CursorPage[T], error) {
+	call := datasetCall{
+		op: op, method: http.MethodGet, url: d.base + path + "?" + query.Encode(), limit: datasetPageResponseLimit,
+	}
+	return send(ctx, d, call, func(page *CursorPage[T]) bool {
+		if page.Data == nil || page.Meta == nil {
+			return false
+		}
+		for index := range page.Data {
+			if !valid(&page.Data[index]) {
 				return false
 			}
 		}

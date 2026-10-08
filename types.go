@@ -102,10 +102,12 @@ type Config struct {
 
 	// Mask redacts content before it leaves the process. It receives each value
 	// exactly as the caller supplied it, including json.RawMessage, and returns
-	// a replacement that is serialized the same way; metadata arrives and must
-	// stay a map[string]any. A nil return omits the value. A panic omits it from
-	// telemetry but fails an experiment start. Dataset writes fail on either,
-	// because an omitted dataset field keeps its stored value. Mask covers
+	// a replacement that is serialized the same way. Trace, observation, and
+	// score metadata arrive and must stay a map[string]any, and experiment
+	// metadata a JSON object; dataset metadata may be any JSON value. A nil
+	// return omits the value. A panic omits it from telemetry but fails an
+	// experiment start. Dataset writes fail on either, because an omitted
+	// dataset field keeps its stored value. Mask covers
 	// observation input and output, all metadata, dataset item content, and
 	// experiment expected output; it never sees identifiers, names,
 	// descriptions, schemas, model fields, StatusMessage,

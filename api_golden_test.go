@@ -282,9 +282,17 @@ const TypeTool ObservationType = "tool"
 
 func (c *Client) DatasetItems(ctx context.Context, query DatasetItemQuery) iter.Seq2[DatasetItem, error]
 
+func (c *Client) Datasets(ctx context.Context, query DatasetQuery) iter.Seq2[Dataset, error]
+
 func (c *Client) DeleteDatasetItem(ctx context.Context, id string) error
 
 func (c *Client) Event(ctx context.Context, name string, values ObservationAttributes)
+
+func (c *Client) ExperimentItems(
+	ctx context.Context, query ExperimentItemQuery,
+) iter.Seq2[StoredExperimentItem, error]
+
+func (c *Client) Experiments(ctx context.Context, query ExperimentQuery) iter.Seq2[StoredExperiment, error]
 
 func (c *Client) Flush(ctx context.Context) error
 
@@ -303,6 +311,8 @@ func (c *Client) Observe(
 ) error
 
 func (c *Client) RecordScore(ctx context.Context, score Score) error
+
+func (c *Client) RunExperiment(ctx context.Context, run ExperimentRun) (ExperimentResult, error)
 
 func (c *Client) Shutdown(ctx context.Context) error
 
@@ -335,7 +345,7 @@ func (c *Client) WithTraceAttributes(ctx context.Context, values TraceAttributes
 
 func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Context
 
-func (i DatasetItem) ExperimentItem() (ExperimentItem, error)
+func (i DatasetItem) ExperimentItem() ExperimentItem
 
 func (o *Observation) End()
 
@@ -358,6 +368,8 @@ func (p Prompt) CompileStrict(vars map[string]any) (Prompt, error)
 func (p Prompt) DecodeConfig(v any) error
 
 func (p Prompt) Ref() *PromptRef
+
+func (r ExperimentResult) Summary(includeItems bool) string
 
 func ConfigFromEnv() Config
 
@@ -432,7 +444,7 @@ type DatasetItemSpec struct {
 	ID string
 	Input any
 	ExpectedOutput any
-	Metadata map[string]any
+	Metadata any
 	SourceTraceID string
 	SourceObservationID string
 	Status DatasetItemStatus
@@ -440,28 +452,104 @@ type DatasetItemSpec struct {
 
 type DatasetItemStatus string
 
+type DatasetQuery struct {
+	PageSize int
+}
+
 type DatasetSpec struct {
 	Name string
 	Description *string
-	Metadata map[string]any
+	Metadata any
 	InputSchema json.RawMessage
 	ExpectedOutputSchema json.RawMessage
+}
+
+type Evaluation struct {
+	Name string
+	NumericValue *float64
+	StringValue *string
+	DataType ScoreDataType
+	ConfigID string
+	Comment string
+	Metadata map[string]any
+}
+
+type Evaluator func(ctx context.Context, input EvaluatorInput) ([]Evaluation, error)
+
+type EvaluatorInput struct {
+	Input any
+	Output any
+	ExpectedOutput any
+	Metadata any
+	Evaluations []Evaluation
 }
 
 type Experiment struct {
 	ID string
 	Name string
 	Description string
-	DatasetID string
 	Metadata map[string]any
 }
 
 type ExperimentItem struct {
 	ID string
+	DatasetID string
 	Version time.Time
+	Input any
 	ExpectedOutput any
-	Metadata map[string]any
+	Metadata any
 }
+
+type ExperimentItemQuery struct {
+	From time.Time
+	To time.Time
+	ExperimentIDs, ExperimentNames, ItemIDs, DatasetIDs []string
+	PageSize int
+}
+
+type ExperimentItemResult struct {
+	Item ExperimentItem
+	Output any
+	Evaluations []Evaluation
+	TraceID string
+	ObservationID string
+	DatasetRunID string
+	Err error
+	EvaluationErr error
+}
+
+type ExperimentQuery struct {
+	From time.Time
+	To time.Time
+	IDs, Names, DatasetIDs []string
+	PageSize int
+}
+
+type ExperimentResult struct {
+	ExperimentID string
+	Name string
+	RunName string
+	Description string
+	DatasetRunID string
+	ItemResults []ExperimentItemResult
+	RunEvaluations []Evaluation
+	RunEvaluationErr error
+}
+
+type ExperimentRun struct {
+	Name string
+	RunName string
+	Description string
+	Metadata map[string]any
+	Items []ExperimentItem
+	Task ExperimentTask
+	Evaluators []Evaluator
+	CompositeEvaluator Evaluator
+	RunEvaluators []RunEvaluator
+	MaxConcurrency int
+}
+
+type ExperimentTask func(ctx context.Context, item ExperimentItem) (output any, err error)
 
 type Level string
 
@@ -533,11 +621,14 @@ type PromptSource string
 
 type PromptType string
 
+type RunEvaluator func(ctx context.Context, results []ExperimentItemResult) ([]Evaluation, error)
+
 type Score struct {
 	ID string
 	Name string
 	TraceID string
 	SessionID string
+	DatasetRunID string
 	ObservationID string
 	NumericValue *float64
 	StringValue *string
@@ -549,6 +640,40 @@ type Score struct {
 }
 
 type ScoreDataType string
+
+type StoredExperiment struct {
+	ID string
+	Name string
+	Description string
+	DatasetID string
+	StartTime time.Time
+	EndTime time.Time
+	ItemCount int
+	Metadata json.RawMessage
+	Scores []Score
+}
+
+type StoredExperimentItem struct {
+	ObservationID string
+	TraceID string
+	StartTime time.Time
+	EndTime time.Time
+	Level Level
+	Environment string
+	ExperimentID string
+	ExperimentName string
+	ExperimentDescription string
+	ItemID string
+	DatasetID string
+	ItemVersion time.Time
+	Input json.RawMessage
+	Output json.RawMessage
+	ExpectedOutput json.RawMessage
+	Metadata json.RawMessage
+	ItemMetadata json.RawMessage
+	ExperimentMetadata json.RawMessage
+	Scores []Score
+}
 
 type TraceAttributes struct {
 	Name string

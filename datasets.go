@@ -1,7 +1,6 @@
 package langfuse
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -42,9 +41,9 @@ type DatasetSpec struct {
 	Name string
 	// Description is not masked; a pointer to "" clears it.
 	Description *string
-	// Metadata is masked as MaskDatasetMetadata. Langfuse cannot clear it,
-	// so an empty map stores {}.
-	Metadata map[string]any
+	// Metadata is any JSON value, masked as MaskDatasetMetadata. Langfuse
+	// cannot clear it, so an empty map stores {}.
+	Metadata any
 	// InputSchema and ExpectedOutputSchema are JSON Schemas for item
 	// content; JSON null removes one. They are not masked.
 	InputSchema          json.RawMessage
@@ -82,12 +81,13 @@ type DatasetItemSpec struct {
 	// item. IDs are unique per project, so an ID already used in another
 	// dataset fails with status 409, as does a concurrent edit of the item.
 	ID string
-	// Input, ExpectedOutput, and Metadata are masked as MaskDatasetItemInput,
+	// Input, ExpectedOutput, and Metadata are any JSON values, masked as
+	// MaskDatasetItemInput,
 	// MaskDatasetItemExpectedOutput, and MaskDatasetItemMetadata, and are
 	// limited to 1 MiB each. json.RawMessage values are sent verbatim.
 	Input               any
 	ExpectedOutput      any
-	Metadata            map[string]any
+	Metadata            any
 	SourceTraceID       string
 	SourceObservationID string
 	// Status is empty (ACTIVE for a new item) or a DatasetItemStatus.
@@ -114,22 +114,21 @@ type DatasetItem struct {
 	Version time.Time
 }
 
-// ExperimentItem returns the item for [Client.StartExperimentItem], pinned
-// to its Version; an item read without AsOf runs unpinned. It fails when the
-// stored metadata is not a JSON object.
-func (i DatasetItem) ExperimentItem() (ExperimentItem, error) {
-	item := ExperimentItem{ID: i.ID, Version: i.Version}
-	if len(i.ExpectedOutput) != 0 {
-		item.ExpectedOutput = i.ExpectedOutput
-	}
-	if len(i.Metadata) != 0 {
-		decoder := json.NewDecoder(bytes.NewReader(i.Metadata))
-		decoder.UseNumber()
-		if err := decoder.Decode(&item.Metadata); err != nil {
-			return ExperimentItem{}, fmt.Errorf("%w: dataset item metadata is not a JSON object", ErrInvalidExperiment)
+// ExperimentItem returns the item for [Client.RunExperiment] and
+// [Client.StartExperimentItem], linked to its dataset and pinned to its
+// Version; an item read without AsOf runs unpinned. Input, ExpectedOutput,
+// and Metadata are the stored json.RawMessage values, or nil.
+func (i DatasetItem) ExperimentItem() ExperimentItem {
+	item := ExperimentItem{ID: i.ID, DatasetID: i.DatasetID, Version: i.Version}
+	for _, field := range []struct {
+		target *any
+		value  json.RawMessage
+	}{{&item.Input, i.Input}, {&item.ExpectedOutput, i.ExpectedOutput}, {&item.Metadata, i.Metadata}} {
+		if len(field.value) != 0 {
+			*field.target = field.value
 		}
 	}
-	return item, nil
+	return item
 }
 
 // DatasetItemQuery selects the items of one dataset for [Client.DatasetItems].
@@ -290,8 +289,8 @@ func (c *Client) datasetFailure(ctx context.Context, notFound, err error) error 
 	return result
 }
 
-// UpsertDataset creates or updates the named dataset. A nil, panicking, or
-// non-map Mask result for Metadata fails before any request. The write is
+// UpsertDataset creates or updates the named dataset. A nil or panicking Mask
+// result for Metadata fails before any request. The write is
 // sent once; a failure after sending wraps [ErrWriteOutcomeUnknown].
 func (c *Client) UpsertDataset(ctx context.Context, spec DatasetSpec) (Dataset, error) {
 	if err := c.datasetReady(ctx, requireDataset("dataset name", spec.Name)); err != nil {
@@ -301,8 +300,8 @@ func (c *Client) UpsertDataset(ctx context.Context, spec DatasetSpec) (Dataset, 
 	if spec.Description != nil {
 		body["description"] = *spec.Description
 	}
-	if spec.Metadata != nil {
-		metadata, err := c.maskedDatasetContent(MaskDatasetMetadata, spec.Metadata, true)
+	if !isNilValue(spec.Metadata) {
+		metadata, err := c.maskedDatasetContent(MaskDatasetMetadata, spec.Metadata)
 		if err != nil {
 			return Dataset{}, err
 		}
@@ -338,8 +337,8 @@ func (c *Client) GetDataset(ctx context.Context, name string) (Dataset, error) {
 
 // UpsertDatasetItem creates or updates one dataset item and returns the
 // stored item; every accepted write adds a version and earlier versions
-// remain. A nil, panicking, non-map metadata, oversized, or unserializable
-// Mask result fails before any request. The write is sent once; a failure
+// remain. A nil, panicking, oversized, or unserializable Mask result fails
+// before any request. The write is sent once; a failure
 // after sending wraps [ErrWriteOutcomeUnknown], and repeating it can add a
 // version or, without an ID, a duplicate item. A missing dataset wraps
 // [ErrDatasetNotFound].
@@ -355,16 +354,15 @@ func (c *Client) UpsertDatasetItem(ctx context.Context, spec DatasetItemSpec) (D
 		name  string
 		mask  MaskField
 		value any
-		isMap bool
 	}{
-		{"input", MaskDatasetItemInput, spec.Input, false},
-		{"expectedOutput", MaskDatasetItemExpectedOutput, spec.ExpectedOutput, false},
-		{"metadata", MaskDatasetItemMetadata, spec.Metadata, true},
+		{"input", MaskDatasetItemInput, spec.Input},
+		{"expectedOutput", MaskDatasetItemExpectedOutput, spec.ExpectedOutput},
+		{"metadata", MaskDatasetItemMetadata, spec.Metadata},
 	} {
 		if isNilValue(field.value) {
 			continue
 		}
-		encoded, err := c.maskedDatasetContent(field.mask, field.value, field.isMap)
+		encoded, err := c.maskedDatasetContent(field.mask, field.value)
 		if err != nil {
 			return DatasetItem{}, err
 		}
@@ -420,48 +418,98 @@ func (c *Client) DeleteDatasetItem(ctx context.Context, id string) error {
 // [ErrDatasetNotFound] for a missing dataset, is yielded once with a zero
 // DatasetItem and ends the loop.
 func (c *Client) DatasetItems(ctx context.Context, query DatasetItemQuery) iter.Seq2[DatasetItem, error] {
-	return func(yield func(DatasetItem, error) bool) {
+	list := transport.DatasetItemListQuery{
+		DatasetName:         query.DatasetName,
+		SourceTraceID:       query.SourceTraceID,
+		SourceObservationID: query.SourceObservationID,
+		Limit:               query.PageSize,
+	}
+	if list.Limit == 0 {
+		list.Limit = defaultDatasetPageSize
+	}
+	if !query.AsOf.IsZero() {
+		list.Version = formatDatasetInstant(query.AsOf)
+	}
+	version := query.AsOf.UTC().Truncate(time.Millisecond)
+	return datasetPages(ctx, c, requireDataset("dataset name", query.DatasetName), ErrDatasetNotFound,
+		func(ctx context.Context, page int) ([]DatasetItem, int, error) {
+			request := list // each traversal may run concurrently
+			request.Page = page
+			wire, err := c.datasetTransport.ListItems(ctx, request)
+			items := make([]DatasetItem, len(wire.Items))
+			for index, item := range wire.Items {
+				items[index] = datasetItemFromWire(item)
+				items[index].Version = version
+			}
+			return items, wire.Meta.Pages(), err
+		})
+}
+
+// DatasetQuery configures [Client.Datasets].
+type DatasetQuery struct {
+	// PageSize is the number of datasets per request; 0 selects 20 and
+	// Langfuse accepts at most 100.
+	PageSize int
+}
+
+// Datasets lazily iterates over the datasets of the project, newest first,
+// with the paging and failure rules of [Client.DatasetItems]; datasets
+// created during the loop can make a page repeat earlier ones.
+func (c *Client) Datasets(ctx context.Context, query DatasetQuery) iter.Seq2[Dataset, error] {
+	pageSize := query.PageSize
+	if pageSize == 0 {
+		pageSize = defaultDatasetPageSize
+	}
+	return datasetPages(ctx, c, nil, nil, func(ctx context.Context, page int) ([]Dataset, int, error) {
+		wire, err := c.datasetTransport.ListDatasets(ctx, page, pageSize)
+		datasets := make([]Dataset, len(wire.Datasets))
+		for index, dataset := range wire.Datasets {
+			datasets[index] = Dataset(dataset)
+		}
+		return datasets, wire.Meta.Pages(), err
+	})
+}
+
+// datasetPages yields the values of fetch page by page until a short listing
+// or the reported page count ends it.
+func datasetPages[T any](
+	ctx context.Context, c *Client, invalid, notFound error,
+	fetch func(ctx context.Context, page int) ([]T, int, error),
+) iter.Seq2[T, error] {
+	return func(yield func(T, error) bool) {
+		var zero T
 		if ctx == nil {
-			yield(DatasetItem{}, errors.New("langfuse: dataset context is nil"))
+			yield(zero, errors.New("langfuse: dataset context is nil"))
 			return
 		}
-		if err := requireDataset("dataset name", query.DatasetName); err != nil {
-			yield(DatasetItem{}, err)
+		if invalid != nil {
+			yield(zero, invalid)
 			return
 		}
-		list := transport.DatasetItemListQuery{
-			DatasetName:         query.DatasetName,
-			SourceTraceID:       query.SourceTraceID,
-			SourceObservationID: query.SourceObservationID,
-			Limit:               query.PageSize,
-		}
-		if list.Limit == 0 {
-			list.Limit = defaultDatasetPageSize
-		}
-		if !query.AsOf.IsZero() {
-			list.Version = formatDatasetInstant(query.AsOf)
-		}
-		for list.Page = 1; ; list.Page++ {
+		for page := 1; ; page++ {
 			if err := c.datasetUnavailable(); err != nil {
-				yield(DatasetItem{}, err)
+				yield(zero, err)
 				return
 			}
-			page, err := runDatasetOperation(ctx, c, ErrDatasetNotFound, func(ctx context.Context) (transport.DatasetItemPage, error) {
-				return c.datasetTransport.ListItems(ctx, list)
+			type pageResult struct {
+				values []T
+				total  int
+			}
+			result, err := runDatasetOperation(ctx, c, notFound, func(ctx context.Context) (pageResult, error) {
+				values, total, err := fetch(ctx, page)
+				return pageResult{values, total}, err
 			})
 			if err != nil {
-				yield(DatasetItem{}, err)
+				yield(zero, err)
 				return
 			}
-			for _, wire := range page.Items {
-				item := datasetItemFromWire(wire)
-				item.Version = query.AsOf.UTC().Truncate(time.Millisecond)
-				if !yield(item, nil) {
+			for _, value := range result.values {
+				if !yield(value, nil) {
 					return
 				}
 			}
 			// An empty page ends a listing whose page count overstates it.
-			if len(page.Items) == 0 || list.Page >= page.Meta.TotalPages {
+			if len(result.values) == 0 || page >= result.total {
 				return
 			}
 		}
@@ -470,7 +518,7 @@ func (c *Client) DatasetItems(ctx context.Context, query DatasetItemQuery) iter.
 
 // maskedDatasetContent fails where observation masking would omit the
 // value, because an omitted field keeps the stored value.
-func (c *Client) maskedDatasetContent(field MaskField, value any, isMap bool) (json.RawMessage, error) {
+func (c *Client) maskedDatasetContent(field MaskField, value any) (json.RawMessage, error) {
 	name := string(field)
 	masked := value
 	if c.mask != nil {
@@ -488,11 +536,6 @@ func (c *Client) maskedDatasetContent(field MaskField, value any, isMap bool) (j
 		}
 		if isNilValue(masked) {
 			return nil, errors.New("langfuse: masker removed " + name + "; omitting it would keep the stored value")
-		}
-	}
-	if isMap {
-		if _, ok := masked.(map[string]any); !ok {
-			return nil, errors.New("langfuse: masker changed " + name + " to an unsupported type")
 		}
 	}
 	if raw, ok := masked.(json.RawMessage); ok {

@@ -2,6 +2,7 @@ package langfuse
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -58,16 +59,22 @@ func (c *Client) StartObservation(
 	observationType ObservationType,
 	values ObservationAttributes,
 ) (context.Context, *Observation) {
-	return c.startObservation(ctx, name, observationType, values, false)
+	return c.startObservation(ctx, name, observationType, values, nil)
 }
+
+// itemRootStart marks an observation that starts an experiment item: the
+// root of a new trace, started with the item identity attributes so that
+// start-time classification sees them.
+type itemRootStart struct{ attributes []attribute.KeyValue }
 
 func (c *Client) startObservation(
 	ctx context.Context,
 	name string,
 	observationType ObservationType,
 	values ObservationAttributes,
-	experimentRoot bool,
+	itemRoot *itemRootStart,
 ) (context.Context, *Observation) {
+	experimentRoot := itemRoot != nil
 	if c == nil || c.isDisabled() || ctx == nil {
 		return ctx, &Observation{}
 	}
@@ -111,6 +118,9 @@ func (c *Client) startObservation(
 		return ctx, &Observation{}
 	}
 	options := []oteltrace.SpanStartOption{oteltrace.WithAttributes(spanAttributes...)}
+	if experimentRoot {
+		options = append(options, oteltrace.WithAttributes(itemRoot.attributes...))
+	}
 	if !values.StartTime.IsZero() {
 		options = append(options, oteltrace.WithTimestamp(values.StartTime))
 	}
@@ -742,10 +752,10 @@ func (c *Client) buildObservationAttributes(
 		diagnostic.Report("generation-only attributes omitted from a non-generation observation")
 	}
 	if contentCapture {
-		if input, ok := lfattr.Encode(values.Input, c.mask, "observation input"); ok {
+		if input, ok := c.encodeContent(values.Input, "observation input"); ok {
 			result = append(result, attribute.String(lfattr.ObservationInputKey, input))
 		}
-		if output, ok := lfattr.Encode(values.Output, c.mask, "observation output"); ok {
+		if output, ok := c.encodeContent(values.Output, "observation output"); ok {
 			result = append(result, attribute.String(lfattr.ObservationOutputKey, output))
 		}
 	}
@@ -756,6 +766,70 @@ func (c *Client) buildObservationAttributes(
 		diagnostic.Report("update start time ignored; start time can be set only when the observation starts")
 	}
 	return result, explicit
+}
+
+// premasked is content that Mask has already processed, frozen as its
+// encoded attribute text at that moment: later changes to the value it came
+// from cannot reach the export, and no second Mask call sees it. Callers
+// outside the package cannot construct it.
+type premasked struct {
+	text    string
+	present bool
+}
+
+// encodeContent encodes observation input or output, masking it unless it is
+// premasked.
+func (c *Client) encodeContent(value any, field string) (string, bool) {
+	if pre, ok := value.(premasked); ok {
+		return pre.text, pre.present
+	}
+	return lfattr.Encode(value, c.mask, field)
+}
+
+// contentSnapshot is a value masked once and frozen in its two exported
+// forms: the attribute text of an observation's input or output, and the
+// JSON that embeds it in a larger value.
+type contentSnapshot struct {
+	premasked
+	json json.RawMessage
+}
+
+// snapshotContent masks value once as field and freezes the result. A nil
+// mask result, a panic, or a value that cannot be encoded is absent.
+func (c *Client) snapshotContent(field MaskField, value any, label string) contentSnapshot {
+	masked := c.maskOnce(field, value)
+	text, ok := lfattr.Encode(masked, nil, label)
+	if !ok {
+		return contentSnapshot{}
+	}
+	data := json.RawMessage(text)
+	if _, isString := masked.(string); isString {
+		quoted, err := json.Marshal(text)
+		if err != nil {
+			return contentSnapshot{}
+		}
+		data = quoted
+	}
+	return contentSnapshot{premasked: premasked{text: text, present: true}, json: data}
+}
+
+// frozenJSON freezes a JSON value built from snapshots as observation content.
+func frozenJSON(value any, label string) premasked {
+	text, ok := lfattr.Encode(value, nil, label)
+	return premasked{text: text, present: ok}
+}
+
+// maskOnce masks one telemetry value as an observation would: a nil result
+// or a panic omits it.
+func (c *Client) maskOnce(field MaskField, value any) any {
+	if c == nil || c.mask == nil || lfattr.IsNil(value) {
+		return value
+	}
+	masked, ok := lfattr.ApplyMask(value, c.mask, string(field))
+	if !ok {
+		return nil
+	}
+	return masked
 }
 
 func generationAttributes(typeName ObservationType, values ObservationAttributes) []attribute.KeyValue {

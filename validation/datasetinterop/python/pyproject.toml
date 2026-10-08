@@ -1,0 +1,10 @@
+# The exact-pinned official Python SDK for the dataset and experiment interop
+# harness (see validation/README.md). It runs only via `uv run --locked`;
+# bumping the pin is an explicit, reviewed change.
+[project]
+name = "go-langfuse-dataset-interop"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "langfuse==4.17.0",
+]

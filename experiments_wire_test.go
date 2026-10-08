@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +15,7 @@ import (
 	"github.com/fgn/go-langfuse"
 	"github.com/fgn/go-langfuse/internal/otlpreceiver"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
@@ -41,7 +44,6 @@ func wireExperiment() langfuse.Experiment {
 		ID:          "run-2026-10-01",
 		Name:        "triage-v2",
 		Description: "prompt v2 against the curated set",
-		DatasetID:   "dataset-1",
 		Metadata:    map[string]any{"model": "m-1", "nested": map[string]any{"depth": 2}},
 	}
 }
@@ -49,6 +51,7 @@ func wireExperiment() langfuse.Experiment {
 func wireExperimentItem() langfuse.ExperimentItem {
 	return langfuse.ExperimentItem{
 		ID:             "item-1",
+		DatasetID:      "dataset-1",
 		Version:        time.Date(2026, 9, 30, 12, 0, 0, 123456789, time.UTC),
 		ExpectedOutput: "Paris",
 		Metadata:       map[string]any{"difficulty": "easy"},
@@ -410,7 +413,7 @@ func TestExperimentRejectsInvalidInputAtomically(t *testing.T) {
 		"empty item ID":       {experiment: run, item: langfuse.ExperimentItem{}},
 		"long ID":             {experiment: run, item: langfuse.ExperimentItem{ID: strings.Repeat("x", 256)}},
 		"control character":   {experiment: langfuse.Experiment{ID: "run-1", Name: "a\nb"}, item: item},
-		"invalid UTF-8 ID":    {experiment: langfuse.Experiment{ID: "run-1", Name: "triage", DatasetID: "\xff"}, item: item},
+		"invalid UTF-8 ID":    {experiment: run, item: langfuse.ExperimentItem{ID: "item-1", DatasetID: "\xff"}},
 		"long description": {
 			experiment: langfuse.Experiment{ID: "run-1", Name: "triage", Description: strings.Repeat("d", 16<<10+1)},
 			item:       item,
@@ -608,5 +611,315 @@ func TestExperimentScoresUseTheItemEnvironment(t *testing.T) {
 		if got[name] != test.want {
 			t.Errorf("score %q environment = %#v, want %q", name, got[name], test.want)
 		}
+	}
+}
+
+func TestExperimentWireRejectsRootsTheExportFilterDrops(t *testing.T) {
+	generationsOnly := func(span sdktrace.ReadOnlySpan) bool {
+		for _, kv := range span.Attributes() {
+			if kv.Key == "langfuse.observation.type" {
+				return kv.Value.AsString() == "generation"
+			}
+		}
+		return false
+	}
+	for name, filter := range map[string]func(sdktrace.ReadOnlySpan) bool{
+		"generations only": generationsOnly,
+		"panicking":        func(sdktrace.ReadOnlySpan) bool { panic("filter") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
+				config.ShouldExportSpan = filter
+			})
+			ctx, root, err := client.StartExperimentItem(context.Background(), wireExperiment(),
+				wireExperimentItem(), "filtered-item", langfuse.ObservationAttributes{})
+			if !errors.Is(err, langfuse.ErrExperimentItemNotExported) || root.TraceID() != "" ||
+				oteltrace.SpanContextFromContext(ctx).IsValid() {
+				t.Fatalf("StartExperimentItem() = (%q, %v), want a no-op and ErrExperimentItemNotExported",
+					root.TraceID(), err)
+			}
+			_, generation := client.StartObservation(ctx, "detached", langfuse.TypeGeneration, langfuse.ObservationAttributes{})
+			generation.End()
+			flushClient(t, client)
+			for _, request := range receiver.Requests() {
+				for _, span := range otlpreceiver.Spans(request) {
+					attributes := observationWireAttributeMap(t, span.Attributes)
+					if _, linked := attributes[itemRootKey]; linked || span.Name == "filtered-item" {
+						t.Fatalf("exported %q with attributes %v after a rejected start", span.Name, attributes)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestExperimentWireRejectsIdentityDroppedBySpanLimits(t *testing.T) {
+	limits := sdktrace.NewSpanLimits()
+	limits.AttributeCountLimit = 6
+	provider := sdktrace.NewTracerProvider(sdktrace.WithRawSpanLimits(limits))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	client, _ := newObservationWireClient(t, func(config *langfuse.Config) {
+		config.TracerProvider = provider
+		config.ServiceName = ""
+	})
+	ctx, root, err := client.StartExperimentItem(context.Background(), wireExperiment(), wireExperimentItem(),
+		"limited-item", langfuse.ObservationAttributes{})
+	if !errors.Is(err, langfuse.ErrExperimentItemNotExported) || root.TraceID() != "" ||
+		oteltrace.SpanContextFromContext(ctx).IsValid() {
+		t.Fatalf("StartExperimentItem() = (%q, %v), want a no-op and ErrExperimentItemNotExported", root.TraceID(), err)
+	}
+
+	limits.AttributeCountLimit = 128
+	limits.AttributeValueLengthLimit = 8
+	truncating := sdktrace.NewTracerProvider(sdktrace.WithRawSpanLimits(limits))
+	t.Cleanup(func() { _ = truncating.Shutdown(context.Background()) })
+	client, _ = newObservationWireClient(t, func(config *langfuse.Config) {
+		config.TracerProvider = truncating
+		config.ServiceName = ""
+	})
+	if _, _, err := client.StartExperimentItem(context.Background(), wireExperiment(), wireExperimentItem(),
+		"truncated-item", langfuse.ObservationAttributes{}); !errors.Is(err, langfuse.ErrExperimentItemNotExported) {
+		t.Fatalf("truncated identity error = %v, want ErrExperimentItemNotExported", err)
+	}
+
+	// Truncated content is the provider's policy, as for observation input.
+	limits.AttributeValueLengthLimit = 64
+	contentLimited := sdktrace.NewTracerProvider(sdktrace.WithRawSpanLimits(limits))
+	t.Cleanup(func() { _ = contentLimited.Shutdown(context.Background()) })
+	client, _ = newObservationWireClient(t, func(config *langfuse.Config) {
+		config.TracerProvider = contentLimited
+		config.ServiceName = ""
+	})
+	item := wireExperimentItem()
+	item.ExpectedOutput = strings.Repeat("long expected output ", 10)
+	if _, root, err := client.StartExperimentItem(context.Background(), wireExperiment(), item,
+		"content-limited-item", langfuse.ObservationAttributes{}); err != nil || root.TraceID() == "" {
+		t.Fatalf("content-limited start = (%q, %v), want a started item", root.TraceID(), err)
+	}
+}
+
+func TestExperimentWireEnvironmentHelpersKeepItemSpansInTheExperiment(t *testing.T) {
+	client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
+		config.TracerProvider = nil
+	})
+	itemCtx, root, err := client.StartExperimentItem(context.Background(), wireExperiment(), wireExperimentItem(),
+		"env-item", langfuse.ObservationAttributes{})
+	if err != nil {
+		t.Fatalf("StartExperimentItem() error = %v", err)
+	}
+	itemCtx = client.WithTraceAttributes(itemCtx, langfuse.TraceAttributes{Environment: "production"})
+	member, err := baggage.NewMember("langfuse_environment", "staging")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bag, err := baggage.New(member)
+	if err != nil {
+		t.Fatal(err)
+	}
+	importedCtx, imported, err := client.StartExperimentItem(context.Background(), wireExperiment(),
+		wireExperimentItem(), "env-imported", langfuse.ObservationAttributes{})
+	if err != nil {
+		t.Fatalf("StartExperimentItem() error = %v", err)
+	}
+	client.WithTraceAttributesFromBaggage(baggage.ContextWithBaggage(importedCtx, bag))
+	imported.End()
+	_, child := client.StartObservation(itemCtx, "env-child", langfuse.TypeSpan, langfuse.ObservationAttributes{})
+	childCtx := client.WithTraceAttributes(itemCtx, langfuse.TraceAttributes{Environment: "production"})
+	child.End()
+	root.End()
+	_, evaluator := client.StartObservation(childCtx, "env-evaluator", langfuse.TypeEvaluator, langfuse.ObservationAttributes{})
+	evaluator.End()
+
+	// Outside an item the helpers still set the environment.
+	plainCtx, plain := client.StartObservation(context.Background(), "env-plain", langfuse.TypeSpan, langfuse.ObservationAttributes{})
+	client.WithTraceAttributes(plainCtx, langfuse.TraceAttributes{Environment: "production"})
+	plain.End()
+
+	spans := exportObservationWireSpans(t, client, receiver, 5)
+	for _, name := range []string{"env-item", "env-imported", "env-child", "env-evaluator"} {
+		if got := wireAttributes(t, spans, name)[environmentKey]; got != "sdk-experiment" {
+			t.Errorf("%s environment = %v, want sdk-experiment", name, got)
+		}
+	}
+	if got := wireAttributes(t, spans, "env-plain")[environmentKey]; got != "production" {
+		t.Errorf("plain span environment = %v, want production", got)
+	}
+}
+
+func TestExperimentWireItemMetadataShapes(t *testing.T) {
+	for name, test := range map[string]struct {
+		metadata any
+		mask     func(langfuse.MaskField, any) any
+		want     any
+		fails    bool
+	}{
+		"map":             {metadata: map[string]any{"a": 1}, want: `{"a":1}`},
+		"raw object":      {metadata: json.RawMessage(` {"n": 12345678901234567890} `), want: `{"n":12345678901234567890}`},
+		"struct":          {metadata: struct{ Region string }{"eu"}, want: `{"Region":"eu"}`},
+		"array":           {metadata: json.RawMessage(`["x", 1]`)},
+		"large string":    {metadata: strings.Repeat("x", 20000)},
+		"large slice":     {metadata: []string{strings.Repeat("x", 20000)}},
+		"large raw array": {metadata: json.RawMessage(`["` + strings.Repeat("x", 20000) + `"]`)},
+		"time":            {metadata: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
+		"pointer to map":  {metadata: &map[string]any{"p": true}, want: `{"p":true}`},
+		"string":          {metadata: "label"},
+		"empty object":    {metadata: json.RawMessage(`{}`)},
+		"invalid raw":     {metadata: json.RawMessage(`{"a":`), fails: true},
+		"masked to array": {metadata: map[string]any{"a": 1}, mask: func(langfuse.MaskField, any) any { return []any{1} }, fails: true},
+		"masked away":     {metadata: map[string]any{"a": 1}, mask: func(langfuse.MaskField, any) any { return nil }},
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
+				if test.mask != nil {
+					config.Mask = func(field langfuse.MaskField, value any) any {
+						if field == langfuse.MaskExperimentItemMetadata {
+							return test.mask(field, value)
+						}
+						return value
+					}
+				}
+			})
+			_, root, err := client.StartExperimentItem(context.Background(), langfuse.Experiment{ID: "run", Name: "run"},
+				langfuse.ExperimentItem{ID: "item", Metadata: test.metadata}, "shape", langfuse.ObservationAttributes{})
+			if test.fails {
+				if !errors.Is(err, langfuse.ErrInvalidExperiment) {
+					t.Fatalf("StartExperimentItem() error = %v, want ErrInvalidExperiment", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("StartExperimentItem() error = %v", err)
+			}
+			root.End()
+			attributes := wireAttributes(t, exportObservationWireSpans(t, client, receiver, 1), "shape")
+			if got := attributes[itemMetaKey]; got != test.want {
+				t.Fatalf("item metadata attribute = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestExperimentWireFiltersSeeTheItemIdentity(t *testing.T) {
+	attributeIs := func(span sdktrace.ReadOnlySpan, key, want string) bool {
+		for _, kv := range span.Attributes() {
+			if string(kv.Key) == key {
+				return want == "" && kv.Value.AsString() != "" || kv.Value.AsString() == want
+			}
+		}
+		return false
+	}
+	for name, filter := range map[string]func(sdktrace.ReadOnlySpan) bool{
+		"experiment environment": func(span sdktrace.ReadOnlySpan) bool {
+			return attributeIs(span, environmentKey, "sdk-experiment")
+		},
+		"experiment ID": func(span sdktrace.ReadOnlySpan) bool { return attributeIs(span, experimentIDKey, "") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
+				config.ShouldExportSpan = filter
+			})
+			itemCtx, root, err := client.StartExperimentItem(context.Background(), wireExperiment(), wireExperimentItem(),
+				"filtered-item", langfuse.ObservationAttributes{})
+			if err != nil {
+				t.Fatalf("StartExperimentItem() error = %v", err)
+			}
+			_, child := client.StartObservation(itemCtx, "filtered-child", langfuse.TypeSpan, langfuse.ObservationAttributes{})
+			child.End()
+			root.End()
+			_, outside := client.StartObservation(context.Background(), "outside", langfuse.TypeSpan, langfuse.ObservationAttributes{})
+			outside.End()
+			spans := exportObservationWireSpans(t, client, receiver, 2)
+			if got := wireAttributes(t, spans, "filtered-item")[itemRootKey]; got != root.ID() {
+				t.Fatalf("root identity = %v, want %s", got, root.ID())
+			}
+			wireAttributes(t, spans, "filtered-child")
+		})
+	}
+
+	// A linked run gets its experiment ID only after the start.
+	server := newRunnerServer(t)
+	client := newRunnerClient(t, server, func(config *langfuse.Config) {
+		config.ShouldExportSpan = func(span sdktrace.ReadOnlySpan) bool { return attributeIs(span, experimentIDKey, "") }
+	})
+	result, err := client.RunExperiment(context.Background(), langfuse.ExperimentRun{
+		Name: "filtered", RunName: "filtered", Items: []langfuse.ExperimentItem{{ID: "a", DatasetID: "ds", Input: 1}},
+		Task: func(context.Context, langfuse.ExperimentItem) (any, error) { return "out", nil },
+	})
+	if err != nil || result.ItemResults[0].Err != nil {
+		t.Fatalf("RunExperiment() = %+v, %v; want the item to run", result.ItemResults, err)
+	}
+}
+
+func TestExperimentWireRejectedRootsExportNoItemIdentity(t *testing.T) {
+	limits := sdktrace.NewSpanLimits()
+	limits.AttributeValueLengthLimit = 32
+	provider := sdktrace.NewTracerProvider(sdktrace.WithRawSpanLimits(limits))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
+		config.TracerProvider = provider
+		config.ServiceName = ""
+	})
+	_, _, err := client.StartExperimentItem(context.Background(), langfuse.Experiment{ID: "run-1", Name: "run"},
+		langfuse.ExperimentItem{ID: strings.Repeat("i", 80)}, "rejected-root", langfuse.ObservationAttributes{})
+	if !errors.Is(err, langfuse.ErrExperimentItemNotExported) {
+		t.Fatalf("StartExperimentItem() error = %v, want ErrExperimentItemNotExported", err)
+	}
+	attributes := wireAttributes(t, exportObservationWireSpans(t, client, receiver, 1), "rejected-root")
+	for _, key := range []string{experimentIDKey, experimentNameKey, itemIDKey, itemRootKey} {
+		if value, ok := attributes[key]; ok && value != "" {
+			t.Errorf("rejected root exports %s = %v", key, value)
+		}
+	}
+	// The provider's 32-byte limit also truncates the status text.
+	full, status := "langfuse: experiment item root rejected", fmt.Sprint(attributes["langfuse.observation.status_message"])
+	if attributes["langfuse.observation.level"] != "ERROR" || status == "" || !strings.HasPrefix(full, status) {
+		t.Errorf("rejected root status = %v", attributes)
+	}
+}
+
+func TestExperimentWireLateAcceptedRootsAreTheOnlyApplicationRoot(t *testing.T) {
+	nonEmpty := func(key string) func(sdktrace.ReadOnlySpan) bool {
+		return func(span sdktrace.ReadOnlySpan) bool {
+			for _, kv := range span.Attributes() {
+				if string(kv.Key) == key {
+					return kv.Value.AsString() != ""
+				}
+			}
+			return false
+		}
+	}
+	for name, test := range map[string]struct {
+		key   string
+		items []langfuse.ExperimentItem
+	}{
+		"linked experiment ID": {experimentIDKey, []langfuse.ExperimentItem{{ID: "a", DatasetID: "ds", Input: 1}}},
+		"root observation ID":  {itemRootKey, []langfuse.ExperimentItem{{ID: "a", Input: 1}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := newRunnerServer(t)
+			client := newRunnerClient(t, server, func(config *langfuse.Config) { config.ShouldExportSpan = nonEmpty(test.key) })
+			result, err := client.RunExperiment(context.Background(), langfuse.ExperimentRun{
+				Name: "late", RunName: "late", Items: test.items,
+				Task: func(ctx context.Context, _ langfuse.ExperimentItem) (any, error) {
+					_, child := client.StartObservation(ctx, "child", langfuse.TypeGeneration, langfuse.ObservationAttributes{})
+					child.End()
+					return "out", nil
+				},
+				Evaluators: []langfuse.Evaluator{exactMatch},
+			})
+			if err != nil || result.ItemResults[0].Err != nil {
+				t.Fatalf("RunExperiment() = %+v, %v", result.ItemResults, err)
+			}
+			spans, _, _ := server.recorded()
+			roots := map[string]bool{}
+			for _, span := range spans {
+				if spanAttributes(t, span)["langfuse.internal.is_app_root"] == true {
+					roots[span.Name] = true
+				}
+			}
+			if len(spans) != 3 || !reflect.DeepEqual(roots, map[string]bool{"experiment-item-run": true}) {
+				t.Fatalf("%d spans; application roots = %v, want only the item root", len(spans), roots)
+			}
+		})
 	}
 }

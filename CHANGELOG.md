@@ -5,11 +5,15 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
-- Add datasets (`UpsertDataset`, `GetDataset`, `UpsertDatasetItem`,
-  `GetDatasetItem`, `DeleteDatasetItem`, `DatasetItems`) and experiments
-  (`StartExperimentItem`, `DatasetItem.ExperimentItem`), with new `MaskField`
-  values for their content. Dataset writes are never retried; a failed write
-  that may have been applied wraps `ErrWriteOutcomeUnknown`.
+- Add datasets (`UpsertDataset`, `GetDataset`, `Datasets`,
+  `UpsertDatasetItem`, `GetDatasetItem`, `DeleteDatasetItem`, `DatasetItems`)
+  and experiments (`RunExperiment` with evaluators, a composite evaluator, and
+  run evaluators; `StartExperimentItem`; `DatasetItem.ExperimentItem`;
+  `Experiments` and `ExperimentItems` reads), with new `MaskField` values for
+  their content. `Score.DatasetRunID` scores a dataset run. Dataset writes are
+  never retried; a failed write that may have been applied wraps
+  `ErrWriteOutcomeUnknown`. Cross-SDK round trips with the official Python
+  and TypeScript SDKs are covered by `task interop:datasets`.
 - **Behavior**: isolated mode always samples experiment item traces, whatever
   `SampleRate` or `WithSampleRate` says. A score recorded with an item context
   for the item trace uses the `sdk-experiment` environment.

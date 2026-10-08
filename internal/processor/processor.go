@@ -189,6 +189,27 @@ func (p *Processor) OnStart(parent context.Context, span sdktrace.ReadWriteSpan)
 	p.next.OnStart(parent, span)
 }
 
+// Exports reports whether span, with its current attributes, passes the
+// export decision OnEnd makes; a panicking filter rejects it.
+func (p *Processor) Exports(span sdktrace.ReadOnlySpan) bool {
+	return !p.stopped.Load() && p.acceptsProjectSpan(span) && span.SpanContext().IsSampled() &&
+		safeShouldExportSpan(p.shouldExportSpan, span, true)
+}
+
+// Expect records a span that was accepted after its start as an expected
+// export, so that spans it parents are not marked as application roots.
+// OnEnd removes it; a span that has already ended is not recorded, since the
+// SDK sets its end time before OnEnd runs under the same lock.
+func (p *Processor) Expect(span sdktrace.ReadOnlySpan) {
+	spanContext := span.SpanContext()
+	p.expectationsMu.Lock()
+	defer p.expectationsMu.Unlock()
+	if p.stopped.Load() || !span.EndTime().IsZero() || len(p.expected) >= maxActiveExpectations {
+		return
+	}
+	p.expected[spanKey{traceID: spanContext.TraceID(), spanID: spanContext.SpanID()}] = struct{}{}
+}
+
 // OnEnd removes start-time state and applies the final smart filter. The end
 // decision sees attributes added late by streaming/provider instrumentation.
 func (p *Processor) OnEnd(span sdktrace.ReadOnlySpan) {

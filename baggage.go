@@ -243,7 +243,7 @@ func (c *Client) WithTraceAttributesFromBaggage(ctx context.Context) context.Con
 	}
 	result = c.syncBaggage(result, true, false)
 	if environmentAccepted {
-		stampEnvironmentAttribute(result, state.environment)
+		c.stampEnvironmentAttribute(result, state.environment)
 	}
 	return result
 }
@@ -498,13 +498,18 @@ func parseBaggageTraceID(value string) (oteltrace.TraceID, bool) {
 	return id, err == nil && id.IsValid()
 }
 
-func stampEnvironmentAttribute(ctx context.Context, environment string) {
+// stampEnvironmentAttribute sets environment on the recording span of ctx,
+// except on a span of an experiment item trace, which stays in the
+// experiment environment its scores use.
+func (c *Client) stampEnvironmentAttribute(ctx context.Context, environment string) {
 	if environment == "" {
 		return
 	}
-	if span := oteltrace.SpanFromContext(ctx); span.IsRecording() {
-		span.SetAttributes(attribute.String(lfattr.EnvironmentKey, environment))
+	span := oteltrace.SpanFromContext(ctx)
+	if !span.IsRecording() || c.experimentAttributes(ctx, span.SpanContext().TraceID()) != nil {
+		return
 	}
+	span.SetAttributes(attribute.String(lfattr.EnvironmentKey, environment))
 }
 
 func reportIgnoredBaggageMembers(keys []string) {

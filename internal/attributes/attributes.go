@@ -762,6 +762,12 @@ func applyMask(value any, mask func(string, any) any, field string) (result any,
 	return mask(field, value), true
 }
 
+// ApplyMask applies mask to one value as telemetry does: ok is false when the
+// masker panicked, which is reported once as a diagnostic.
+func ApplyMask(value any, mask func(string, any) any, field string) (any, bool) {
+	return applyMask(value, mask, field)
+}
+
 // IsNil reports whether value is nil or a nil chan, func, interface, map,
 // pointer, or slice.
 func IsNil(value any) bool { return isNil(value) }

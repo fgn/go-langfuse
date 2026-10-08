@@ -31,8 +31,9 @@
 // Langfuse JSON ingestion endpoint, [Client.GetPrompt] loads
 // prompt-management prompts with client-side caching and an optional local
 // fallback, [Client.UpsertDatasetItem] and [Client.DatasetItems] curate and
-// read datasets, [Client.StartExperimentItem] runs one Langfuse v4
-// experiment item as its own trace, and [Client.Flush] and [Client.Shutdown]
+// read datasets, [Client.RunExperiment] runs and scores an experiment over
+// dataset or local items with each item as its own trace, and
+// [Client.Flush] and [Client.Shutdown]
 // control the export lifecycle. Whole traces can be sampled deterministically
 // by trace ID through [Config.SampleRate] and [Client.WithSampleRate], with
 // [TraceSampledAt] exposing the same decision for correlated

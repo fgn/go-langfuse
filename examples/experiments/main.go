@@ -38,8 +38,7 @@ func run(ctx context.Context) error {
 	}()
 
 	const datasetName = "go-langfuse-example-capitals"
-	dataset, err := lf.UpsertDataset(ctx, langfuse.DatasetSpec{Name: datasetName})
-	if err != nil {
+	if _, err := lf.UpsertDataset(ctx, langfuse.DatasetSpec{Name: datasetName}); err != nil {
 		return fmt.Errorf("upsert dataset: %w", err)
 	}
 	for _, q := range []question{
@@ -61,66 +60,73 @@ func run(ctx context.Context) error {
 		}
 	}
 
-	var items []langfuse.DatasetItem
+	// Pin the run to the dataset as it is now.
+	var items []langfuse.ExperimentItem
 	query := langfuse.DatasetItemQuery{DatasetName: datasetName, AsOf: time.Now()}
 	for item, err := range lf.DatasetItems(ctx, query) {
 		if err != nil {
 			return fmt.Errorf("read dataset items: %w", err)
 		}
-		items = append(items, item)
+		items = append(items, item.ExperimentItem())
 	}
 
-	// Every item of one run shares its ID.
-	experiment := langfuse.Experiment{
-		ID:          "capitals-" + time.Now().UTC().Format("20060102T150405Z"),
+	result, err := lf.RunExperiment(ctx, langfuse.ExperimentRun{
 		Name:        "capitals-baseline",
 		Description: "Answers capital-city questions with a fixed lookup.",
-		DatasetID:   dataset.ID,
 		Metadata:    map[string]any{"workflow": "lookup", "version": 1},
+		Items:       items,
+		Task: func(ctx context.Context, item langfuse.ExperimentItem) (any, error) {
+			var input struct {
+				Country string `json:"country"`
+			}
+			raw, _ := item.Input.(json.RawMessage)
+			if err := json.Unmarshal(raw, &input); err != nil {
+				return nil, fmt.Errorf("decode item input: %w", err)
+			}
+			return lookupCapital(ctx, lf, input.Country), nil
+		},
+		Evaluators:    []langfuse.Evaluator{exactMatch},
+		RunEvaluators: []langfuse.RunEvaluator{accuracy},
+	})
+	if err != nil {
+		return fmt.Errorf("run experiment: %w", err)
 	}
-	for _, item := range items {
-		if err := runItem(ctx, lf, experiment, item); err != nil {
-			return err
-		}
-	}
-	fmt.Printf("experiment %s ran %d items\n", experiment.ID, len(items))
+	fmt.Print(result.Summary(true))
 	return nil
 }
 
-func runItem(ctx context.Context, lf *langfuse.Client, experiment langfuse.Experiment, item langfuse.DatasetItem) error {
-	var input struct {
-		Country string `json:"country"`
-	}
-	if err := json.Unmarshal(item.Input, &input); err != nil {
-		return fmt.Errorf("decode item input: %w", err)
-	}
-	experimentItem, err := item.ExperimentItem()
-	if err != nil {
-		return fmt.Errorf("convert dataset item: %w", err)
-	}
-	itemCtx, task, err := lf.StartExperimentItem(ctx, experiment, experimentItem, "answer-capital",
-		langfuse.ObservationAttributes{Input: input.Country})
-	if err != nil {
-		return fmt.Errorf("start experiment item: %w", err)
-	}
-
-	answer := lookupCapital(itemCtx, lf, input.Country)
-	task.Update(langfuse.ObservationAttributes{Output: answer})
-	task.End() // item latency ends here; the evaluation below does not count
-
+// exactMatch compares the answer with the stored expected output.
+func exactMatch(_ context.Context, input langfuse.EvaluatorInput) ([]langfuse.Evaluation, error) {
 	var expected string
-	_ = json.Unmarshal(item.ExpectedOutput, &expected)
-	correct := 0.0
-	if strings.EqualFold(answer, expected) {
-		correct = 1
+	if raw, ok := input.ExpectedOutput.(json.RawMessage); ok {
+		if err := json.Unmarshal(raw, &expected); err != nil {
+			return nil, fmt.Errorf("decode expected output: %w", err)
+		}
 	}
-	return lf.RecordScore(itemCtx, langfuse.Score{
-		Name:          "exact-match",
-		TraceID:       task.TraceID(),
-		ObservationID: task.ID(),
-		NumericValue:  &correct,
-		DataType:      langfuse.ScoreTypeBoolean,
-	})
+	answer, _ := input.Output.(string)
+	value := 0.0
+	if strings.EqualFold(answer, expected) {
+		value = 1
+	}
+	return []langfuse.Evaluation{{Name: "exact-match", NumericValue: &value, DataType: langfuse.ScoreTypeBoolean}}, nil
+}
+
+// accuracy is the share of items whose answer matched.
+func accuracy(_ context.Context, results []langfuse.ExperimentItemResult) ([]langfuse.Evaluation, error) {
+	matched, total := 0.0, 0.0
+	for _, result := range results {
+		for _, evaluation := range result.Evaluations {
+			if evaluation.Name == "exact-match" && evaluation.NumericValue != nil {
+				matched += *evaluation.NumericValue
+				total++
+			}
+		}
+	}
+	if total == 0 {
+		return nil, nil
+	}
+	value := matched / total
+	return []langfuse.Evaluation{{Name: "accuracy", NumericValue: &value}}, nil
 }
 
 // lookupCapital stands in for a model call.

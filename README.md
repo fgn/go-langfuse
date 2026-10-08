@@ -19,8 +19,9 @@ Langfuse.
 - **Scores and prompts included.** Evaluations and user feedback with
   asynchronous retried delivery; prompt management reads with caching,
   compilation, and guaranteed-availability fallbacks.
-- **Datasets and experiments.** Dataset reads and writes over REST, and
-  Langfuse v4 experiments that run each dataset item as its own trace.
+- **Datasets and experiments.** Dataset reads and writes over REST, an
+  experiment runner with evaluators and run evaluators over dataset or local
+  items, and reads of stored Langfuse v4 experiment results.
 - **Deterministic trace sampling.** Per-request rates in one process, and a
   pure predicate for correlated app-level sampling such as gating an
   expensive LLM-judge evaluation to a subset of the traces kept for export.
@@ -246,44 +247,42 @@ The [prompts example](examples/prompts/main.go) runs this flow end to end.
 
 ## Datasets and experiments
 
-`DatasetItems` reads a dataset as of one instant. `StartExperimentItem` runs
-each item as its own trace, and observations started from the item context
-join it:
+`DatasetItems` reads a dataset as of one instant, and `RunExperiment` runs a
+task over the items, scores each output with evaluators and the whole run
+with run evaluators, and links the run to the dataset, like the official
+Python and TypeScript runners:
 
 ```go
-dataset, err := lf.GetDataset(ctx, "triage")
-if err != nil {
-	return err
-}
-asOf := time.Now()
-run := langfuse.Experiment{ID: "triage-" + asOf.Format(time.RFC3339), Name: "triage",
-	DatasetID: dataset.ID}
-query := langfuse.DatasetItemQuery{DatasetName: "triage", AsOf: asOf}
+var items []langfuse.ExperimentItem
+query := langfuse.DatasetItemQuery{DatasetName: "triage", AsOf: time.Now()}
 for item, err := range lf.DatasetItems(ctx, query) {
 	if err != nil {
 		return err
 	}
-	experimentItem, err := item.ExperimentItem()
-	if err != nil {
-		return err
-	}
-	itemCtx, task, err := lf.StartExperimentItem(ctx, run, experimentItem, "triage",
-		langfuse.ObservationAttributes{Input: item.Input})
-	if err != nil {
-		return err
-	}
-	output := triage(itemCtx, item.Input)
-	task.Update(langfuse.ObservationAttributes{Output: output})
-	task.End() // item latency stops here
-	correct := grade(output, item.ExpectedOutput)
-	_ = lf.RecordScore(itemCtx, langfuse.Score{Name: "correct", TraceID: task.TraceID(),
-		ObservationID: task.ID(), NumericValue: &correct})
+	items = append(items, item.ExperimentItem())
 }
+result, err := lf.RunExperiment(ctx, langfuse.ExperimentRun{
+	Name:  "triage",
+	Items: items,
+	Task: func(ctx context.Context, item langfuse.ExperimentItem) (any, error) {
+		return triage(ctx, item.Input) // observations started from ctx join the item trace
+	},
+	Evaluators:    []langfuse.Evaluator{correct},
+	RunEvaluators: []langfuse.RunEvaluator{accuracy},
+})
+if err != nil {
+	return err
+}
+fmt.Print(result.Summary(false))
 ```
 
-Dataset writes are never retried; a failed write that may have been applied
-wraps `ErrWriteOutcomeUnknown`. See the [reference](docs/reference.md#datasets)
-and the runnable [experiments example](examples/experiments/main.go).
+Each item runs as its own trace, failures stay in the result per item, and
+canceling `ctx` stops the run. `StartExperimentItem` is the lower-level
+primitive for custom orchestration, and `Experiments` and `ExperimentItems`
+read stored results back. Dataset writes are never retried; a failed write
+that may have been applied wraps `ErrWriteOutcomeUnknown`. See the
+[reference](docs/reference.md#experiments) and the runnable
+[experiments example](examples/experiments/main.go).
 
 ## Content capture
 

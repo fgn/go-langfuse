@@ -823,3 +823,37 @@ func TestAdmitRunsOnlyForSDKScopeSpansWhileActive(t *testing.T) {
 }
 
 type admitProbeKey struct{}
+
+func TestExpectNeverOutlivesTheSpan(t *testing.T) {
+	processor, err := New(Config{Next: &discardingProcessor{}, ShouldExportSpan: func(sdktrace.ReadOnlySpan) bool { return false }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(processor))
+	t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+	tracer := provider.Tracer(lfattr.TracerName)
+
+	_, ended := tracer.Start(context.Background(), "ended")
+	ended.End()
+	processor.Expect(ended.(sdktrace.ReadOnlySpan))
+	_, active := tracer.Start(context.Background(), "active")
+	processor.Expect(active.(sdktrace.ReadOnlySpan))
+	if got := processor.expectedCount(); got != 1 {
+		t.Fatalf("expectations = %d, want only the active span", got)
+	}
+	active.End()
+
+	// Concurrent End and Expect leave nothing behind, whichever runs first.
+	var wg sync.WaitGroup
+	for range 256 {
+		_, span := tracer.Start(context.Background(), "racing")
+		start := make(chan struct{})
+		wg.Go(func() { <-start; span.End() })
+		wg.Go(func() { <-start; processor.Expect(span.(sdktrace.ReadOnlySpan)) })
+		close(start)
+	}
+	wg.Wait()
+	if got := processor.expectedCount(); got != 0 {
+		t.Fatalf("stale expectations after concurrent End/Expect = %d", got)
+	}
+}

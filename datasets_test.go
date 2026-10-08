@@ -215,6 +215,28 @@ func TestDatasetRequestShape(t *testing.T) {
 		t.Fatalf("UpsertDatasetItem() = %+v", item)
 	}
 
+	// Metadata may be any JSON value, as the server and official SDKs accept.
+	for _, metadata := range []struct {
+		value any
+		want  string
+	}{
+		{[]any{"alpha", 2, false}, `["alpha",2,false]`},
+		{"label", `"label"`},
+		{json.RawMessage(`[1, {"a": null}]`), `[1,{"a":null}]`},
+		{0, `0`},
+	} {
+		if _, err := client.UpsertDatasetItem(ctx, langfuse.DatasetItemSpec{
+			DatasetName: "set", ID: "item-1", Metadata: metadata.value,
+		}); err != nil {
+			t.Fatalf("UpsertDatasetItem(metadata %v) error = %v", metadata.value, err)
+		}
+		check(http.MethodPost, "/api/public/dataset-items", `{"datasetName":"set","id":"item-1","metadata":`+metadata.want+`}`)
+		if _, err := client.UpsertDataset(ctx, langfuse.DatasetSpec{Name: "set", Metadata: metadata.value}); err != nil {
+			t.Fatalf("UpsertDataset(metadata %v) error = %v", metadata.value, err)
+		}
+		check(http.MethodPost, "/api/public/v2/datasets", `{"name":"set","metadata":`+metadata.want+`}`)
+	}
+
 	if _, err := client.GetDatasetItem(ctx, "a/b?c#d"); err != nil {
 		t.Fatalf("GetDatasetItem() error = %v", err)
 	}
@@ -320,10 +342,6 @@ func TestDatasetInvalidInputSendsNothing(t *testing.T) {
 		"mask panics": {
 			mask: func(langfuse.MaskField, any) any { panic("PANIC-PAYLOAD") },
 			call: item(langfuse.DatasetItemSpec{DatasetName: "set", Input: "secret"}),
-		},
-		"mask changes metadata type": {
-			mask: func(_ langfuse.MaskField, value any) any { return fmt.Sprint(value) },
-			call: dataset(langfuse.DatasetSpec{Name: "set", Metadata: map[string]any{"a": "secret"}}),
 		},
 		"raw null":         {call: item(langfuse.DatasetItemSpec{DatasetName: "set", Input: json.RawMessage(`null`)})},
 		"null marshaler":   {call: item(langfuse.DatasetItemSpec{DatasetName: "set", ExpectedOutput: nullMarshaler{}})},
@@ -672,20 +690,23 @@ func TestDatasetItemsConvertToPinnedExperimentItems(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		got, err := item.ExperimentItem()
+		got := item.ExperimentItem()
 		want := langfuse.ExperimentItem{
 			ID:             "a",
+			DatasetID:      "ds-1",
 			Version:        asOf,
+			Input:          json.RawMessage(`{"q":1}`),
 			ExpectedOutput: json.RawMessage(`"Paris"`),
-			Metadata:       map[string]any{"m": json.Number("12345678901234567890")},
+			Metadata:       json.RawMessage(`{"m":12345678901234567890}`),
 		}
-		if err != nil || !reflect.DeepEqual(got, want) {
-			t.Fatalf("ExperimentItem() = %#v, %v; want %#v", got, err, want)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("ExperimentItem() = %#v; want %#v", got, want)
 		}
 	}
-	_, err := langfuse.DatasetItem{ID: "a", Metadata: json.RawMessage(`"text"`)}.ExperimentItem()
-	if !errors.Is(err, langfuse.ErrInvalidExperiment) {
-		t.Fatalf("non-object metadata error = %v, want ErrInvalidExperiment", err)
+	// Absent content stays nil rather than an empty json.RawMessage.
+	if got := (langfuse.DatasetItem{ID: "a", Metadata: json.RawMessage(`["x"]`)}).ExperimentItem(); got.Input != nil ||
+		got.ExpectedOutput != nil || string(got.Metadata.(json.RawMessage)) != `["x"]` {
+		t.Fatalf("ExperimentItem() = %#v", got)
 	}
 }
 
@@ -803,5 +824,127 @@ func TestDatasetCallbacksCanShutDownTheClient(t *testing.T) {
 	}
 	if got := server.requests.Load(); got != 0 {
 		t.Fatalf("requests = %d, want 0", got)
+	}
+}
+
+func TestDatasetsPages(t *testing.T) {
+	t.Parallel()
+	datasetsPage := func(totalPages int, names ...string) string {
+		datasets := make([]string, len(names))
+		for index, name := range names {
+			datasets[index] = datasetJSON(name)
+		}
+		return fmt.Sprintf(`{"data":[%s],"meta":{"totalPages":%d}}`, strings.Join(datasets, ","), totalPages)
+	}
+	for name, test := range map[string]struct {
+		pages []string
+		want  []string
+		fails bool
+	}{
+		"two pages":      {pages: []string{datasetsPage(2, "a", "b"), datasetsPage(2, "c")}, want: []string{"a", "b", "c"}},
+		"none":           {pages: []string{datasetsPage(0)}},
+		"invalid entry":  {pages: []string{`{"data":[{"id":"x"}],"meta":{"totalPages":1}}`}, fails: true},
+		"missing meta":   {pages: []string{`{"data":[]}`}, fails: true},
+		"overstated end": {pages: []string{datasetsPage(3, "a"), datasetsPage(3)}, want: []string{"a"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var mu sync.Mutex
+			var paths []string
+			server := newDatasetServer(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+				mu.Lock()
+				paths = append(paths, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+				mu.Unlock()
+				page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+				_, _ = io.WriteString(w, test.pages[page-1])
+			})
+			client := newDatasetClient(t, server.URL, nil)
+			var names []string
+			var final error
+			for dataset, err := range client.Datasets(context.Background(), langfuse.DatasetQuery{}) {
+				if err != nil {
+					final = err
+					continue
+				}
+				names = append(names, dataset.Name)
+			}
+			if (final != nil) != test.fails || !reflect.DeepEqual(names, test.want) {
+				t.Fatalf("Datasets() = %v, %v; want %v, failure %t", names, final, test.want, test.fails)
+			}
+			if len(paths) != len(test.pages) || paths[0] != "GET /api/public/v2/datasets?limit=20&page=1" {
+				t.Fatalf("requests = %v", paths)
+			}
+		})
+	}
+}
+
+func TestDatasetErrorsNeverQuoteMalformedResponses(t *testing.T) {
+	t.Parallel()
+	for name, response := range map[string]string{
+		"status line": "SENTINEL-STATUS secret\r\n\r\n",
+		"header line": "HTTP/1.1 200 OK\r\nSENTINEL-HEADER secret\r\n\r\n",
+		"status code": "HTTP/1.1 SENTINEL-CODE secret\r\n\r\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = listener.Close() })
+			go func() {
+				for {
+					conn, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					go func() {
+						defer func() { _ = conn.Close() }()
+						buffer := make([]byte, 64<<10)
+						_, _ = conn.Read(buffer)
+						_, _ = io.WriteString(conn, response)
+					}()
+				}
+			}()
+			var diagnostics []string
+			var mu sync.Mutex
+			restore := langfuse.SetTestErrorHandler(func(err error) {
+				mu.Lock()
+				diagnostics = append(diagnostics, err.Error())
+				mu.Unlock()
+			})
+			defer restore()
+			client := newDatasetClient(t, "http://"+listener.Addr().String(), nil)
+			for call, run := range datasetCalls {
+				err := run(context.Background(), client)
+				if err == nil || strings.Contains(err.Error(), "SENTINEL") || strings.Contains(err.Error(), "secret") {
+					t.Errorf("%s error = %v, want a failure without response bytes", call, err)
+				}
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			for _, diagnostic := range diagnostics {
+				if strings.Contains(diagnostic, "SENTINEL") || strings.Contains(diagnostic, "secret") {
+					t.Errorf("diagnostic quotes the response: %s", diagnostic)
+				}
+			}
+		})
+	}
+}
+
+func TestDatasetsPageSize(t *testing.T) {
+	t.Parallel()
+	var query atomic.Pointer[url.Values]
+	server := newDatasetServer(t, func(w http.ResponseWriter, r *http.Request, _ []byte) {
+		values := r.URL.Query()
+		query.Store(&values)
+		_, _ = io.WriteString(w, `{"data":[],"meta":{"totalPages":0}}`)
+	})
+	client := newDatasetClient(t, server.URL, nil)
+	for _, err := range client.Datasets(context.Background(), langfuse.DatasetQuery{PageSize: 7}) {
+		t.Fatal(err)
+	}
+	if got := query.Load().Get("limit"); got != "7" {
+		t.Fatalf("limit = %q, want 7", got)
 	}
 }

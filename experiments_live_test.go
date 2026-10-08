@@ -70,11 +70,8 @@ func TestLiveDatasetsAndExperiments(t *testing.T) {
 			again.ExpectedOutput)
 	}
 
-	experiment := langfuse.Experiment{ID: marker + "-run", Name: marker, DatasetID: dataset.ID}
-	experimentItem, err := item.ExperimentItem()
-	if err != nil {
-		t.Fatalf("ExperimentItem(): %v", err)
-	}
+	experiment := langfuse.Experiment{ID: marker + "-run", Name: marker}
+	experimentItem := item.ExperimentItem()
 	itemCtx, task, err := client.StartExperimentItem(ctx, experiment, experimentItem, "live-item-task",
 		langfuse.ObservationAttributes{Input: item.Input})
 	if err != nil {

@@ -34,11 +34,20 @@ var (
 	_ func(*langfuse.Client, context.Context, string) (langfuse.DatasetItem, error)                                                                                                 = (*langfuse.Client).GetDatasetItem
 	_ func(*langfuse.Client, context.Context, string) error                                                                                                                         = (*langfuse.Client).DeleteDatasetItem
 	_ func(*langfuse.Client, context.Context, langfuse.DatasetItemQuery) iter.Seq2[langfuse.DatasetItem, error]                                                                     = (*langfuse.Client).DatasetItems
+	_ func(*langfuse.Client, context.Context, langfuse.DatasetQuery) iter.Seq2[langfuse.Dataset, error]                                                                             = (*langfuse.Client).Datasets
+	_ func(*langfuse.Client, context.Context, langfuse.ExperimentRun) (langfuse.ExperimentResult, error)                                                                            = (*langfuse.Client).RunExperiment
+	_ func(*langfuse.Client, context.Context, langfuse.ExperimentQuery) iter.Seq2[langfuse.StoredExperiment, error]                                                                 = (*langfuse.Client).Experiments
+	_ func(*langfuse.Client, context.Context, langfuse.ExperimentItemQuery) iter.Seq2[langfuse.StoredExperimentItem, error]                                                         = (*langfuse.Client).ExperimentItems
 	_ func(*langfuse.Client, context.Context, langfuse.Experiment, langfuse.ExperimentItem, string, langfuse.ObservationAttributes) (context.Context, *langfuse.Observation, error) = (*langfuse.Client).StartExperimentItem
 	_ func(*langfuse.Client, context.Context) error                                                                                                                                 = (*langfuse.Client).Flush
 	_ func(*langfuse.Client, context.Context) error                                                                                                                                 = (*langfuse.Client).Shutdown
 
-	_ func(langfuse.DatasetItem) (langfuse.ExperimentItem, error) = langfuse.DatasetItem.ExperimentItem
+	_ func(langfuse.DatasetItem) langfuse.ExperimentItem = langfuse.DatasetItem.ExperimentItem
+	_ func(langfuse.ExperimentResult, bool) string       = langfuse.ExperimentResult.Summary
+
+	_ langfuse.ExperimentTask = func(context.Context, langfuse.ExperimentItem) (any, error) { return "", nil }
+	_ langfuse.Evaluator      = func(context.Context, langfuse.EvaluatorInput) ([]langfuse.Evaluation, error) { return nil, nil }
+	_ langfuse.RunEvaluator   = func(context.Context, []langfuse.ExperimentItemResult) ([]langfuse.Evaluation, error) { return nil, nil }
 
 	_ func(*langfuse.Observation, langfuse.ObservationAttributes) = (*langfuse.Observation).Update
 	_ func(*langfuse.Observation, error)                          = (*langfuse.Observation).RecordError
@@ -89,14 +98,18 @@ func TestPublicMethodSurface(t *testing.T) {
 
 	assertMethodNames(t, (*langfuse.Client)(nil), []string{
 		"DatasetItems",
+		"Datasets",
 		"DeleteDatasetItem",
 		"Event",
+		"ExperimentItems",
+		"Experiments",
 		"Flush",
 		"GetDataset",
 		"GetDatasetItem",
 		"GetPrompt",
 		"Observe",
 		"RecordScore",
+		"RunExperiment",
 		"Shutdown",
 		"StartExperimentItem",
 		"StartObservation",
@@ -117,6 +130,7 @@ func TestPublicMethodSurface(t *testing.T) {
 		"TraceID",
 		"Update",
 	})
+	assertMethodNames(t, langfuse.ExperimentResult{}, []string{"Summary"})
 	assertMethodNames(t, langfuse.Prompt{}, []string{
 		"Compile",
 		"CompileStrict",
@@ -167,6 +181,7 @@ func TestPublicStructSurface(t *testing.T) {
 		"Name",
 		"TraceID",
 		"SessionID",
+		"DatasetRunID",
 		"ObservationID",
 		"NumericValue",
 		"StringValue",
@@ -277,14 +292,77 @@ func TestPublicStructSurface(t *testing.T) {
 		"ID",
 		"Name",
 		"Description",
-		"DatasetID",
 		"Metadata",
 	})
 	assertFieldNames(t, langfuse.ExperimentItem{}, []string{
 		"ID",
+		"DatasetID",
 		"Version",
+		"Input",
 		"ExpectedOutput",
 		"Metadata",
+	})
+	assertFieldNames(t, langfuse.ExperimentRun{}, []string{
+		"Name",
+		"RunName",
+		"Description",
+		"Metadata",
+		"Items",
+		"Task",
+		"Evaluators",
+		"CompositeEvaluator",
+		"RunEvaluators",
+		"MaxConcurrency",
+	})
+	assertFieldNames(t, langfuse.EvaluatorInput{}, []string{
+		"Input",
+		"Output",
+		"ExpectedOutput",
+		"Metadata",
+		"Evaluations",
+	})
+	assertFieldNames(t, langfuse.Evaluation{}, []string{
+		"Name",
+		"NumericValue",
+		"StringValue",
+		"DataType",
+		"ConfigID",
+		"Comment",
+		"Metadata",
+	})
+	assertFieldNames(t, langfuse.ExperimentItemResult{}, []string{
+		"Item",
+		"Output",
+		"Evaluations",
+		"TraceID",
+		"ObservationID",
+		"DatasetRunID",
+		"Err",
+		"EvaluationErr",
+	})
+	assertFieldNames(t, langfuse.ExperimentResult{}, []string{
+		"ExperimentID",
+		"Name",
+		"RunName",
+		"Description",
+		"DatasetRunID",
+		"ItemResults",
+		"RunEvaluations",
+		"RunEvaluationErr",
+	})
+
+	assertFieldNames(t, langfuse.DatasetQuery{}, []string{"PageSize"})
+	assertFieldNames(t, langfuse.ExperimentQuery{}, []string{"From", "To", "IDs", "Names", "DatasetIDs", "PageSize"})
+	assertFieldNames(t, langfuse.StoredExperiment{}, []string{
+		"ID", "Name", "Description", "DatasetID", "StartTime", "EndTime", "ItemCount", "Metadata", "Scores",
+	})
+	assertFieldNames(t, langfuse.ExperimentItemQuery{}, []string{
+		"From", "To", "ExperimentIDs", "ExperimentNames", "ItemIDs", "DatasetIDs", "PageSize",
+	})
+	assertFieldNames(t, langfuse.StoredExperimentItem{}, []string{
+		"ObservationID", "TraceID", "StartTime", "EndTime", "Level", "Environment",
+		"ExperimentID", "ExperimentName", "ExperimentDescription", "ItemID", "DatasetID", "ItemVersion",
+		"Input", "Output", "ExpectedOutput", "Metadata", "ItemMetadata", "ExperimentMetadata", "Scores",
 	})
 
 	assertNoExportedFields(t, langfuse.Client{})
