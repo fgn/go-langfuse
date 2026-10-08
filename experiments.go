@@ -280,9 +280,14 @@ func retainsIdentity(span oteltrace.Span, want []attribute.KeyValue) bool {
 	return true
 }
 
-// Dropping the ambient span too makes a rejected task a new, unlinked trace.
+// Dropping the ambient span and any WithParent override too makes a
+// rejected task a new, unlinked trace.
 func (c *Client) failedExperimentContext(ctx context.Context) context.Context {
-	return oteltrace.ContextWithSpanContext(c.withoutExperiment(ctx), oteltrace.SpanContext{})
+	ctx = oteltrace.ContextWithSpanContext(c.withoutExperiment(ctx), oteltrace.SpanContext{})
+	if c != nil && c.parentOverride(ctx) != nil {
+		ctx = context.WithValue(ctx, parentContextKey{client: c}, (*Observation)(nil))
+	}
+	return ctx
 }
 
 func (c *Client) withoutExperiment(ctx context.Context) context.Context {

@@ -18,6 +18,25 @@ Versioning once the first release is tagged.
   `SampleRate` or `WithSampleRate` says. A score recorded with an item context
   for the item trace uses the `sdk-experiment` environment.
 
+## [0.11.0] - 2026-10-07
+
+- Update `google.golang.org/grpc` to v1.83.1 for GO-2026-6348 (heap exhaustion
+  through fragmented HTTP/2 DATA frames).
+- **Breaking**: `RecordError` treats error text as content. With content
+  capture disabled for an observation, it no longer calls `err.Error()` and
+  exports the payload-free `"error"` as the status and exception message, with
+  the Go error type. With capture enabled, the text passes through `Mask` as
+  the new `MaskErrorMessage` field. `Observe` inherits the change. Record a
+  payload-free failure category with `Update` (`Level`, `StatusMessage`).
+  Update `contrib/openai` and `contrib/googlegenai` together with this release:
+  older adapters record their fixed failure categories (`http 429`, ...)
+  through `RecordError`, which now exports `"error"` when capture is disabled.
+- Add `Client.WithParent`, which starts observations on a context as children
+  of an observation from another context path, with its trace, root claim,
+  and (with the SDK-owned provider) sampling decision, without changing the
+  context's active OpenTelemetry span. It lets a contrib transport record a
+  call under a Langfuse parent while another backend's span stays active.
+
 ## [0.10.0] - 2026-08-21
 
 - Add `Client.WithContentCapture` to override the client's SDK input/output

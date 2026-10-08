@@ -422,6 +422,35 @@ func TestPrivacyModes(t *testing.T) {
 	})
 }
 
+func TestNon2xxKeepsFixedCategoryWithoutContentCapture(t *testing.T) {
+	receiver := newOTLPReceiver(t)
+	lf := newTestClient(t, receiver, func(config *langfuse.Config) { config.DisableContentCapture = true })
+	provider := chatServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"error":{"message":"SECRET rate limited","code":"rate_limit"}}`)
+	})
+	httpClient := &http.Client{Transport: langfuseopenai.NewTransport(lf, nil)}
+	resp := postChat(t, httpClient, provider.URL, context.Background())
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	flush(t, lf)
+	span := receiver.nextSpan(t)
+	if status := attrString(t, span, "langfuse.observation.status_message"); status != "http 429" {
+		t.Fatalf("status %q, want fixed category http 429", status)
+	}
+	if level := attrString(t, span, "langfuse.observation.level"); level != "ERROR" {
+		t.Fatalf("level %q", level)
+	}
+	if got := span.GetStatus().GetMessage(); got != "http 429" {
+		t.Fatalf("OTel status message %q, want http 429", got)
+	}
+	if output := attrString(t, span, "langfuse.observation.output"); output != "" {
+		t.Fatalf("output %q exported without content capture", output)
+	}
+}
+
 func TestNon2xxRecordsErrorWithFixedCategory(t *testing.T) {
 	receiver := newOTLPReceiver(t)
 	lf := newTestClient(t, receiver, nil)

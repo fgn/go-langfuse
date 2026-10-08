@@ -79,8 +79,9 @@ var knownResponsesInputTypes = map[string]bool{
 // typed SSE events with terminal-authoritative output, and the bounded
 // over-cap salvage scanner.
 type responsesCall struct {
-	route      wiretap.Route
-	captureCap int
+	route           wiretap.Route
+	captureCap      int
+	toolDefinitions bool
 
 	// Request.
 	input           any
@@ -89,6 +90,7 @@ type responsesCall struct {
 
 	// Response control plane.
 	responseModel string
+	responseID    string
 	usage         *langfuse.Usage
 	incomplete    bool
 	errorCategory string
@@ -172,6 +174,13 @@ func (c *responsesCall) ParseRequest(body []byte) {
 			input["prompt"] = prompt
 		} else {
 			c.partial = true
+		}
+	}
+	if raw, ok := request["tools"]; ok && c.toolDefinitions {
+		tools, partial := sanitizeToolDefinitions(raw, false)
+		c.partial = c.partial || partial
+		if tools != nil {
+			input["tools"] = tools
 		}
 	}
 	if len(input) != 0 {
@@ -495,6 +504,9 @@ func (c *responsesCall) consumeEvent(event *responsesStreamEvent) wiretap.EventV
 			}
 		}
 		return wiretap.EventVerdict{Output: accepted}
+	case "response.created", "response.queued", "response.in_progress":
+		c.applyLifecycleID(event.Response)
+		return wiretap.EventVerdict{}
 	case "response.output_item.added":
 		c.bindItem(event)
 		return wiretap.EventVerdict{}
@@ -554,6 +566,7 @@ func validateResponsesBody(raw json.RawMessage, drops map[string]bool) (*respons
 		return nil, false
 	}
 	var probe struct {
+		ID                json.RawMessage `json:"id"`
 		Status            json.RawMessage `json:"status"`
 		Model             json.RawMessage `json:"model"`
 		Usage             json.RawMessage `json:"usage"`
@@ -581,6 +594,9 @@ func validateResponsesBody(raw json.RawMessage, drops map[string]bool) (*respons
 		return nil, false
 	}
 	body := &responsesBody{}
+	if len(probe.ID) != 0 {
+		_ = json.Unmarshal(probe.ID, &body.ID)
+	}
 	if !drops["status"] && len(probe.Status) != 0 {
 		_ = json.Unmarshal(probe.Status, &body.Status)
 	}
@@ -921,6 +937,7 @@ func (c *responsesCall) FinishUnary(body []byte, httpStatus int) {
 }
 
 type responsesBody struct {
+	ID     string            `json:"id"`
 	Status string            `json:"status"`
 	Model  string            `json:"model"`
 	Usage  *responsesUsage   `json:"usage"`
@@ -955,6 +972,9 @@ type responsesUsage struct {
 func (c *responsesCall) applyBody(body *responsesBody, authoritativeOutput bool) bool {
 	if body.Model != "" {
 		c.responseModel = body.Model
+	}
+	if validResponseID(body.ID) {
+		c.responseID = body.ID
 	}
 	if body.Usage != nil {
 		if usage, ok := mapResponsesUsage(body.Usage); ok {
@@ -1171,6 +1191,12 @@ func (c *responsesCall) FinishOversizedEvent() wiretap.EventVerdict {
 	}
 	verdict := wiretap.EventVerdict{Output: oversizedOutputPresence(eventType, scanner)}
 	switch eventType {
+	case "response.created", "response.queued", "response.in_progress":
+		// Lifecycle envelopes contribute only the id, never model, usage,
+		// status, or a terminal verdict.
+		if id, ok := decodeScannedField(scanner, "id"); ok && c.responseID == "" && validResponseID(id) {
+			c.responseID = id
+		}
 	case "response.completed", "response.failed", "response.incomplete":
 		// The salvage path enforces the same closed terminal envelope
 		// as the buffered validator: a missing or non-object response
@@ -1244,6 +1270,9 @@ func (c *responsesCall) applyScannedControl(scanner *controlScanner) {
 	if model, ok := decodeScannedField(scanner, "model"); ok && model != "" {
 		c.responseModel = model
 	}
+	if id, ok := decodeScannedField(scanner, "id"); ok && validResponseID(id) {
+		c.responseID = id
+	}
 	if raw, ok := scannedRaw(scanner.fields["usage"]); ok {
 		var usage responsesUsage
 		if json.Unmarshal(raw, &usage) == nil {
@@ -1263,6 +1292,17 @@ func (c *responsesCall) applyScannedControl(scanner *controlScanner) {
 				"type": "error", "code": wireError.Code, "message": wireError.Message,
 			}
 		}
+	}
+}
+
+// applyLifecycleID keeps the id announced before the terminal event, so an
+// interrupted stream stays correlatable. A terminal or unary body overrides it.
+func (c *responsesCall) applyLifecycleID(raw json.RawMessage) {
+	var envelope struct {
+		ID string `json:"id"`
+	}
+	if c.responseID == "" && json.Unmarshal(raw, &envelope) == nil && validResponseID(envelope.ID) {
+		c.responseID = envelope.ID
 	}
 }
 
@@ -1336,6 +1376,9 @@ func (c *responsesCall) Result() wiretap.Result {
 		ErrorCategory:    c.errorCategory,
 		Incomplete:       c.incomplete,
 		TelemetryPartial: c.partial,
+	}
+	if c.responseID != "" {
+		result.Metadata = map[string]any{"response_id": c.responseID}
 	}
 	switch {
 	case c.errorOutput != nil && !c.haveFinal && !c.haveUnary:

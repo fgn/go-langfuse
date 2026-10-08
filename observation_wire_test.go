@@ -652,6 +652,112 @@ func TestObservationWireRecordError(t *testing.T) {
 	})
 }
 
+func TestObservationWireRecordErrorFollowsContentCapture(t *testing.T) {
+	var errorCalls atomic.Int64
+	client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
+		config.DisableContentCapture = true
+	})
+	_, redacted := client.StartObservation(context.Background(), "error-redacted", langfuse.TypeSpan,
+		langfuse.ObservationAttributes{})
+	redacted.RecordError(countingError{calls: &errorCalls})
+	redacted.End()
+	optedIn := client.WithContentCapture(context.Background(), true)
+	_, captured := client.StartObservation(optedIn, "error-captured", langfuse.TypeSpan,
+		langfuse.ObservationAttributes{})
+	captured.RecordError(wireProviderError{message: "provider echoed private text"})
+	captured.End()
+
+	if got := errorCalls.Load(); got != 0 {
+		t.Fatalf("RecordError without content capture called Error() %d times, want 0", got)
+	}
+	spans := exportObservationWireSpans(t, client, receiver, 2)
+	for name, want := range map[string]string{
+		"error-redacted": "error",
+		"error-captured": "provider echoed private text",
+	} {
+		span := observationWireSpanNamed(t, spans, name)
+		attributes := observationWireAttributeMap(t, span.span.Attributes)
+		if got := attributes["langfuse.observation.status_message"]; got != want {
+			t.Fatalf("%s status message = %#v, want %q", name, got, want)
+		}
+		if got := attributes["langfuse.observation.level"]; got != "ERROR" {
+			t.Fatalf("%s level = %#v, want ERROR", name, got)
+		}
+		assertObservationWireSpanShape(t, span.span, time.Time{}, tracepb.Status_STATUS_CODE_ERROR, want, 1)
+		event := observationWireAttributeMap(t, span.span.Events[0].Attributes)
+		if event["exception.message"] != want || event["exception.type"] == "" {
+			t.Fatalf("%s exception event = %#v, want message %q and a type", name, event, want)
+		}
+	}
+}
+
+func TestObservationWireRecordErrorPassesThroughMask(t *testing.T) {
+	diagnostics := captureEdgeDiagnostics(t)
+	var maskCalls atomic.Int64
+	client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
+		config.Mask = func(field langfuse.MaskField, value any) any {
+			if field != langfuse.MaskErrorMessage {
+				return value
+			}
+			maskCalls.Add(1)
+			switch value {
+			case "secret sentinel", "error", "":
+				return "masked"
+			case "wrong type":
+				return 42
+			case "nil":
+				return nil
+			case "panic":
+				panic("mask failure")
+			case "oversized result":
+				return strings.Repeat("m", 64<<10+1)
+			case "invalid result":
+				return "\xff"
+			}
+			return value
+		}
+	})
+	cases := []struct{ name, message, want string }{
+		{"secret", "secret sentinel", "masked"},
+		{"literal-error", "error", "masked"},
+		{"empty", "", "masked"},
+		{"wrong-type", "wrong type", "error"},
+		{"nil", "nil", "error"},
+		{"panic", "panic", "error"},
+		{"invalid-utf8", "\xff", "error"},
+		{"oversized-result", "oversized result", "error"},
+		{"invalid-result", "invalid result", "error"},
+	}
+	for _, tc := range cases {
+		_, observation := client.StartObservation(context.Background(), tc.name, langfuse.TypeSpan,
+			langfuse.ObservationAttributes{})
+		observation.RecordError(wireProviderError{message: tc.message})
+		observation.End()
+	}
+
+	if got := maskCalls.Load(); got != int64(len(cases)-1) {
+		t.Fatalf("mask calls = %d, want %d (every valid text, never invalid UTF-8)", got, len(cases)-1)
+	}
+	spans := exportObservationWireSpans(t, client, receiver, len(cases))
+	for _, tc := range cases {
+		span := observationWireSpanNamed(t, spans, tc.name).span
+		attributes := observationWireAttributeMap(t, span.Attributes)
+		if got := attributes["langfuse.observation.status_message"]; got != tc.want {
+			t.Fatalf("%s Langfuse status = %#v, want %q", tc.name, got, tc.want)
+		}
+		assertObservationWireSpanShape(t, span, time.Time{}, tracepb.Status_STATUS_CODE_ERROR, tc.want, 1)
+		if got := observationWireAttributeMap(t, span.Events[0].Attributes)["exception.message"]; got != tc.want {
+			t.Fatalf("%s exception message = %#v, want %q", tc.name, got, tc.want)
+		}
+	}
+	for _, request := range receiver.Requests() {
+		if strings.Contains(request.Export.String(), "secret sentinel") {
+			t.Fatal("masked error text reached the export")
+		}
+	}
+	assertEdgeDiagnosticCount(t, diagnostics, "masker panicked; error message replaced", 1)
+}
+
 func TestObservationWireRecordErrorBudgetsPreserveFinalStatusAndRequestHeadroom(t *testing.T) {
 	diagnostics := captureEdgeDiagnostics(t)
 	client, receiver := newObservationWireClient(t, nil)

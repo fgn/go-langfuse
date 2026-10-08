@@ -20,6 +20,7 @@ var (
 
 	_ func(*langfuse.Client, context.Context, langfuse.TraceAttributes) context.Context                                                                                             = (*langfuse.Client).WithTraceAttributes
 	_ func(*langfuse.Client, context.Context, bool) context.Context                                                                                                                 = (*langfuse.Client).WithContentCapture
+	_ func(*langfuse.Client, context.Context, *langfuse.Observation) context.Context                                                                                                = (*langfuse.Client).WithParent
 	_ func(*langfuse.Client, context.Context, float64) context.Context                                                                                                              = (*langfuse.Client).WithSampleRate
 	_ func(*langfuse.Client, context.Context) context.Context                                                                                                                       = (*langfuse.Client).WithBaggagePropagation
 	_ func(*langfuse.Client, context.Context) context.Context                                                                                                                       = (*langfuse.Client).WithTraceAttributesFromBaggage
@@ -84,6 +85,7 @@ var (
 	_ langfuse.MaskField = langfuse.MaskTraceMetadata
 	_ langfuse.MaskField = langfuse.MaskObservationMetadata
 	_ langfuse.MaskField = langfuse.MaskScoreMetadata
+	_ langfuse.MaskField = langfuse.MaskErrorMessage
 	_ langfuse.MaskField = langfuse.MaskDatasetMetadata
 	_ langfuse.MaskField = langfuse.MaskDatasetItemInput
 	_ langfuse.MaskField = langfuse.MaskDatasetItemExpectedOutput
@@ -117,6 +119,7 @@ func TestPublicMethodSurface(t *testing.T) {
 		"UpsertDatasetItem",
 		"WithBaggagePropagation",
 		"WithContentCapture",
+		"WithParent",
 		"WithSampleRate",
 		"WithTraceAttributes",
 		"WithTraceAttributesFromBaggage",

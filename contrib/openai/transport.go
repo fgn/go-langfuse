@@ -62,6 +62,7 @@ type options struct {
 	provider        string
 	noBodyInspect   bool
 	noContentExport bool
+	toolDefinitions bool
 }
 
 // WithObservationName derives observation names from the route
@@ -106,6 +107,16 @@ func WithoutBodyInspection() Option {
 // prevent it entirely.
 func WithoutContentExport() Option {
 	return func(o *options) { o.noContentExport = true }
+}
+
+// WithToolDefinitions exports the request's tool definitions inside
+// Input, next to the messages: each function tool's name, description,
+// and JSON-schema parameters, with every other tool type replaced by a
+// fixed placeholder. Definitions are developer-authored but can encode
+// product logic, so they are off by default; as Input they stay subject
+// to content capture and Mask.
+func WithToolDefinitions() Option {
+	return func(o *options) { o.toolDefinitions = true }
 }
 
 // CallAttributes are caller-supplied fields for attempts started under
@@ -177,5 +188,5 @@ func NewTransport(lf *langfuse.Client, base http.RoundTripper, opts ...Option) h
 			})
 		}
 	}
-	return wiretap.NewRoundTripper(lf, base, protocol{captureCap: cfg.CaptureCap}, cfg, adapterMarker)
+	return wiretap.NewRoundTripper(lf, base, protocol{captureCap: cfg.CaptureCap, toolDefinitions: resolved.toolDefinitions}, cfg, adapterMarker)
 }

@@ -15,6 +15,7 @@ const (
 	MaskTraceMetadata       MaskField = "trace metadata"
 	MaskObservationMetadata MaskField = "observation metadata"
 	MaskScoreMetadata       MaskField = "score metadata"
+	MaskErrorMessage        MaskField = "error message"
 
 	MaskDatasetMetadata           MaskField = "dataset metadata"
 	MaskDatasetItemInput          MaskField = "dataset item input"
@@ -93,8 +94,9 @@ type Config struct {
 	Disabled bool
 
 	// DisableContentCapture removes Input and Output supplied through
-	// ObservationAttributes by default. [Client.WithContentCapture] can override
-	// this setting for observations started on one client-scoped context path.
+	// ObservationAttributes, and [Observation.RecordError] text, by default.
+	// [Client.WithContentCapture] can override this setting for observations
+	// started on one client-scoped context path.
 	// It does not remove content emitted by third-party OpenTelemetry
 	// instrumentation. Identifiers, metadata, model data, and usage are still
 	// recorded.
@@ -103,16 +105,17 @@ type Config struct {
 	// Mask redacts content before it leaves the process. It receives each value
 	// exactly as the caller supplied it, including json.RawMessage, and returns
 	// a replacement that is serialized the same way. Trace, observation, and
-	// score metadata arrive and must stay a map[string]any, and experiment
-	// metadata a JSON object; dataset metadata may be any JSON value. A nil
-	// return omits the value. A panic omits it from telemetry but fails an
+	// score metadata arrive and must stay a map[string]any, error text a
+	// string, and experiment metadata a JSON object; dataset metadata may be
+	// any JSON value. A nil return or a panic omits the value from telemetry,
+	// where error text becomes the payload-free "error"; a panic also fails an
 	// experiment start. Dataset writes fail on either, because an omitted
-	// dataset field keeps its stored value. Mask covers
-	// observation input and output, all metadata, dataset item content, and
-	// experiment expected output; it never sees identifiers, names,
-	// descriptions, schemas, model fields, StatusMessage,
-	// [Observation.RecordError] text, or third-party spans. Calls are
-	// synchronous and concurrent, so Mask must be fast and concurrency-safe.
+	// dataset field keeps its stored value. Mask covers observation input and
+	// output, [Observation.RecordError] text, all metadata, dataset item
+	// content, and experiment expected output; it never sees identifiers,
+	// names, descriptions, schemas, model fields, StatusMessage, or
+	// third-party spans. Calls are synchronous and concurrent, so Mask must be
+	// fast and concurrency-safe.
 	Mask func(field MaskField, value any) any
 
 	envErr error

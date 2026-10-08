@@ -7,8 +7,8 @@ metadata, model parameters, status messages, and errors can also contain
 sensitive data.
 
 Set `LANGFUSE_CONTENT_CAPTURE_ENABLED=false`, or configure
-`DisableContentCapture`, to drop SDK-supplied `Input` and `Output` while still
-recording every other field. `Client.WithContentCapture` can override that
+`DisableContentCapture`, to drop SDK-supplied `Input` and `Output` and replace
+`RecordError` text with `"error"` while still recording every other field. `Client.WithContentCapture` can override that
 default for observations started on one client-scoped local context tree. Each
 observation retains the decision made at start for all later `Update` calls.
 The privacy boundary is deliberately narrow:
@@ -19,13 +19,14 @@ The privacy boundary is deliberately narrow:
 | `ObservationAttributes.Metadata` | No | Yes, once as the complete `map[string]any` |
 | `TraceAttributes.Metadata` | No | Yes, once as the complete `map[string]any` |
 | Observation name/type, trace name, user/session IDs, tags, version, level, `StatusMessage`, model/parameters, usage, costs, prompt, and completion time | No | No |
-| `RecordError(err)` text and exception event | No | No |
+| `RecordError(err)` text (status and exception-event message) | Yes, replaced by `"error"` | Yes, as `MaskErrorMessage`, unless content capture is disabled |
+| `RecordError(err)` exception type | No | No |
 | `Score` metadata | No | Yes, once as the complete `map[string]any` |
 | `ExperimentItem.ExpectedOutput` | Yes, on the starting context | Yes, once per item start, unless content capture is disabled |
 | `Experiment.Metadata` (or `ExperimentRun.Metadata`) and `ExperimentItem.Metadata` when it is a JSON object (exported on every span of the item trace) | No | Yes, once per item start as the complete value; other item metadata is not exported |
 | `RunExperiment` copies: item input and task output on the item root and in each evaluator observation's input, with the expected output and item metadata; evaluation metadata in the evaluator observation's output | Yes, except the root's metadata | Once per value under its own field (`MaskObservationInput`, `MaskObservationOutput`, `MaskExperimentItemExpectedOutput`, `MaskExperimentItemMetadata`, `MaskScoreMetadata`); every copy reuses that result, frozen when it was masked, so a callback that later changes the value cannot change what is exported. The root's metadata (masked item and run metadata) also passes `MaskObservationMetadata` |
 | `RunExperiment` dataset run link: the masked experiment metadata | No | Yes, as `MaskExperimentMetadata` above |
-| Task and evaluator error text (recorded like `RecordError`); a recovered panic records a fixed text | No | No |
+| Task and evaluator errors, recorded with `RecordError` (a recovered panic as a fixed error without the panic value) | Yes, replaced by `"error"` | Yes, as `MaskErrorMessage`, unless content capture is disabled |
 | `DatasetItemSpec` input, expected output, and metadata; `DatasetSpec` metadata (REST writes) | No | Yes, once per supplied field; failure rejects the write |
 | Evaluation names, values, and comments (scores) | No | Evaluation metadata only, as `Score` metadata |
 | Experiment and dataset IDs, names, run names, and descriptions; dataset schemas; item versions, statuses, and source trace and observation IDs | No | No |
@@ -60,12 +61,16 @@ Experiment item IDs are identifiers and never masked, which is why the Go
 runner requires explicit IDs instead of deriving them from the input as the
 official SDKs do.
 
-Disabling content capture does not make metadata, model parameters, status
-messages, or errors safe. `RecordError` exports `err.Error()` as the OTel
-status description, Langfuse status message, and exception-event message. Use
-payload-free error values or sanitize an error before passing it to
-`RecordError`; never put credentials, PHI, prompts, or completions in an error
-or `StatusMessage`.
+Disabling content capture does not make metadata, model parameters, or status
+messages safe. Error text is content: provider and application errors often
+echo request or response text. With content capture disabled, `RecordError`
+never calls `err.Error()`; the OTel status description, Langfuse status
+message, and exception-event message are the payload-free `"error"`, and only
+the Go error type is exported. With capture enabled, the text passes through
+`Mask` as `MaskErrorMessage`; a masker that returns anything but a string, or
+panics, yields `"error"`. To record a known payload-free failure category in
+any mode, set `Level` and `StatusMessage` through `Update`. Never put
+credentials, PHI, prompts, or completions in a `StatusMessage`.
 
 `WithContentCapture` is local process state, not an authorization system or a
 cross-process propagation mechanism. Call it only after the application has
@@ -90,6 +95,8 @@ func redactSDKValue(field langfuse.MaskField, value any) any {
 	switch field {
 	case langfuse.MaskObservationInput, langfuse.MaskObservationOutput:
 		return "[redacted]"
+	case langfuse.MaskErrorMessage:
+		return "[redacted error]"
 	case langfuse.MaskTraceMetadata, langfuse.MaskObservationMetadata, langfuse.MaskScoreMetadata,
 		langfuse.MaskDatasetMetadata, langfuse.MaskDatasetItemMetadata,
 		langfuse.MaskExperimentMetadata, langfuse.MaskExperimentItemMetadata:

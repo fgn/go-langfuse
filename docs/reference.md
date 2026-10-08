@@ -13,7 +13,7 @@
 | `LANGFUSE_RELEASE` | Application release stamped on observations |
 | `LANGFUSE_SAMPLE_RATE` | Fraction of traces exported in isolated mode, `[0, 1]`; unset keeps everything |
 | `LANGFUSE_TRACING_ENABLED` | Set to `false` for a complete no-op client |
-| `LANGFUSE_CONTENT_CAPTURE_ENABLED` | Set to `false` to drop SDK input/output |
+| `LANGFUSE_CONTENT_CAPTURE_ENABLED` | Set to `false` to drop SDK input/output and replace `RecordError` text with `"error"` |
 
 Export buffering is tuned only through `Config`; it has no environment
 variables:
@@ -165,6 +165,19 @@ handoff even though the background work is a separate trace. This contract is
 locked by the SDK's tests. The span-context reset is shared OpenTelemetry
 state: other tracers using the detached context also start new traces.
 
+`Client.WithParent(ctx, parent)` is the inverse bridge: observations started
+directly on the returned context become children of `parent`, in its trace,
+while `ctx`'s active OpenTelemetry span stays in place for other tracers. Use
+it when instrumented work, such as an HTTP client call observed by a contrib
+transport, runs under an application span that exports to another backend
+while its Langfuse parent lives on a detached path. Each started observation
+returns its ordinary context, so its children nest normally. The children
+inherit `parent`'s root claim and, in isolated mode, its sampling decision; a
+borrowed provider's sampler stays authoritative. Score-suppression authority
+that `ctx`'s path already lost in `parent`'s trace is never restored. Content
+capture, cancellation, trace attributes, and baggage opt-in come from `ctx`,
+not from `parent`'s former path.
+
 ## Observation semantics
 
 For generations and embeddings, keep the model, input, output, usage, cost,
@@ -200,8 +213,9 @@ provider):
   order, at most 64 unique values and 16 KiB per trace context.
 - Each JSON-serialized input, output, metadata value, model-parameter map, or
   cost map: 1 MiB. Direct text (names, model names, versions, prompts, status
-  messages): 16 KiB. `RecordError` replaces invalid UTF-8 or text over 64 KiB
-  with `"error"`.
+  messages): 16 KiB. `RecordError` exports `"error"` when content capture is
+  disabled, and replaces invalid UTF-8, text over 64 KiB, or a non-string
+  `MaskErrorMessage` result with `"error"`.
 - Observation payload attributes: 2 MiB in aggregate; lower-priority fields
   over the budget are omitted with a payload-free diagnostic. One OTLP request
   is capped at 4 MiB, with automatic splitting described under
@@ -410,8 +424,10 @@ evaluator, an item without a valid ID) is returned before anything runs.
 Everything else is per item: `ExperimentItemResult.Err` for a failed start,
 link, or task, `EvaluationErr` for failed evaluators and rejected scores, and
 `ExperimentResult.RunEvaluationErr` for run evaluators. Task and evaluator
-errors are recorded on their observations like `RecordError`, so their text is
-exported; a panic is recovered and recorded with a fixed text. Canceling
+errors are recorded on their observations with `RecordError`, so their text is
+content: masked as `MaskErrorMessage`, or `"error"` with content capture off.
+A panic is recovered and recorded as a fixed error without the panic value.
+Canceling
 `ctx` stops starting items, marks the rest with the context error, stops
 running run evaluators, skips run scores and the flush, and returns the
 context error with the partial result; `RunExperiment` still waits for

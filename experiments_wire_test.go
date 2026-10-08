@@ -1,6 +1,7 @@
 package langfuse_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
@@ -222,6 +223,58 @@ func TestExperimentWireIdentityIsScopedToTheItemTrace(t *testing.T) {
 	}
 	if span := observationWireSpanNamed(t, spans, "after-failed").span; len(span.ParentSpanId) != 0 {
 		t.Fatal("work after a failed nested start kept the outer span as its parent")
+	}
+}
+
+func TestExperimentWireItemRootsIgnoreWithParent(t *testing.T) {
+	client, receiver := newObservationWireClient(t, nil)
+	_, run := client.StartObservation(context.Background(), "run", langfuse.TypeAgent, langfuse.ObservationAttributes{})
+	parentCtx := client.WithParent(context.Background(), run)
+
+	itemCtx, root, err := client.StartExperimentItem(parentCtx, wireExperiment(), langfuse.ExperimentItem{ID: "item"},
+		"item", langfuse.ObservationAttributes{})
+	if err != nil {
+		t.Fatalf("StartExperimentItem() error = %v", err)
+	}
+	_, child := client.StartObservation(itemCtx, "item-child", langfuse.TypeSpan, langfuse.ObservationAttributes{})
+	child.End()
+	root.End()
+	failedCtx, _, err := client.StartExperimentItem(parentCtx, wireExperiment(), langfuse.ExperimentItem{},
+		"failed", langfuse.ObservationAttributes{})
+	if !errors.Is(err, langfuse.ErrInvalidExperiment) {
+		t.Fatalf("invalid start error = %v, want ErrInvalidExperiment", err)
+	}
+	_, afterFailed := client.StartObservation(failedCtx, "after-failed", langfuse.TypeSpan, langfuse.ObservationAttributes{})
+	afterFailed.End()
+	_, underRun := client.StartObservation(client.WithParent(itemCtx, run), "under-run", langfuse.TypeSpan,
+		langfuse.ObservationAttributes{})
+	underRun.End()
+	run.End()
+
+	spans := exportObservationWireSpans(t, client, receiver, 5)
+	runSpan := observationWireSpanNamed(t, spans, "run").span
+	itemSpan := observationWireSpanNamed(t, spans, "item").span
+	if len(itemSpan.ParentSpanId) != 0 || bytes.Equal(itemSpan.TraceId, runSpan.TraceId) {
+		t.Fatal("the item root joined the WithParent parent instead of starting its own trace")
+	}
+	if span := observationWireSpanNamed(t, spans, "item-child").span; !bytes.Equal(span.ParentSpanId, itemSpan.SpanId) {
+		t.Fatalf("item child parent = %x, want the item root %x", span.ParentSpanId, itemSpan.SpanId)
+	}
+	if span := observationWireSpanNamed(t, spans, "after-failed").span; len(span.ParentSpanId) != 0 ||
+		bytes.Equal(span.TraceId, runSpan.TraceId) {
+		t.Fatal("work after a failed start kept the WithParent parent")
+	}
+	if span := observationWireSpanNamed(t, spans, "under-run").span; !bytes.Equal(span.ParentSpanId, runSpan.SpanId) {
+		t.Fatalf("WithParent from an item context parent = %x, want the run %x", span.ParentSpanId, runSpan.SpanId)
+	}
+	attributes := wireAttributes(t, spans, "under-run")
+	for _, key := range experimentKeys {
+		if _, found := attributes[key]; found {
+			t.Errorf("a span outside the item trace carries %s", key)
+		}
+	}
+	if attributes[environmentKey] != wireEnv {
+		t.Errorf("span outside the item trace environment = %#v, want the client environment", attributes[environmentKey])
 	}
 }
 

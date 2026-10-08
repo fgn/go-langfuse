@@ -30,6 +30,11 @@ type Observation struct {
 	// zero when the span started at the current time. It is written once
 	// before the handle is shared and is read without the lock.
 	startTime time.Time
+	// decision and claim are the trace decision and application-root claim
+	// this observation's own context carries, so a child started through
+	// [Client.WithParent] inherits them even after this observation ends.
+	decision traceDecision
+	claim    traceClaim
 	// contentCapture is the immutable policy resolved from the starting
 	// context. Updates do not accept a context, so retaining the decision here
 	// prevents the observation's payload policy from changing over its lifetime.
@@ -101,11 +106,22 @@ func (c *Client) startObservation(
 	if attributesOmitted {
 		diagnostic.Report("observation attributes exceed the aggregate size limit; remaining fields omitted")
 	}
-	parentSpanContext := oteltrace.SpanFromContext(ctx).SpanContext()
+	startCtx := ctx
+	if parent := c.parentOverride(ctx); parent != nil {
+		// An item root starts a new trace whatever parent ctx names, and its
+		// children nest under it.
+		if !experimentRoot {
+			startCtx = oteltrace.ContextWithSpan(ctx, parent.span)
+			startCtx = context.WithValue(startCtx, traceDecisionContextKey{client: c}, c.overrideDecision(ctx, parent))
+			startCtx = context.WithValue(startCtx, traceClaimContextKey{client: c}, parent.claim)
+		}
+		startCtx = context.WithValue(startCtx, parentContextKey{client: c}, (*Observation)(nil))
+	}
+	parentSpanContext := oteltrace.SpanFromContext(startCtx).SpanContext()
 	if experimentRoot {
 		parentSpanContext = oteltrace.SpanContext{}
 	}
-	if experimentRoot || c.experimentAttributes(ctx, parentSpanContext.TraceID()) != nil {
+	if experimentRoot || c.experimentAttributes(startCtx, parentSpanContext.TraceID()) != nil {
 		// Trace state re-applied by a later WithTraceAttributes must not
 		// move an item span out of the experiment environment.
 		if explicit == nil {
@@ -134,12 +150,12 @@ func (c *Client) startObservation(
 	// re-enter Shutdown, so admission is decided by the component being torn
 	// down.
 	token := &observationAdmission{}
-	startCtx := context.WithValue(ctx, admissionTokenContextKey{client: c}, token)
+	tracerCtx := context.WithValue(startCtx, admissionTokenContextKey{client: c}, token)
 	alwaysSample := experimentRoot && c.owned
 	if alwaysSample {
-		startCtx = context.WithValue(startCtx, sampleRateContextKey{client: c}, 1.0)
+		tracerCtx = context.WithValue(tracerCtx, sampleRateContextKey{client: c}, 1.0)
 	}
-	spanCtx, span := c.tracer.Start(startCtx, name, options...)
+	spanCtx, span := c.tracer.Start(tracerCtx, name, options...)
 	if alwaysSample {
 		// Descendants inherit the root's decision; a later trace started
 		// from the returned context uses the caller's rate.
@@ -176,17 +192,38 @@ func (c *Client) startObservation(
 		attributeSizes: attributeSizes,
 		attributeBytes: attributeBytes,
 	}
+	observation.decision = c.nextTraceDecision(startCtx, parentSpanContext, span.SpanContext())
 	spanCtx = context.WithValue(spanCtx, observationContextKey{client: c}, observation)
-	spanCtx = context.WithValue(spanCtx, traceDecisionContextKey{client: c},
-		c.nextTraceDecision(ctx, parentSpanContext, span.SpanContext()))
+	spanCtx = context.WithValue(spanCtx, traceDecisionContextKey{client: c}, observation.decision)
 	if span.IsRecording() && span.SpanContext().IsSampled() && token.expected.Load() {
 		spanCtx = c.withTraceClaim(spanCtx, span.SpanContext().TraceID())
 	}
+	observation.claim = c.traceClaimState(spanCtx)
 	// On a propagation-marked path the returned context's baggage is
 	// rebuilt so a new sampled root replaces the outbound trace claim and a
 	// sampled-out root stops exporting one that no longer matches.
 	spanCtx = c.syncBaggage(spanCtx, false, false)
 	return spanCtx, observation
+}
+
+// overrideDecision inherits parent's sampling result for a WithParent start.
+// It never restores score-suppression authority that ctx's own path already
+// lost in parent's trace: a non-authoritative decision for that trace, or an
+// ambient span in that trace that is not the path's last SDK span, is a
+// foreign hop. An ambient span in another trace does not downgrade.
+func (c *Client) overrideDecision(ctx context.Context, parent *Observation) traceDecision {
+	decision := parent.decision
+	previous, known := ctx.Value(traceDecisionContextKey{client: c}).(traceDecision)
+	known = known && previous.traceID == decision.traceID
+	if known && !previous.authoritative {
+		decision.authoritative = false
+	}
+	ambient := oteltrace.SpanFromContext(ctx).SpanContext()
+	if ambient.IsValid() && ambient.TraceID() == decision.traceID &&
+		(!known || previous.lastSDKSpanID != ambient.SpanID()) {
+		decision.authoritative = false
+	}
+	return decision
 }
 
 // nextTraceDecision derives the trace decision the started span publishes on
@@ -465,9 +502,13 @@ func acceptedExplicitAttributes(explicit map[string]struct{}, attributes []attri
 
 // RecordError records an exception and marks the observation as failed. It
 // does not end the observation. At most eight exception events are retained;
-// later calls are omitted with one diagnostic. The error text is explicitly
-// supplied content and is not processed by Config.Mask. Invalid UTF-8 or text
-// over 64 KiB is replaced by the payload-free string "error".
+// later calls are omitted with one diagnostic. Error text is content: it is
+// exported only when content capture is enabled for the observation, and then
+// passes through Config.Mask as [MaskErrorMessage]. Otherwise, and when the
+// text is invalid UTF-8, over 64 KiB, or masked to anything but a string, the
+// status and exception message are the payload-free string "error". The
+// exception type is always recorded. For a payload-free failure category,
+// set Level and StatusMessage through [Observation.Update] instead.
 func (o *Observation) RecordError(err error) {
 	if o == nil || err == nil || o.client == nil || o.span == nil {
 		return
@@ -502,7 +543,7 @@ func (o *Observation) RecordError(err error) {
 	o.errorEvents++
 	o.mu.Unlock()
 
-	message := safeErrorMessage(err)
+	message := o.errorMessage(err)
 	if o.client.stopped.Load() {
 		o.client.reportStoppedOnce()
 		return
@@ -544,19 +585,47 @@ func errorType(err error) string {
 	return typeOf.PkgPath() + "." + typeOf.Name()
 }
 
-func safeErrorMessage(err error) (message string) {
+func (o *Observation) errorMessage(err error) string {
+	if !o.contentCapture {
+		return "error"
+	}
+	message, ok := errorText(err)
+	if !ok || o.client.mask == nil {
+		return message
+	}
+	masked, ok := maskErrorMessage(o.client.mask, message)
+	if !ok || !utf8.ValidString(masked) || len(masked) > lfattr.MaxErrorMessageBytes {
+		return "error"
+	}
+	return masked
+}
+
+func maskErrorMessage(mask func(string, any) any, message string) (masked string, ok bool) {
+	defer func() {
+		if recover() != nil {
+			diagnostic.Report("masker panicked; error message replaced")
+			masked, ok = "", false
+		}
+	}()
+	masked, ok = mask(string(MaskErrorMessage), message).(string)
+	return masked, ok
+}
+
+// errorText reports whether err's text is usable; otherwise it returns the
+// payload-free "error". A literal "error" text is usable, so it is still masked.
+func errorText(err error) (message string, ok bool) {
 	defer func() {
 		if recover() != nil {
 			diagnostic.Report("error string method panicked; generic error recorded")
-			message = "error"
+			message, ok = "error", false
 		}
 	}()
 	message = err.Error()
 	if !utf8.ValidString(message) || len(message) > lfattr.MaxErrorMessageBytes {
 		diagnostic.Report("error string is invalid or exceeds the internal size limit; generic error recorded")
-		return "error"
+		return "error", false
 	}
-	return message
+	return message, true
 }
 
 func normalizeObservationStrings(values ObservationAttributes) ObservationAttributes {

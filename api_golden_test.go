@@ -222,6 +222,8 @@ const MaskDatasetItemMetadata MaskField = "dataset item metadata"
 
 const MaskDatasetMetadata MaskField = "dataset metadata"
 
+const MaskErrorMessage MaskField = "error message"
+
 const MaskExperimentItemExpectedOutput MaskField = "experiment item expected output"
 
 const MaskExperimentItemMetadata MaskField = "experiment item metadata"
@@ -338,6 +340,8 @@ func (c *Client) UpsertDatasetItem(ctx context.Context, spec DatasetItemSpec) (D
 func (c *Client) WithBaggagePropagation(ctx context.Context) context.Context
 
 func (c *Client) WithContentCapture(ctx context.Context, enabled bool) context.Context
+
+func (c *Client) WithParent(ctx context.Context, parent *Observation) context.Context
 
 func (c *Client) WithSampleRate(ctx context.Context, fraction float64) context.Context
 

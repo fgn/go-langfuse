@@ -51,13 +51,12 @@ application-root marker in other exporters even if the filter rejects it at
 end. Use an isolated provider when destination isolation is required.
 
 Content controls on `Config` are not provider-wide scrubbers.
-`DisableContentCapture` drops only SDK-supplied observation input/output.
-`Mask` receives a `MaskField` with SDK-supplied observation input/output and
-observation, trace, or score metadata. It does not receive names, IDs, tags,
-model parameters, status/error text, score comments or values, or
-provider/framework attributes and events. In particular, `RecordError` exports
-`err.Error()` without masking. Configure third-party instrumentation
-independently and use payload-free error/status values.
+`DisableContentCapture` drops only SDK-supplied observation input/output and
+`RecordError` text. `Mask` receives a `MaskField` with SDK-supplied observation
+input/output, `RecordError` text, and observation, trace, or score metadata. It
+does not receive names, IDs, tags, model parameters, status messages, score
+comments or values, or provider/framework attributes and events. Configure
+third-party instrumentation independently and use payload-free status values.
 
 SDK observation scopes carry the project public key so each processor can
 reject another project's SDK spans; other exporters on the shared provider see

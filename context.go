@@ -32,6 +32,7 @@ type (
 	sampleRateContextKey     struct{ client *Client }
 	contentCaptureContextKey struct{ client *Client }
 	admissionTokenContextKey struct{ client *Client }
+	parentContextKey         struct{ client *Client }
 )
 
 type traceState struct {
@@ -159,9 +160,9 @@ func (c *Client) WithSampleRate(ctx context.Context, fraction float64) context.C
 // this context path. The decision is client-scoped, inherited by child
 // contexts, and fixed on each observation when it starts so later
 // [Observation.Update] calls use the same policy. It controls only
-// [ObservationAttributes.Input] and [ObservationAttributes.Output]; metadata,
-// errors, scores, and third-party OpenTelemetry data keep their documented
-// policies.
+// [ObservationAttributes.Input], [ObservationAttributes.Output], and
+// [Observation.RecordError] text; metadata, status messages, scores, and
+// third-party OpenTelemetry data keep their documented policies.
 func (c *Client) WithContentCapture(ctx context.Context, enabled bool) context.Context {
 	if c == nil || c.isDisabled() || ctx == nil {
 		return ctx
@@ -171,6 +172,41 @@ func (c *Client) WithContentCapture(ctx context.Context, enabled bool) context.C
 		return ctx
 	}
 	return context.WithValue(ctx, contentCaptureContextKey{client: c}, enabled)
+}
+
+// WithParent returns a context on which SDK observations of this client start
+// as children of parent, in parent's trace, while ctx's active OpenTelemetry
+// span stays unchanged for every other tracer. Use it when the observation's
+// parent lives on another context path, such as a call made under an
+// application span that exports to a different backend; making parent's
+// context active instead would re-parent that backend's spans under a span it
+// never receives.
+//
+// The binding applies to every observation started directly on the returned
+// context. Each started observation returns its own ordinary context, with
+// itself as the active span, so its children nest normally. Started
+// observations inherit parent's root claim and, with the SDK-owned provider,
+// parent's sampling decision; a borrowed provider's sampler stays
+// authoritative. Score-suppression authority that ctx's path already lost in
+// parent's trace is not restored. Content capture, cancellation, deadline,
+// values, trace attributes, and baggage opt-in all come from ctx, so ctx
+// should carry the same user, session, and metadata as parent's path.
+// Experiment identity is not copied from parent. A nil parent or one from
+// another client is ignored with a diagnostic.
+func (c *Client) WithParent(ctx context.Context, parent *Observation) context.Context {
+	if c == nil || c.isDisabled() || ctx == nil {
+		return ctx
+	}
+	if parent == nil || parent.client != c || parent.span == nil {
+		diagnostic.Report("parent observation is missing or from another client; override ignored")
+		return ctx
+	}
+	return context.WithValue(ctx, parentContextKey{client: c}, parent)
+}
+
+func (c *Client) parentOverride(ctx context.Context) *Observation {
+	parent, _ := ctx.Value(parentContextKey{client: c}).(*Observation)
+	return parent
 }
 
 func (c *Client) contentCaptureEnabled(ctx context.Context) bool {
