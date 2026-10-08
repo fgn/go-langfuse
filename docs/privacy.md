@@ -22,6 +22,14 @@ The privacy boundary is deliberately narrow:
 | `RecordError(err)` text (status and exception-event message) | Yes, replaced by `"error"` | Yes, as `MaskErrorMessage`, unless content capture is disabled |
 | `RecordError(err)` exception type | No | No |
 | `Score` metadata | No | Yes, once as the complete `map[string]any` |
+| `ExperimentItem.ExpectedOutput` | Yes, on the starting context | Yes, once per item start, unless content capture is disabled |
+| `Experiment.Metadata` (or `ExperimentRun.Metadata`) and `ExperimentItem.Metadata` when it is a JSON object (exported on every span of the item trace) | No | Yes, once per item start as the complete value; other item metadata is not exported |
+| `RunExperiment` copies: item input and task output on the item root and in each evaluator observation's input, with the expected output and item metadata; evaluation metadata in the evaluator observation's output | Yes, except the root's metadata | Once per value under its own field (`MaskObservationInput`, `MaskObservationOutput`, `MaskExperimentItemExpectedOutput`, `MaskExperimentItemMetadata`, `MaskScoreMetadata`); every copy reuses that result, frozen when it was masked, so a callback that later changes the value cannot change what is exported. The root's metadata (masked item and run metadata) also passes `MaskObservationMetadata` |
+| `RunExperiment` dataset run link: the masked experiment metadata | No | Yes, as `MaskExperimentMetadata` above |
+| Task and evaluator errors, recorded with `RecordError` (a recovered panic as a fixed error without the panic value) | Yes, replaced by `"error"` | Yes, as `MaskErrorMessage`, unless content capture is disabled |
+| `DatasetItemSpec` input, expected output, and metadata; `DatasetSpec` metadata (REST writes) | No | Yes, once per supplied field; failure rejects the write |
+| Evaluation names, values, and comments (scores) | No | Evaluation metadata only, as `Score` metadata |
+| Experiment and dataset IDs, names, run names, and descriptions; dataset schemas; item versions, statuses, and source trace and observation IDs | No | No |
 | `Score` comment and value | No | No |
 | OpenTelemetry resource attributes (`resource.Default`/`OTEL_RESOURCE_ATTRIBUTES` in isolated mode; caller resource in borrowed mode) | No | No |
 | Third-party OTel span attributes and events | No | No |
@@ -41,6 +49,18 @@ fixed protocol members only; metadata key suffixes and unknown member names
 are user- or wire-controlled and appear in diagnostics as counts, never as
 text.
 
+Dataset writes are REST calls, not telemetry: content capture does not apply,
+and masking fails closed. A nil or panicking `Mask` result fails the write
+before anything is sent, because an omitted field keeps its stored value.
+Langfuse keeps earlier item versions after an upsert or a delete. Dataset and
+experiment reads return stored content unmasked.
+
+`RunExperiment` passes items, outputs, and evaluations to the task and
+evaluators unmasked; masking applies only where they leave the process.
+Experiment item IDs are identifiers and never masked, which is why the Go
+runner requires explicit IDs instead of deriving them from the input as the
+official SDKs do.
+
 Disabling content capture does not make metadata, model parameters, or status
 messages safe. Error text is content: provider and application errors often
 echo request or response text. With content capture disabled, `RecordError`
@@ -59,10 +79,13 @@ metadata still passes through `Mask`, while score comments and values remain
 outside both the content-capture and masking controls.
 
 `Mask` receives a `MaskField` with each SDK value shown in the table. A
-metadata masker must return a `map[string]any`; returning another type omits
-that metadata. The SDK calls the masker synchronously. It must be fast,
-non-blocking, and concurrency-safe. Copy and recursively redact maps and slices
-rather than mutating caller-owned data:
+trace, observation, or score metadata masker must return a `map[string]any`;
+another type omits that metadata. An experiment metadata masker must return a
+value that encodes as a JSON object, such as a map, a struct, or an object
+`json.RawMessage`; another value fails the item start. Dataset metadata may be
+any JSON value. The SDK calls the masker synchronously. It must be fast, non-blocking,
+and concurrency-safe. Copy and recursively redact maps and slices rather than
+mutating caller-owned data:
 
 ```go
 cfg := langfuse.ConfigFromEnv()
@@ -74,10 +97,12 @@ func redactSDKValue(field langfuse.MaskField, value any) any {
 		return "[redacted]"
 	case langfuse.MaskErrorMessage:
 		return "[redacted error]"
-	case langfuse.MaskTraceMetadata, langfuse.MaskObservationMetadata, langfuse.MaskScoreMetadata:
+	case langfuse.MaskTraceMetadata, langfuse.MaskObservationMetadata, langfuse.MaskScoreMetadata,
+		langfuse.MaskDatasetMetadata, langfuse.MaskDatasetItemMetadata,
+		langfuse.MaskExperimentMetadata, langfuse.MaskExperimentItemMetadata:
 		return redactMetadata(value)
 	default:
-		return nil
+		return value
 	}
 }
 
@@ -106,7 +131,9 @@ func redactMetadata(value any) any {
 }
 ```
 
-The example fully replaces observation input and output. It assumes JSON-like
+The example fully replaces observation input and output and returns other
+values unchanged; returning nil would omit them, or fail a dataset write. It
+assumes JSON-like
 `map[string]any` and `[]any` metadata. A production masker must cover every
 concrete value type the application supplies, must be concurrency-safe, and
 should have tests proving its redaction policy.

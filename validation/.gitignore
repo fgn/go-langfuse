@@ -8,3 +8,6 @@
 *.candidate
 .envrc
 service_account.json
+# Installed dependencies of the pinned interop SDK agents.
+node_modules/
+.venv/

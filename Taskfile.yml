@@ -59,8 +59,9 @@ tasks:
   fuzz:check:
     desc: Run short fuzz smoke tests
     cmds:
-      - go test -mod=readonly ./internal/attributes -run='^$' -fuzz=FuzzEncode -fuzztime=2s
+      - go test -mod=readonly ./internal/attributes -run='^$' -fuzz='^FuzzEncode$' -fuzztime=2s
       - go test -mod=readonly ./internal/attributes -run='^$' -fuzz=FuzzNormalizeUsage -fuzztime=2s
+      - go test -mod=readonly ./internal/attributes -run='^$' -fuzz='^FuzzEncodeContent$' -fuzztime=2s
       - go test -mod=readonly ./internal/transport -run='^$' -fuzz=FuzzNormalizeEndpoint -fuzztime=2s
       - go test -mod=readonly . -run='^$' -fuzz=FuzzPromptCompile -fuzztime=2s
 
@@ -138,6 +139,12 @@ tasks:
     desc: Baggage interop corpus against the uv-locked Python oracle (credential-free; ACCEPT=accept to reseal)
     cmds:
       - cd validation && INTEROP_REGEN="{{.ACCEPT}}" GOWORK=off go test -tags=interop -count=1 -timeout=10m -run 'TestInterop' .
+
+  interop:datasets:
+    desc: Cross-SDK dataset and experiment round trips on a live Langfuse project (credentialed; never part of ci)
+    cmds:
+      - cd validation/datasetinterop/ts && npm ci --ignore-scripts --no-audit --no-fund
+      - cd validation && GOWORK=off go test -tags=datasetinterop -count=1 -v -timeout=30m -run '^TestDatasetInterop$' .
 
   ci:
     desc: Run all continuous-integration checks

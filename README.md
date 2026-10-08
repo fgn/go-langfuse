@@ -19,6 +19,9 @@ Langfuse.
 - **Scores and prompts included.** Evaluations and user feedback with
   asynchronous retried delivery; prompt management reads with caching,
   compilation, and guaranteed-availability fallbacks.
+- **Datasets and experiments.** Dataset reads and writes over REST, an
+  experiment runner with evaluators and run evaluators over dataset or local
+  items, and reads of stored Langfuse v4 experiment results.
 - **Deterministic trace sampling.** Per-request rates in one process, and a
   pure predicate for correlated app-level sampling such as gating an
   expensive LLM-judge evaluation to a subset of the traces kept for export.
@@ -29,7 +32,7 @@ Langfuse.
   score validation and score-queue admission failures are explicit. Export
   failures never escape observation calls.
 
-Datasets and administrative APIs are out of scope; use the Langfuse REST
+Administrative APIs are out of scope; use the Langfuse REST
 API for those. go-langfuse follows semantic versioning: until v1.0, minor
 releases may contain documented breaking changes; patch releases are always
 backward compatible.
@@ -242,6 +245,45 @@ others. `Compile` is lenient, `CompileStrict` reports unresolved variables,
 `Prompt.Source` distinguishes server, cache, stale, and fallback results.
 The [prompts example](examples/prompts/main.go) runs this flow end to end.
 
+## Datasets and experiments
+
+`DatasetItems` reads a dataset as of one instant, and `RunExperiment` runs a
+task over the items, scores each output with evaluators and the whole run
+with run evaluators, and links the run to the dataset, like the official
+Python and TypeScript runners:
+
+```go
+var items []langfuse.ExperimentItem
+query := langfuse.DatasetItemQuery{DatasetName: "triage", AsOf: time.Now()}
+for item, err := range lf.DatasetItems(ctx, query) {
+	if err != nil {
+		return err
+	}
+	items = append(items, item.ExperimentItem())
+}
+result, err := lf.RunExperiment(ctx, langfuse.ExperimentRun{
+	Name:  "triage",
+	Items: items,
+	Task: func(ctx context.Context, item langfuse.ExperimentItem) (any, error) {
+		return triage(ctx, item.Input) // observations started from ctx join the item trace
+	},
+	Evaluators:    []langfuse.Evaluator{correct},
+	RunEvaluators: []langfuse.RunEvaluator{accuracy},
+})
+if err != nil {
+	return err
+}
+fmt.Print(result.Summary(false))
+```
+
+Each item runs as its own trace, failures stay in the result per item, and
+canceling `ctx` stops the run. `StartExperimentItem` is the lower-level
+primitive for custom orchestration, and `Experiments` and `ExperimentItems`
+read stored results back. Dataset writes are never retried; a failed write
+that may have been applied wraps `ErrWriteOutcomeUnknown`. See the
+[reference](docs/reference.md#experiments) and the runnable
+[experiments example](examples/experiments/main.go).
+
 ## Content capture
 
 `Config.DisableContentCapture` is the client default for SDK-supplied
@@ -420,8 +462,8 @@ example are in the [privacy guide](docs/privacy.md).
 
 - [API reference and examples on pkg.go.dev](https://pkg.go.dev/github.com/fgn/go-langfuse)
 - [Configuration and behavior reference](docs/reference.md): environment
-  variables, buffering and backpressure, flush/shutdown, limits, sampling,
-  and current limitations
+  variables, datasets and experiments, buffering and backpressure,
+  flush/shutdown, limits, sampling, and current limitations
 - [Privacy guide](docs/privacy.md): the content-capture and masking boundary
 - [Existing OpenTelemetry guide](docs/existing-opentelemetry.md): borrowed
   provider lifecycle

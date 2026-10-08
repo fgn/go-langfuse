@@ -5,6 +5,23 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+- Update `google.golang.org/grpc` to v1.83.2 for GO-2026-6443 (server panic
+  on a missing authority or Host header) and `golang.org/x/text` to v0.41.0
+  for GO-2026-6629 (panic parsing crafted PRECIS input); govulncheck finds
+  neither reachable. `golang.org/x/net` follows as a gRPC requirement.
+- Add datasets (`UpsertDataset`, `GetDataset`, `Datasets`,
+  `UpsertDatasetItem`, `GetDatasetItem`, `DeleteDatasetItem`, `DatasetItems`)
+  and experiments (`RunExperiment` with evaluators, a composite evaluator, and
+  run evaluators; `StartExperimentItem`; `DatasetItem.ExperimentItem`;
+  `Experiments` and `ExperimentItems` reads), with new `MaskField` values for
+  their content. `Score.DatasetRunID` scores a dataset run. Dataset writes are
+  never retried; a failed write that may have been applied wraps
+  `ErrWriteOutcomeUnknown`. Cross-SDK round trips with the official Python
+  and TypeScript SDKs are covered by `task interop:datasets`.
+- **Behavior**: isolated mode always samples experiment item traces, whatever
+  `SampleRate` or `WithSampleRate` says. A score recorded with an item context
+  for the item trace uses the `sdk-experiment` environment.
+
 ## [0.11.0] - 2026-10-07
 
 - Update `google.golang.org/grpc` to v1.83.1 for GO-2026-6348 (heap exhaustion

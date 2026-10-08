@@ -228,6 +228,10 @@ provider):
 - A prompt response body and a prompt fallback: 1 MiB each. Prompt names: 500
   bytes; labels: 200 characters. These are local wire-safety bounds, not
   Langfuse validation; the server is stricter for labels.
+- Dataset requests: 1 MiB per dataset write, 4 MiB per item write, and 1 MiB
+  per masked content field. Responses: 8 MiB, or 16 MiB per page.
+- Experiment items: identifiers 255 bytes, descriptions 16 KiB, experiment
+  and item metadata 16 KiB each as JSON, expected output 256 KiB.
 
 ## Prompt management
 
@@ -307,6 +311,195 @@ error is intentionally not wrapped, so its text cannot echo config values
 into a caller-logged error. Warm the cache during startup with one
 `GetPrompt` call per prompt when guaranteed availability matters.
 
+## Datasets
+
+Dataset calls are synchronous. Before sending, the SDK checks only required
+names and IDs, UTF-8 and JSON validity, size limits, and masking; Langfuse
+validates the rest and rejects invalid input with HTTP 400. Error text names
+the operation and status, never content. Field rules are in the
+[package documentation](https://pkg.go.dev/github.com/fgn/go-langfuse).
+
+A write sends only the fields that are set, and Langfuse keeps every field it
+does not receive:
+
+| Field | Not sent when | Notes |
+| --- | --- | --- |
+| `DatasetSpec.Description` | nil | a pointer to `""` clears it |
+| `DatasetSpec.Metadata` | nil, including typed nil | any JSON value; cannot be cleared; an empty map stores `{}` |
+| `DatasetSpec.InputSchema`, `ExpectedOutputSchema` | empty | JSON `null` removes the schema |
+| `DatasetItemSpec.Input`, `ExpectedOutput`, `Metadata` | nil, including typed nil | any JSON value; cannot be cleared; null on a new item |
+| `DatasetItemSpec.ID` | empty | every call creates a new item |
+| `DatasetItemSpec.Status`, `SourceTraceID`, `SourceObservationID` | empty | a new item is `ACTIVE` |
+
+An explicit JSON null, such as `json.RawMessage("null")`, is rejected before
+sending: Langfuse ignores a null in an update, so the official SDKs' null and
+an omitted field both keep the stored value, and Go makes that explicit.
+
+Langfuse normalizes item content on write, for every SDK alike: it stores
+`""` as null and a top-level string that parses as JSON, such as `"true"` or
+`"{\"a\":1}"`, as that JSON value, and it parses numbers with JavaScript,
+keeping about 16 significant digits.
+
+| `MaskField` | Value | Called |
+| --- | --- | --- |
+| `MaskDatasetMetadata` | `DatasetSpec.Metadata` | once per write that sends it |
+| `MaskDatasetItemInput`, `MaskDatasetItemExpectedOutput`, `MaskDatasetItemMetadata` | `DatasetItemSpec` content | once per write that sends it |
+| `MaskExperimentMetadata`, `MaskExperimentItemMetadata` | `Experiment.Metadata` or `ExperimentRun.Metadata`, `ExperimentItem.Metadata` | once per item start, when it is a non-empty JSON object |
+| `MaskExperimentItemExpectedOutput` | `ExperimentItem.ExpectedOutput` | once per item start, when content capture is on |
+
+A write is sent once and never retried:
+
+| Failure | Result |
+| --- | --- |
+| HTTP 400, 401, 403, 404, 409, or 413, or no connection (the dial error is wrapped) | not applied |
+| Any other status (including 3xx, since redirects are not followed, and 408, 422, 429, 5xx), a connection lost after sending, cancellation in flight, or an unreadable, oversized, or invalid success response | wraps `ErrWriteOutcomeUnknown`; it may have been applied |
+
+`Datasets` lists the project's datasets, newest first, in pages of
+`DatasetQuery.PageSize`. With `AsOf`,
+`DatasetItems` returns the item versions valid at that instant and sets each
+item's `Version` to it; `item.ExperimentItem()` carries the dataset ID,
+content, and version into `RunExperiment` or `StartExperimentItem`. Without
+`AsOf` the read is best effort: items written during the loop can be skipped
+or repeated. Both iterators stop at the server's `totalPages` or an empty page
+and do not check pages for duplicates or consistency. Listings return
+`ACTIVE` items only; `GetDatasetItem` also returns archived items. Langfuse
+has no public API to delete a dataset.
+
+## Experiments
+
+### Running an experiment
+
+`RunExperiment` runs a task over a list of items, scores every output, scores
+the run, and flushes, like the official SDKs' `run_experiment` and
+`experiment.run`:
+
+```go
+result, err := lf.RunExperiment(ctx, langfuse.ExperimentRun{
+	Name:          "capitals",
+	Items:         items, // from DatasetItem.ExperimentItem, or local items with IDs
+	Task:          answer,
+	Evaluators:    []langfuse.Evaluator{exactMatch},
+	RunEvaluators: []langfuse.RunEvaluator{accuracy},
+})
+fmt.Print(result.Summary(false))
+```
+
+For each item, in up to `MaxConcurrency` goroutines (50 by default):
+
+1. An item without `Input` (nil or JSON null) fails. Otherwise the item root
+   observation `experiment-item-run` starts in a new trace with the item input
+   and the item and run metadata, plus `experiment_name`,
+   `experiment_run_name`, `dataset_id`, and `dataset_item_id`, as in the
+   official SDKs.
+2. A dataset item (one with `DatasetID`) is linked with
+   `POST /api/public/dataset-run-items` to the dataset run named `RunName`,
+   and the returned run ID becomes the experiment ID. On a Langfuse v4 server
+   in its default events_only mode the server derives that ID from the
+   project, dataset, and run name without storing anything; on a legacy or
+   dual-write server the call also creates the dataset run and its run item.
+   The response must echo the run name, item, trace, and root, and carry a
+   valid run ID; otherwise, as for any failed link, the item fails with its
+   root recorded as an error and ended, and no task runs. On a legacy server
+   the link can already exist then. Local items share a random 16-hex
+   experiment ID. Items from several datasets get one run ID per dataset; the
+   result and the run scores use the first.
+3. `Task` runs with a context that carries the root, so observations it
+   starts join the item trace. The root ends when the task returns; Langfuse
+   measures item latency on it.
+4. Each evaluator runs in its own evaluator observation, named after the
+   function, whose input holds the item input, the output, the expected output,
+   and the item metadata, each masked once and frozen before the next callback
+   could change it, and whose output holds the evaluations with their metadata
+   masked once as `MaskScoreMetadata`, the same copy the score sends.
+   `CompositeEvaluator` then runs with the evaluations so far when there are
+   any. Each evaluation becomes a score on the item root in environment
+   `sdk-experiment`.
+
+After every item has finished, `RunEvaluators` run with all item results,
+including failed ones, and for a dataset run their evaluations become scores
+on the dataset run (`Score.DatasetRunID`). A local run keeps them only in the
+result, as the official SDKs do. `RunExperiment` then calls `Flush`.
+
+Errors: an invalid run (no name, no task, a negative concurrency, a nil
+evaluator, an item without a valid ID) is returned before anything runs.
+Everything else is per item: `ExperimentItemResult.Err` for a failed start,
+link, or task, `EvaluationErr` for failed evaluators and rejected scores, and
+`ExperimentResult.RunEvaluationErr` for run evaluators. Task and evaluator
+errors are recorded on their observations with `RecordError`, so their text is
+content: masked as `MaskErrorMessage`, or `"error"` with content capture off. A
+panic is recovered and recorded as a fixed error without the panic value.
+Canceling `ctx` stops starting items, marks the rest with the context error,
+stops running run evaluators, skips run scores and the flush, and returns the
+context error with the partial result; `RunExperiment` still waits for running
+tasks and evaluators to return, and callers who keep the partial telemetry
+should flush with a fresh context. A flush failure is returned with the
+complete result. `Summary` counts task failures and items with evaluation
+errors separately and shows run evaluation errors; its averages are local
+evaluation values, including any whose score was rejected. On a nil or disabled
+client the tasks and evaluators run and nothing is exported or linked.
+
+Go adaptations of the official runners:
+
+| Behavior | Official SDKs | Go |
+| --- | --- | --- |
+| Local item IDs | derived from a SHA-256 of the input | required on every item; identifiers are not masked, so a derived ID would fingerprint unmasked content |
+| Failed items | logged and left out of the results | kept in `ItemResults` with `Err` |
+| Failed dataset run link | logged; the item runs under a fallback ID, splitting the run | the item fails |
+| Item score environment | the client's configured environment | `sdk-experiment`, the environment of the item trace |
+| Evaluator observations | Python: under an `experiment-item-evaluation` span; TypeScript: none | directly under the item root |
+| Cancellation | none | `ctx` |
+| Item metadata that is not an object | Python: passed to evaluators, not exported; TypeScript: sent serialized | passed to the task and evaluators, not exported |
+
+### Starting items yourself
+
+`StartExperimentItem` is the primitive the runner uses: it starts the item
+root in a new trace, then sets the item identity and environment
+`sdk-experiment` on it. Spans that later start in the item trace on this
+client's tracer provider, from a context derived from the returned one, get
+the identity and environment at start: child observations, evaluators after
+`End`, and other instrumentation. Score them with
+`RecordScore(itemCtx, Score{TraceID: root.TraceID(), ObservationID: root.ID()})`.
+
+- Sampling: isolated mode always samples the item trace, whatever
+  `SampleRate` or `WithSampleRate` says; later traces from the returned
+  context use the caller's rate. In borrowed mode the application's sampler
+  decides.
+- Export: the root starts with its identity attributes, so start-time
+  classification sees them, except the linked experiment ID of a dataset
+  item and the root's own span ID, which exist only after the start. Once
+  the identity is complete it is checked again, and an accepted root is its
+  trace's application root. A root that is sampled out, that
+  `ShouldExportSpan` rejects once its identity is complete, or whose identity
+  attributes a borrowed provider's span limits drop or truncate ends at once
+  with its identity blanked and a fixed error status, and the call returns
+  `ErrExperimentItemNotExported`. Truncated content, such as a long expected
+  output, is the provider's policy and does not fail the start.
+- Environment: `WithTraceAttributes` and `WithTraceAttributesFromBaggage`
+  leave spans of the item trace in `sdk-experiment`, and a score recorded with
+  an item context whose `TraceID` is the item trace uses it too.
+
+Known limits:
+
+- An item can still go missing with no error when a `ShouldExportSpan`
+  filter rejects the root only at its end, or when the export queue drops it.
+  Reconcile with `ExperimentItems`.
+- Spans on another tracer provider, such as global-provider instrumentation
+  in isolated mode, get no identity and are not exported by this client.
+- Identity does not cross process boundaries.
+
+### Reading results
+
+`Experiments` and `ExperimentItems` read the Langfuse v4 experiment API
+(`/api/public/experiments` and `/api/public/experiment-items`) with all field
+groups, one cursor page per request. `From` is required, filters take values
+without commas, and each experiment or item carries at most 50 scores, with
+BOOLEAN values as 0 or 1 and the target in the `Score` target fields.
+Langfuse builds experiments from ingested traces, so a run appears only after
+its spans are exported and processed. Item input, output, and expected output
+are returned as Langfuse stores them: the exported text, so a structured value
+usually arrives as a JSON string that holds its JSON. Metadata arrives
+flattened into dotted keys with string values.
+
 ## Buffering and backpressure
 
 Ended observations wait in a bounded in-memory queue (2048 spans by default)
@@ -345,6 +538,8 @@ and delivers queued scores; when its context ends first, undelivered scores
 are dropped with diagnostics. Short-lived jobs and serverless handlers can
 call `Flush` before returning if the client must remain usable; `Flush` also
 waits for queued scores, including one mid-retry, bounded by its context.
+`Shutdown` first cancels in-flight prompt and dataset requests and waits for
+them; later dataset calls fail without sending anything.
 
 In borrowed mode, shut down the Langfuse client before the application's
 tracer provider; the client never shuts down unrelated processors or
@@ -393,8 +588,9 @@ different kinds of work different rates in one process.
   parents, any path a foreign span has joined, and all borrowed-mode
   scores.
 - Detached contexts start a new trace root and re-decide with the surviving
-  requested rate. `SampleRate: 0` exports no traces while scores and prompts
-  keep working; `Disabled: true` remains the complete no-op.
+  requested rate. `SampleRate: 0` exports no traces except experiment items
+  while scores and prompts keep working; `Disabled: true` remains the
+  complete no-op.
 
 ## Current limitations
 
@@ -428,7 +624,7 @@ different kinds of work different rates in one process.
   and diagnosed without including their payload.
 - Batch export improves application latency but cannot survive an abrupt
   process exit. Graceful shutdown is required.
-- Multiple projects on one provider, datasets, and administrative APIs remain
+- Multiple projects on one provider and administrative APIs remain
   out of scope. Tail sampling (keep-all-errors) is not provided: the outcome is unknown when the trace
   root starts; use `WithSampleRate(ctx, 1)` for requests known to matter up
   front.

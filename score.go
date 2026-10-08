@@ -31,14 +31,17 @@ const (
 )
 
 const (
+	// maxScoreMetadataBytes bounds frozen evaluation metadata; the whole score
+	// event must also fit maxScorePayloadBytes.
+	maxScoreMetadataBytes  = maxScorePayloadBytes
 	maxScoreNameCharacters = 200
 	maxTextScoreCharacters = 500
 	maxScorePayloadBytes   = 128 << 10
 )
 
-// Score is one evaluation or feedback value attached to a trace, a session,
-// or an observation. Scores are submitted through the Langfuse JSON ingestion
-// API rather than the OpenTelemetry trace pipeline.
+// Score is one evaluation or feedback value attached to a trace, a session, an
+// observation, or a dataset run. Scores are submitted through the Langfuse
+// JSON ingestion API rather than the OpenTelemetry trace pipeline.
 type Score struct {
 	// ID makes submissions idempotent: Langfuse upserts scores by ID.
 	// Optional; the SDK generates a random ID when empty so retried
@@ -47,11 +50,14 @@ type Score struct {
 	// Name identifies the score series, for example "user-feedback".
 	// Required; at most 200 characters.
 	Name string
-	// TraceID, SessionID, and ObservationID select the score target. Exactly
-	// one of TraceID or SessionID is required, and ObservationID additionally
-	// requires TraceID. Correction scores cannot target sessions.
+	// TraceID, SessionID, DatasetRunID, and ObservationID select the score
+	// target. Exactly one of TraceID, SessionID, or DatasetRunID is required,
+	// and ObservationID additionally requires TraceID. DatasetRunID is an
+	// experiment ID returned by [Client.RunExperiment] for dataset items.
+	// Correction scores require a trace target.
 	TraceID       string
 	SessionID     string
+	DatasetRunID  string
 	ObservationID string
 	// Exactly one of NumericValue or StringValue must be set. NUMERIC and
 	// BOOLEAN use NumericValue, while CATEGORICAL, CORRECTION, and TEXT use
@@ -83,19 +89,27 @@ type Score struct {
 }
 
 // RecordScore submits one score through the Langfuse JSON ingestion endpoint
-// using the client's credentials and environment. The score is validated
-// synchronously, so every returned error marks a score that was not
-// accepted, and then queued for asynchronous delivery with bounded retry (network
-// errors, HTTP 408, 429, and 5xx responses, and per-item ingestion errors
-// with those statuses, using the same backoff defaults as observation
-// export), so transport failures never reach the caller: after the retry
-// budget they are reported as payload-free OpenTelemetry diagnostics and the
-// score is dropped. [Client.Flush] and [Client.Shutdown] drain accepted
-// scores. When the queue is full, the call returns [ErrScoreQueueFull] unless
-// Config.BlockOnQueueFull waits for space, bounded by ctx. A disabled client
-// returns nil without sending, and a shut-down client returns an error. The
-// complete serialized score event is limited to 128 KiB.
+// using the client's credentials and environment; a score for the experiment
+// item trace that ctx belongs to uses the item's "sdk-experiment" environment
+// instead. The score is validated synchronously, so every returned error marks
+// a score that was not accepted, and then queued for asynchronous delivery
+// with bounded retry (network errors, HTTP 408, 429, and 5xx responses, and
+// per-item ingestion errors with those statuses, using the same backoff
+// defaults as observation export), so transport failures never reach the
+// caller: after the retry budget they are reported as payload-free
+// OpenTelemetry diagnostics and the score is dropped. [Client.Flush] and
+// [Client.Shutdown] drain accepted scores. When the queue is full, the call
+// returns [ErrScoreQueueFull] unless Config.BlockOnQueueFull waits for space,
+// bounded by ctx. A disabled client returns nil without sending, and a
+// shut-down client returns an error. The complete serialized score event is
+// limited to 128 KiB.
 func (c *Client) RecordScore(ctx context.Context, score Score) error {
+	return c.recordScore(ctx, score, false)
+}
+
+// recordScore records score; metadataMasked marks Metadata that Mask has
+// already processed.
+func (c *Client) recordScore(ctx context.Context, score Score, metadataMasked bool) error {
 	if c == nil || c.isDisabled() || c.scores == nil {
 		return nil
 	}
@@ -111,7 +125,7 @@ func (c *Client) RecordScore(ctx context.Context, score Score) error {
 	if c.suppressScore(ctx, score) {
 		return nil
 	}
-	payload, eventID, err := c.buildScorePayload(score)
+	payload, eventID, err := c.buildScorePayload(score, c.scoreEnvironment(ctx, score), metadataMasked)
 	if err != nil {
 		return err
 	}
@@ -120,6 +134,16 @@ func (c *Client) RecordScore(ctx context.Context, score Score) error {
 		return ErrScoreQueueFull
 	}
 	return err
+}
+
+func (c *Client) scoreEnvironment(ctx context.Context, score Score) string {
+	if score.TraceID != "" {
+		if traceID, err := oteltrace.TraceIDFromHex(score.TraceID); err == nil &&
+			len(c.experimentAttributes(ctx, traceID)) != 0 {
+			return lfattr.ExperimentEnvironment
+		}
+	}
+	return c.environment
 }
 
 // suppressScore applies the sampling decision of the caller's context path to
@@ -164,6 +188,7 @@ func validateScore(score Score) error {
 		"score ID":             score.ID,
 		"score trace ID":       score.TraceID,
 		"score session ID":     score.SessionID,
+		"score dataset run ID": score.DatasetRunID,
 		"score observation ID": score.ObservationID,
 		"score config ID":      score.ConfigID,
 	} {
@@ -171,11 +196,14 @@ func validateScore(score Score) error {
 			return err
 		}
 	}
-	if score.TraceID == "" && score.SessionID == "" {
-		return errors.New("langfuse: score requires a trace ID or session ID target")
+	targets := 0
+	for _, target := range []string{score.TraceID, score.SessionID, score.DatasetRunID} {
+		if target != "" {
+			targets++
+		}
 	}
-	if score.TraceID != "" && score.SessionID != "" {
-		return errors.New("langfuse: score requires exactly one trace ID or session ID target")
+	if targets != 1 {
+		return errors.New("langfuse: score requires exactly one trace ID, session ID, or dataset run ID target")
 	}
 	if score.ObservationID != "" && score.TraceID == "" {
 		return errors.New("langfuse: score observation ID requires a trace ID")
@@ -204,7 +232,7 @@ func validateScore(score Score) error {
 		if score.StringValue == nil {
 			return errors.New("langfuse: CORRECTION score requires a string value")
 		}
-		if score.SessionID != "" {
+		if score.TraceID == "" {
 			return errors.New("langfuse: CORRECTION score requires a trace or observation target")
 		}
 		if score.ConfigID != "" {
@@ -237,10 +265,10 @@ func validateScore(score Score) error {
 // buildScorePayload serializes a validated score as a complete single-event
 // ingestion request, returning the envelope event ID the ingestion result
 // must account for.
-func (c *Client) buildScorePayload(score Score) ([]byte, string, error) {
+func (c *Client) buildScorePayload(score Score, environment string, metadataMasked bool) ([]byte, string, error) {
 	payload := map[string]any{
 		"name":        score.Name,
-		"environment": c.environment,
+		"environment": environment,
 	}
 	if score.NumericValue != nil {
 		payload["value"] = *score.NumericValue
@@ -263,6 +291,9 @@ func (c *Client) buildScorePayload(score Score) ([]byte, string, error) {
 	if score.SessionID != "" {
 		payload["sessionId"] = score.SessionID
 	}
+	if score.DatasetRunID != "" {
+		payload["datasetRunId"] = score.DatasetRunID
+	}
 	if score.ObservationID != "" {
 		payload["observationId"] = score.ObservationID
 	}
@@ -275,7 +306,11 @@ func (c *Client) buildScorePayload(score Score) ([]byte, string, error) {
 	if score.Comment != "" {
 		payload["comment"] = score.Comment
 	}
-	if metadata := lfattr.ScoreMetadata(score.Metadata, c.mask); len(metadata) != 0 {
+	metadata := score.Metadata
+	if !metadataMasked {
+		metadata = lfattr.ScoreMetadata(score.Metadata, c.mask)
+	}
+	if len(metadata) != 0 {
 		payload["metadata"] = metadata
 	}
 

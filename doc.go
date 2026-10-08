@@ -25,16 +25,18 @@
 //		})
 //
 // [Client.StartObservation] is the lower-level pair for lifetimes that span
-// functions; the context it returns carries the parent-child relationship,
-// so observations started from it nest under their parent.
-// [Client.RecordScore] submits evaluations and user feedback through the
-// Langfuse JSON ingestion endpoint, [Client.GetPrompt] loads
-// prompt-management prompts with client-side caching and an optional local
-// fallback, and [Client.Flush] and [Client.Shutdown] control the export
-// lifecycle. Whole traces can be sampled deterministically by trace ID
-// through [Config.SampleRate] and [Client.WithSampleRate], with
-// [TraceSampledAt] exposing the same decision for correlated
-// application-level sampling. [Client.WithContentCapture] can override the
-// client's input/output capture default for one local context tree. A nil or
-// disabled [Client] and the zero [Observation] are safe no-ops.
+// functions; the context it returns carries the parent-child relationship, so
+// observations started from it nest under their parent. [Client.RecordScore]
+// submits evaluations and user feedback through the Langfuse JSON ingestion
+// endpoint, [Client.GetPrompt] loads prompt-management prompts with
+// client-side caching and an optional local fallback,
+// [Client.UpsertDatasetItem] and [Client.DatasetItems] curate and read
+// datasets, [Client.RunExperiment] runs and scores an experiment over dataset
+// or local items with each item as its own trace, and [Client.Flush] and
+// [Client.Shutdown] control the export lifecycle. Whole traces can be sampled
+// deterministically by trace ID through [Config.SampleRate] and
+// [Client.WithSampleRate], with [TraceSampledAt] exposing the same decision
+// for correlated application-level sampling. [Client.WithContentCapture] can
+// override the client's input/output capture default for one local context
+// tree. A nil or disabled [Client] and the zero [Observation] are safe no-ops.
 package langfuse

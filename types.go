@@ -16,6 +16,15 @@ const (
 	MaskObservationMetadata MaskField = "observation metadata"
 	MaskScoreMetadata       MaskField = "score metadata"
 	MaskErrorMessage        MaskField = "error message"
+
+	MaskDatasetMetadata           MaskField = "dataset metadata"
+	MaskDatasetItemInput          MaskField = "dataset item input"
+	MaskDatasetItemExpectedOutput MaskField = "dataset item expected output"
+	MaskDatasetItemMetadata       MaskField = "dataset item metadata"
+
+	MaskExperimentMetadata           MaskField = "experiment metadata"
+	MaskExperimentItemMetadata       MaskField = "experiment item metadata"
+	MaskExperimentItemExpectedOutput MaskField = "experiment item expected output"
 )
 
 // Config configures a Langfuse client.
@@ -38,7 +47,8 @@ type Config struct {
 	// inherited by every SDK observation started on the deciding context
 	// path. nil selects the default of 1.0 (export everything); a non-nil
 	// value must be finite and within [0, 1], where 0 exports no traces while
-	// scores and prompts keep working. Other values are a validation error in
+	// scores and prompts keep working. [Client.StartExperimentItem] item
+	// traces are always sampled. Other values are a validation error in
 	// [New]. It is ignored with a diagnostic when TracerProvider is set,
 	// where the application's sampler remains authoritative.
 	// [Client.WithSampleRate] overrides it per context path.
@@ -92,15 +102,20 @@ type Config struct {
 	// recorded.
 	DisableContentCapture bool
 
-	// Mask applies only to observation Input and Output, [Observation.RecordError]
-	// text, and trace, observation, and score Metadata supplied through this
-	// Client. It receives the field and its complete typed value before
-	// serialization. Each metadata map must remain a map[string]any and error
-	// text a string to be retained. It does not process identifiers, model
-	// fields, StatusMessage, or third-party spans and events. Calls are synchronous and can occur
-	// concurrently, so the function must be fast, non-blocking, and
-	// concurrency-safe. A panic is recovered and the affected value is omitted;
-	// for error text the payload-free "error" is recorded instead.
+	// Mask redacts content before it leaves the process. It receives each value
+	// exactly as the caller supplied it, including json.RawMessage, and returns
+	// a replacement that is serialized the same way. Trace, observation, and
+	// score metadata arrive and must stay a map[string]any, error text a
+	// string, and experiment metadata a JSON object; dataset metadata may be
+	// any JSON value. A nil return or a panic omits the value from telemetry,
+	// where error text becomes the payload-free "error"; a panic also fails an
+	// experiment start. Dataset writes fail on either, because an omitted
+	// dataset field keeps its stored value. Mask covers observation input and
+	// output, [Observation.RecordError] text, all metadata, dataset item
+	// content, and experiment expected output; it never sees identifiers,
+	// names, descriptions, schemas, model fields, StatusMessage, or
+	// third-party spans. Calls are synchronous and concurrent, so Mask must be
+	// fast and concurrency-safe.
 	Mask func(field MaskField, value any) any
 
 	envErr error

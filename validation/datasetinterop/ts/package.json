@@ -1,0 +1,18 @@
+{
+  "name": "go-langfuse-dataset-interop",
+  "private": true,
+  "description": "Exact-pinned official TypeScript SDK for the go-langfuse dataset interop harness; run with npm ci.",
+  "type": "module",
+  "dependencies": {
+    "@langfuse/client": "5.13.1",
+    "@langfuse/core": "5.13.1",
+    "@langfuse/otel": "5.13.1",
+    "@langfuse/tracing": "5.13.1",
+    "@opentelemetry/api": "1.9.1",
+    "@opentelemetry/core": "2.9.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.220.0",
+    "@opentelemetry/otlp-exporter-base": "0.220.0",
+    "@opentelemetry/sdk-trace-base": "2.9.0",
+    "@opentelemetry/sdk-trace-node": "2.9.0"
+  }
+}

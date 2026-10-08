@@ -25,6 +25,10 @@ type ContextAttributesFunc func(context.Context) []otelattr.KeyValue
 // application-root claim for traceID.
 type TraceClaimFunc func(context.Context, oteltrace.TraceID) bool
 
+// ExperimentAttributesFunc returns the experiment item attributes that
+// replace a starting span's own values.
+type ExperimentAttributesFunc func(context.Context, oteltrace.TraceID) []otelattr.KeyValue
+
 // AdmitFunc accepts the pending admission token in ctx, confirming to the
 // starting SDK observation that this processor observed its start before any
 // teardown. expected reports whether the span passed start-time export
@@ -39,10 +43,11 @@ type Config struct {
 	Environment string
 	Release     string
 
-	ContextAttributes ContextAttributesFunc
-	HasTraceClaim     TraceClaimFunc
-	Admit             AdmitFunc
-	ShouldExportSpan  func(sdktrace.ReadOnlySpan) bool
+	ContextAttributes    ContextAttributesFunc
+	ExperimentAttributes ExperimentAttributesFunc
+	HasTraceClaim        TraceClaimFunc
+	Admit                AdmitFunc
+	ShouldExportSpan     func(sdktrace.ReadOnlySpan) bool
 }
 
 // Processor adds Langfuse propagation and application-root attributes, then
@@ -54,10 +59,11 @@ type Processor struct {
 	environment string
 	release     string
 
-	contextAttributes ContextAttributesFunc
-	hasTraceClaim     TraceClaimFunc
-	admit             AdmitFunc
-	shouldExportSpan  func(sdktrace.ReadOnlySpan) bool
+	contextAttributes    ContextAttributesFunc
+	experimentAttributes ExperimentAttributesFunc
+	hasTraceClaim        TraceClaimFunc
+	admit                AdmitFunc
+	shouldExportSpan     func(sdktrace.ReadOnlySpan) bool
 
 	stopped atomic.Bool
 
@@ -92,16 +98,17 @@ func New(config Config) (*Processor, error) {
 	}
 
 	return &Processor{
-		next:              config.Next,
-		publicKey:         config.PublicKey,
-		environment:       config.Environment,
-		release:           config.Release,
-		contextAttributes: config.ContextAttributes,
-		hasTraceClaim:     config.HasTraceClaim,
-		admit:             config.Admit,
-		shouldExportSpan:  shouldExportSpan,
-		expected:          make(map[spanKey]struct{}),
-		shutdownDone:      make(chan struct{}),
+		next:                 config.Next,
+		publicKey:            config.PublicKey,
+		environment:          config.Environment,
+		release:              config.Release,
+		contextAttributes:    config.ContextAttributes,
+		experimentAttributes: config.ExperimentAttributes,
+		hasTraceClaim:        config.HasTraceClaim,
+		admit:                config.Admit,
+		shouldExportSpan:     shouldExportSpan,
+		expected:             make(map[spanKey]struct{}),
+		shutdownDone:         make(chan struct{}),
 	}, nil
 }
 
@@ -117,6 +124,10 @@ func (p *Processor) OnStart(parent context.Context, span sdktrace.ReadWriteSpan)
 	// may itself be instrumented, and no callback should run while holding an
 	// SDK lifecycle lock.
 	propagated := safeContextAttributes(p.contextAttributes, parent)
+	var experiment []otelattr.KeyValue
+	if p.experimentAttributes != nil {
+		experiment = p.experimentAttributes(parent, span.SpanContext().TraceID())
+	}
 	claimed := safeHasTraceClaim(p.hasTraceClaim, parent, span.SpanContext().TraceID())
 
 	if p.stopped.Load() {
@@ -124,6 +135,9 @@ func (p *Processor) OnStart(parent context.Context, span sdktrace.ReadWriteSpan)
 	}
 
 	p.fillMissingAttributes(span, propagated)
+	if len(experiment) != 0 {
+		span.SetAttributes(experiment...)
+	}
 
 	spanContext := span.SpanContext()
 	expected := spanContext.IsSampled() && safeShouldExportSpan(p.shouldExportSpan, span, false)
@@ -173,6 +187,27 @@ func (p *Processor) OnStart(parent context.Context, span sdktrace.ReadWriteSpan)
 	}
 
 	p.next.OnStart(parent, span)
+}
+
+// Exports reports whether span, with its current attributes, passes the
+// export decision OnEnd makes; a panicking filter rejects it.
+func (p *Processor) Exports(span sdktrace.ReadOnlySpan) bool {
+	return !p.stopped.Load() && p.acceptsProjectSpan(span) && span.SpanContext().IsSampled() &&
+		safeShouldExportSpan(p.shouldExportSpan, span, true)
+}
+
+// Expect records a span that was accepted after its start as an expected
+// export, so that spans it parents are not marked as application roots.
+// OnEnd removes it; a span that has already ended is not recorded, since the
+// SDK sets its end time before OnEnd runs under the same lock.
+func (p *Processor) Expect(span sdktrace.ReadOnlySpan) {
+	spanContext := span.SpanContext()
+	p.expectationsMu.Lock()
+	defer p.expectationsMu.Unlock()
+	if p.stopped.Load() || !span.EndTime().IsZero() || len(p.expected) >= maxActiveExpectations {
+		return
+	}
+	p.expected[spanKey{traceID: spanContext.TraceID(), spanID: spanContext.SpanID()}] = struct{}{}
 }
 
 // OnEnd removes start-time state and applies the final smart filter. The end

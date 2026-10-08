@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"testing"
+	"unicode/utf8"
 
 	lfattr "github.com/fgn/go-langfuse/internal/attributes"
 )
@@ -53,6 +54,24 @@ func FuzzNormalizeUsage(f *testing.F) {
 		)
 		if ok && !json.Valid([]byte(encoded)) {
 			t.Fatalf("NormalizeUsage returned invalid JSON")
+		}
+	})
+}
+
+func FuzzEncodeContent(f *testing.F) {
+	f.Add([]byte(`"Paris"`))
+	f.Add([]byte(`{"a": [1, 2.50]}`))
+	f.Add([]byte("\xff"))
+	f.Fuzz(func(t *testing.T, raw []byte) {
+		encoded, present, err := lfattr.EncodeContent(json.RawMessage(raw), 1<<10)
+		if err != nil || !present {
+			return
+		}
+		if len(encoded) > 1<<10 {
+			t.Fatalf("encoded content exceeds its limit: %d", len(encoded))
+		}
+		if !utf8.ValidString(encoded) {
+			t.Fatalf("encoded content is not valid UTF-8")
 		}
 	})
 }

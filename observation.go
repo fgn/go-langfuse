@@ -2,6 +2,7 @@ package langfuse
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -63,6 +64,22 @@ func (c *Client) StartObservation(
 	observationType ObservationType,
 	values ObservationAttributes,
 ) (context.Context, *Observation) {
+	return c.startObservation(ctx, name, observationType, values, nil)
+}
+
+// itemRootStart marks an observation that starts an experiment item: the
+// root of a new trace, started with the item identity attributes so that
+// start-time classification sees them.
+type itemRootStart struct{ attributes []attribute.KeyValue }
+
+func (c *Client) startObservation(
+	ctx context.Context,
+	name string,
+	observationType ObservationType,
+	values ObservationAttributes,
+	itemRoot *itemRootStart,
+) (context.Context, *Observation) {
+	experimentRoot := itemRoot != nil
 	if c == nil || c.isDisabled() || ctx == nil {
 		return ctx, &Observation{}
 	}
@@ -89,13 +106,42 @@ func (c *Client) StartObservation(
 	if attributesOmitted {
 		diagnostic.Report("observation attributes exceed the aggregate size limit; remaining fields omitted")
 	}
+	startCtx := ctx
+	if parent := c.parentOverride(ctx); parent != nil {
+		// An item root starts a new trace whatever parent ctx names, and its
+		// children nest under it.
+		if !experimentRoot {
+			startCtx = oteltrace.ContextWithSpan(ctx, parent.span)
+			startCtx = context.WithValue(startCtx, traceDecisionContextKey{client: c}, c.overrideDecision(ctx, parent))
+			startCtx = context.WithValue(startCtx, traceClaimContextKey{client: c}, parent.claim)
+		}
+		startCtx = context.WithValue(startCtx, parentContextKey{client: c}, (*Observation)(nil))
+	}
+	parentSpanContext := oteltrace.SpanFromContext(startCtx).SpanContext()
+	if experimentRoot {
+		parentSpanContext = oteltrace.SpanContext{}
+	}
+	if experimentRoot || c.experimentAttributes(startCtx, parentSpanContext.TraceID()) != nil {
+		// Trace state re-applied by a later WithTraceAttributes must not
+		// move an item span out of the experiment environment.
+		if explicit == nil {
+			explicit = make(map[string]struct{})
+		}
+		explicit[lfattr.EnvironmentKey] = struct{}{}
+	}
 	if c.stopped.Load() {
 		c.reportStoppedOnce()
 		return ctx, &Observation{}
 	}
 	options := []oteltrace.SpanStartOption{oteltrace.WithAttributes(spanAttributes...)}
+	if experimentRoot {
+		options = append(options, oteltrace.WithAttributes(itemRoot.attributes...))
+	}
 	if !values.StartTime.IsZero() {
 		options = append(options, oteltrace.WithTimestamp(values.StartTime))
+	}
+	if experimentRoot {
+		options = append(options, oteltrace.WithNewRoot())
 	}
 	// Admission: the Langfuse processor accepts this token from its OnStart,
 	// which OTel runs synchronously inside Tracer.Start, so acceptance proves
@@ -104,17 +150,17 @@ func (c *Client) StartObservation(
 	// re-enter Shutdown, so admission is decided by the component being torn
 	// down.
 	token := &observationAdmission{}
-	startCtx := ctx
-	if parent := c.parentOverride(ctx); parent != nil {
-		startCtx = oteltrace.ContextWithSpan(ctx, parent.span)
-		startCtx = context.WithValue(startCtx, traceDecisionContextKey{client: c}, c.overrideDecision(ctx, parent))
-		startCtx = context.WithValue(startCtx, traceClaimContextKey{client: c}, parent.claim)
-		startCtx = context.WithValue(startCtx, parentContextKey{client: c}, (*Observation)(nil))
+	tracerCtx := context.WithValue(startCtx, admissionTokenContextKey{client: c}, token)
+	alwaysSample := experimentRoot && c.owned
+	if alwaysSample {
+		tracerCtx = context.WithValue(tracerCtx, sampleRateContextKey{client: c}, 1.0)
 	}
-	parentSpanContext := oteltrace.SpanFromContext(startCtx).SpanContext()
-	spanCtx, span := c.tracer.Start(
-		context.WithValue(startCtx, admissionTokenContextKey{client: c}, token), name, options...,
-	)
+	spanCtx, span := c.tracer.Start(tracerCtx, name, options...)
+	if alwaysSample {
+		// Descendants inherit the root's decision; a later trace started
+		// from the returned context uses the caller's rate.
+		spanCtx = context.WithValue(spanCtx, sampleRateContextKey{client: c}, ctx.Value(sampleRateContextKey{client: c}))
+	}
 	if span.IsRecording() {
 		if !token.admitted.Load() || c.stopped.Load() {
 			// The processor was torn down mid-start, or Shutdown was re-entered
@@ -775,10 +821,10 @@ func (c *Client) buildObservationAttributes(
 		diagnostic.Report("generation-only attributes omitted from a non-generation observation")
 	}
 	if contentCapture {
-		if input, ok := lfattr.Encode(values.Input, c.mask, "observation input"); ok {
+		if input, ok := c.encodeContent(values.Input, "observation input"); ok {
 			result = append(result, attribute.String(lfattr.ObservationInputKey, input))
 		}
-		if output, ok := lfattr.Encode(values.Output, c.mask, "observation output"); ok {
+		if output, ok := c.encodeContent(values.Output, "observation output"); ok {
 			result = append(result, attribute.String(lfattr.ObservationOutputKey, output))
 		}
 	}
@@ -789,6 +835,85 @@ func (c *Client) buildObservationAttributes(
 		diagnostic.Report("update start time ignored; start time can be set only when the observation starts")
 	}
 	return result, explicit
+}
+
+// premasked is content that Mask has already processed, frozen as its
+// encoded attribute text at that moment: later changes to the value it came
+// from cannot reach the export, and no second Mask call sees it. Callers
+// outside the package cannot construct it.
+type premasked struct {
+	text    string
+	present bool
+}
+
+// encodeContent encodes observation input or output, masking it unless it is
+// premasked.
+func (c *Client) encodeContent(value any, field string) (string, bool) {
+	if pre, ok := value.(premasked); ok {
+		return pre.text, pre.present
+	}
+	return lfattr.Encode(value, c.mask, field)
+}
+
+// contentSnapshot is a value masked once and frozen in its two exported
+// forms: the attribute text of an observation's input or output, and the
+// JSON that embeds it in a larger value.
+type contentSnapshot struct {
+	premasked
+	json json.RawMessage
+}
+
+// snapshotContent masks value once as field and freezes the result. A nil
+// mask result, a panic, or a value that cannot be encoded is absent.
+func (c *Client) snapshotContent(field MaskField, value any, label string) contentSnapshot {
+	masked := c.maskOnce(field, value)
+	text, ok := lfattr.Encode(masked, nil, label)
+	if !ok {
+		return contentSnapshot{}
+	}
+	data := json.RawMessage(text)
+	if _, isString := masked.(string); isString {
+		quoted, err := json.Marshal(text)
+		if err != nil {
+			return contentSnapshot{}
+		}
+		data = quoted
+	}
+	return contentSnapshot{premasked: premasked{text: text, present: true}, json: data}
+}
+
+// frozenJSON freezes a JSON value built from snapshots as observation content.
+func frozenJSON(value any, label string) premasked {
+	text, ok := lfattr.Encode(value, nil, label)
+	return premasked{text: text, present: ok}
+}
+
+// maskStrict masks one value for a dataset write or an experiment start,
+// which fail instead of omitting a value; ok is false when the masker
+// panicked.
+func (c *Client) maskStrict(field MaskField, value any) (masked any, ok bool) {
+	if c.mask == nil {
+		return value, true
+	}
+	defer func() {
+		if recover() != nil {
+			masked, ok = nil, false
+		}
+	}()
+	return c.mask(string(field), value), true
+}
+
+// maskOnce masks one telemetry value as an observation would: a nil result
+// or a panic omits it.
+func (c *Client) maskOnce(field MaskField, value any) any {
+	if c == nil || c.mask == nil || lfattr.IsNil(value) {
+		return value
+	}
+	masked, ok := lfattr.ApplyMask(value, c.mask, string(field))
+	if !ok {
+		return nil
+	}
+	return masked
 }
 
 func generationAttributes(typeName ObservationType, values ObservationAttributes) []attribute.KeyValue {
