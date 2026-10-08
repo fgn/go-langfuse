@@ -930,6 +930,56 @@ func TestExperimentWireRejectedRootsExportNoItemIdentity(t *testing.T) {
 	}
 }
 
+func TestExperimentWireLateAcceptedRootsKeepTheirClaimUnderWithParent(t *testing.T) {
+	acceptCompleteRoot := func(span sdktrace.ReadOnlySpan) bool {
+		if span.Name() != "item" {
+			return true
+		}
+		for _, kv := range span.Attributes() {
+			if string(kv.Key) == itemRootKey {
+				return kv.Value.AsString() != ""
+			}
+		}
+		return false
+	}
+	for _, borrowed := range []bool{false, true} {
+		for _, fromItem := range []bool{false, true} {
+			t.Run(fmt.Sprintf("borrowed %t, from item context %t", borrowed, fromItem), func(t *testing.T) {
+				client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
+					config.ShouldExportSpan = acceptCompleteRoot
+					if borrowed {
+						provider := sdktrace.NewTracerProvider()
+						t.Cleanup(func() { _ = provider.Shutdown(context.Background()) })
+						config.TracerProvider = provider
+						config.ServiceName = ""
+					}
+				})
+				itemCtx, root, err := client.StartExperimentItem(context.Background(), wireExperiment(),
+					langfuse.ExperimentItem{ID: "item"}, "item", langfuse.ObservationAttributes{})
+				if err != nil {
+					t.Fatalf("StartExperimentItem() error = %v", err)
+				}
+				root.End()
+				base := context.Background()
+				if fromItem {
+					base = itemCtx
+				}
+				_, bridge := client.StartObservation(client.WithParent(base, root), "bridge", langfuse.TypeSpan,
+					langfuse.ObservationAttributes{})
+				bridge.End()
+
+				spans := exportObservationWireSpans(t, client, receiver, 2)
+				if wireAttributes(t, spans, "item")["langfuse.internal.is_app_root"] != true {
+					t.Fatal("the late-accepted item root is not its trace's application root")
+				}
+				if wireAttributes(t, spans, "bridge")["langfuse.internal.is_app_root"] == true {
+					t.Fatal("a WithParent child of the ended item root became a second application root")
+				}
+			})
+		}
+	}
+}
+
 func TestExperimentWireLateAcceptedRootsAreTheOnlyApplicationRoot(t *testing.T) {
 	nonEmpty := func(key string) func(sdktrace.ReadOnlySpan) bool {
 		return func(span sdktrace.ReadOnlySpan) bool {

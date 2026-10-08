@@ -210,14 +210,15 @@ func (c *Client) startExperimentItem(
 // acceptItemRoot completes the bookkeeping for an item root whose export a
 // filter may have accepted only once its identity was complete: the root is
 // its trace's application root, its children are not, and later spans from
-// the returned context, such as evaluators after the root ends, carry the
-// trace claim.
+// the returned context or through [Client.WithParent], such as evaluators
+// after the root ends, carry the trace claim. root is not yet shared.
 func (c *Client) acceptItemRoot(ctx context.Context, root *Observation) context.Context {
 	if readable, ok := root.span.(sdktrace.ReadOnlySpan); ok && c.processor != nil {
 		c.processor.Expect(readable)
 	}
 	root.span.SetAttributes(attribute.Bool(lfattr.AppRootKey, true))
 	ctx = c.withTraceClaim(ctx, root.span.SpanContext().TraceID())
+	root.claim = c.traceClaimState(ctx)
 	return c.syncBaggage(ctx, false, false)
 }
 
