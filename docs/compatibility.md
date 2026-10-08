@@ -29,6 +29,18 @@ on the same host with the same Basic authentication, selected by `version` or
 and type) before they are cached; caching and retry semantics are described
 in the [reference](reference.md#prompt-management).
 
+Datasets and experiments use the public REST API on the same host with the
+same Basic authentication: `/api/public/v2/datasets`,
+`/api/public/dataset-items`, and `/api/public/dataset-run-items` for datasets
+and dataset run links, and `/api/public/experiments` and
+`/api/public/experiment-items` for stored experiment results. Experiment items
+are identified by `langfuse.experiment.*` span attributes that Langfuse v4
+reads at ingestion. Verified on 2026-10-08 against self-hosted Langfuse
+v4.48.0 in its default events_only mode, with round trips through the official
+Python SDK 4.17.0 and TypeScript SDK 5.13.1. The legacy dataset-run read
+endpoints are not used; they are unavailable in that mode. Write and retry
+semantics are described in the [reference](reference.md#datasets).
+
 go-langfuse uses the instrumentation scope `langfuse-sdk.go`. Langfuse treats
 the `langfuse-sdk` prefix as an ingestion marker that prevents semantic
 attributes from being copied into generic `metadata.attributes`; the `.go`
