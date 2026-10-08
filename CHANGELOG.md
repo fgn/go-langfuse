@@ -5,6 +5,10 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+- Update `google.golang.org/grpc` to v1.83.2 for GO-2026-6443 (server panic
+  on a missing authority or Host header) and `golang.org/x/text` to v0.41.0
+  for GO-2026-6629 (panic parsing crafted PRECIS input); govulncheck finds
+  neither reachable. `golang.org/x/net` follows as a gRPC requirement.
 - Add datasets (`UpsertDataset`, `GetDataset`, `Datasets`,
   `UpsertDatasetItem`, `GetDatasetItem`, `DeleteDatasetItem`, `DatasetItems`)
   and experiments (`RunExperiment` with evaluators, a composite evaluator, and
