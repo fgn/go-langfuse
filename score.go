@@ -39,9 +39,9 @@ const (
 	maxScorePayloadBytes   = 128 << 10
 )
 
-// Score is one evaluation or feedback value attached to a trace, a session,
-// an observation, or a dataset run. Scores are submitted through the Langfuse JSON ingestion
-// API rather than the OpenTelemetry trace pipeline.
+// Score is one evaluation or feedback value attached to a trace, a session, an
+// observation, or a dataset run. Scores are submitted through the Langfuse
+// JSON ingestion API rather than the OpenTelemetry trace pipeline.
 type Score struct {
 	// ID makes submissions idempotent: Langfuse upserts scores by ID.
 	// Optional; the SDK generates a random ID when empty so retried
@@ -91,18 +91,18 @@ type Score struct {
 // RecordScore submits one score through the Langfuse JSON ingestion endpoint
 // using the client's credentials and environment; a score for the experiment
 // item trace that ctx belongs to uses the item's "sdk-experiment" environment
-// instead. The score is validated synchronously, so every returned error
-// marks a score that was not
-// accepted, and then queued for asynchronous delivery with bounded retry (network
-// errors, HTTP 408, 429, and 5xx responses, and per-item ingestion errors
-// with those statuses, using the same backoff defaults as observation
-// export), so transport failures never reach the caller: after the retry
-// budget they are reported as payload-free OpenTelemetry diagnostics and the
-// score is dropped. [Client.Flush] and [Client.Shutdown] drain accepted
-// scores. When the queue is full, the call returns [ErrScoreQueueFull] unless
-// Config.BlockOnQueueFull waits for space, bounded by ctx. A disabled client
-// returns nil without sending, and a shut-down client returns an error. The
-// complete serialized score event is limited to 128 KiB.
+// instead. The score is validated synchronously, so every returned error marks
+// a score that was not accepted, and then queued for asynchronous delivery
+// with bounded retry (network errors, HTTP 408, 429, and 5xx responses, and
+// per-item ingestion errors with those statuses, using the same backoff
+// defaults as observation export), so transport failures never reach the
+// caller: after the retry budget they are reported as payload-free
+// OpenTelemetry diagnostics and the score is dropped. [Client.Flush] and
+// [Client.Shutdown] drain accepted scores. When the queue is full, the call
+// returns [ErrScoreQueueFull] unless Config.BlockOnQueueFull waits for space,
+// bounded by ctx. A disabled client returns nil without sending, and a
+// shut-down client returns an error. The complete serialized score event is
+// limited to 128 KiB.
 func (c *Client) RecordScore(ctx context.Context, score Score) error {
 	return c.recordScore(ctx, score, false)
 }

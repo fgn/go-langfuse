@@ -144,6 +144,7 @@ func TestExperimentReadsRejectInvalidQueriesAndPages(t *testing.T) {
 		"large page":     {query: langfuse.ExperimentItemQuery{From: from, PageSize: 101}},
 		"repeated":       {query: langfuse.ExperimentItemQuery{From: from}, pages: map[string]string{"": `{"data":[],"meta":{"cursor":"c"}}`, "c": `{"data":[],"meta":{"cursor":"c"}}`}},
 		"missing meta":   {query: langfuse.ExperimentItemQuery{From: from}, pages: map[string]string{"": `{"data":[]}`}},
+		"missing data":   {query: langfuse.ExperimentItemQuery{From: from}, pages: map[string]string{"": `{"meta":{}}`}},
 		"invalid item":   {query: langfuse.ExperimentItemQuery{From: from}, pages: map[string]string{"": `{"data":[{"id":"x"}],"meta":{}}`}},
 		"invalid score":  {query: langfuse.ExperimentItemQuery{From: from}, pages: map[string]string{"": `{"data":[` + strings.Replace(storedItemJSON("x"), `"name":"exact"`, `"name":""`, 1) + `],"meta":{}}`}},
 		"not found path": {query: langfuse.ExperimentItemQuery{From: from}, pages: map[string]string{}},

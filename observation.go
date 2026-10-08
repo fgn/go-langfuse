@@ -888,6 +888,21 @@ func frozenJSON(value any, label string) premasked {
 	return premasked{text: text, present: ok}
 }
 
+// maskStrict masks one value for a dataset write or an experiment start,
+// which fail instead of omitting a value; ok is false when the masker
+// panicked.
+func (c *Client) maskStrict(field MaskField, value any) (masked any, ok bool) {
+	if c.mask == nil {
+		return value, true
+	}
+	defer func() {
+		if recover() != nil {
+			masked, ok = nil, false
+		}
+	}()
+	return c.mask(string(field), value), true
+}
+
 // maskOnce masks one telemetry value as an observation would: a nil result
 // or a panic omits it.
 func (c *Client) maskOnce(field MaskField, value any) any {

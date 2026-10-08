@@ -269,15 +269,13 @@ func nonNull(raw json.RawMessage) json.RawMessage {
 	return raw
 }
 
-// DatasetItemPage is one decoded page of dataset items.
-//
-//nolint:tagliatelle // Langfuse wire keys are camelCase.
-type DatasetItemPage struct {
-	Items []DatasetItem `json:"data"`
-	Meta  *PageMeta     `json:"meta"`
+// Page is one decoded page of a listing with pagination metadata M.
+type Page[T, M any] struct {
+	Data []T `json:"data"`
+	Meta *M  `json:"meta"`
 }
 
-// PageMeta is the pagination metadata of a page response.
+// PageMeta is the pagination metadata of a page-numbered listing.
 //
 //nolint:tagliatelle // Langfuse wire keys are camelCase.
 type PageMeta struct {
@@ -370,7 +368,7 @@ func (d *DatasetsClient) DeleteItem(ctx context.Context, id string) error {
 }
 
 // ListItems reads one page of dataset items.
-func (d *DatasetsClient) ListItems(ctx context.Context, query DatasetItemListQuery) (DatasetItemPage, error) {
+func (d *DatasetsClient) ListItems(ctx context.Context, query DatasetItemListQuery) (Page[DatasetItem, PageMeta], error) {
 	values := url.Values{}
 	values.Set("datasetName", query.DatasetName)
 	if query.SourceTraceID != "" {
@@ -384,51 +382,15 @@ func (d *DatasetsClient) ListItems(ctx context.Context, query DatasetItemListQue
 	}
 	values.Set("page", strconv.Itoa(query.Page))
 	values.Set("limit", strconv.Itoa(query.Limit))
-	call := datasetCall{
-		op: "dataset item list", method: http.MethodGet,
-		url: d.base + "/dataset-items?" + values.Encode(), limit: datasetPageResponseLimit,
-	}
-	return send(ctx, d, call, func(page *DatasetItemPage) bool {
-		if page.Items == nil || page.Meta == nil {
-			return false
-		}
-		for index := range page.Items {
-			if !page.Items[index].valid() {
-				return false
-			}
-		}
-		return true
-	})
-}
-
-// DatasetPage is one decoded page of datasets.
-//
-//nolint:tagliatelle // Langfuse wire keys are camelCase.
-type DatasetPage struct {
-	Datasets []Dataset `json:"data"`
-	Meta     *PageMeta `json:"meta"`
+	return listPage[DatasetItem, PageMeta](ctx, d, "dataset item list", "/dataset-items", values, (*DatasetItem).valid)
 }
 
 // ListDatasets reads one page of datasets.
-func (d *DatasetsClient) ListDatasets(ctx context.Context, page, limit int) (DatasetPage, error) {
+func (d *DatasetsClient) ListDatasets(ctx context.Context, page, limit int) (Page[Dataset, PageMeta], error) {
 	values := url.Values{}
 	values.Set("page", strconv.Itoa(page))
 	values.Set("limit", strconv.Itoa(limit))
-	call := datasetCall{
-		op: "dataset list", method: http.MethodGet,
-		url: d.base + "/v2/datasets?" + values.Encode(), limit: datasetPageResponseLimit,
-	}
-	return send(ctx, d, call, func(page *DatasetPage) bool {
-		if page.Datasets == nil || page.Meta == nil {
-			return false
-		}
-		for index := range page.Datasets {
-			if !page.Datasets[index].valid() {
-				return false
-			}
-		}
-		return true
-	})
+	return listPage[Dataset, PageMeta](ctx, d, "dataset list", "/v2/datasets", values, (*Dataset).valid)
 }
 
 // DatasetRunItem is one decoded dataset run item link.
@@ -470,16 +432,15 @@ func validIdentifier(value string) bool {
 //
 //nolint:tagliatelle // Langfuse wire keys are camelCase.
 type ScoreRecord struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	DataType    string          `json:"dataType"`
-	Value       json.RawMessage `json:"value"`
-	Comment     string          `json:"comment"`
-	ConfigID    string          `json:"configId"`
-	Metadata    json.RawMessage `json:"metadata"`
-	Environment string          `json:"environment"`
-	Timestamp   time.Time       `json:"timestamp"`
-	Subject     *struct {
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	DataType  string          `json:"dataType"`
+	Value     json.RawMessage `json:"value"`
+	Comment   string          `json:"comment"`
+	ConfigID  string          `json:"configId"`
+	Metadata  json.RawMessage `json:"metadata"`
+	Timestamp time.Time       `json:"timestamp"`
+	Subject   *struct {
 		Kind    string `json:"kind"`
 		ID      string `json:"id"`
 		TraceID string `json:"traceId"`
@@ -546,7 +507,7 @@ type ExperimentRecord struct {
 func (experiment *ExperimentRecord) valid() bool {
 	experiment.Metadata = nonNull(experiment.Metadata)
 	return experiment.ID != "" && experiment.Name != "" && !experiment.StartTime.IsZero() && experiment.ItemCount >= 0 &&
-		validScores(experiment.Scores)
+		allValid(experiment.Scores, (*ScoreRecord).valid)
 }
 
 // ExperimentItemRecord is one decoded experiment item.
@@ -581,25 +542,10 @@ func (item *ExperimentItemRecord) valid() bool {
 		*field = nonNull(*field)
 	}
 	return item.ID != "" && item.TraceID != "" && item.ExperimentID != "" && item.ExperimentItemID != "" &&
-		!item.StartTime.IsZero() && validScores(item.Scores)
+		!item.StartTime.IsZero() && allValid(item.Scores, (*ScoreRecord).valid)
 }
 
-func validScores(scores []ScoreRecord) bool {
-	for index := range scores {
-		if !scores[index].valid() {
-			return false
-		}
-	}
-	return true
-}
-
-// CursorPage is one decoded cursor-paginated page.
-type CursorPage[T any] struct {
-	Data []T         `json:"data"`
-	Meta *CursorMeta `json:"meta"`
-}
-
-// CursorMeta is the pagination metadata of a cursor page.
+// CursorMeta is the pagination metadata of a cursor listing.
 type CursorMeta struct {
 	Cursor string `json:"cursor"`
 }
@@ -613,34 +559,39 @@ func (meta *CursorMeta) Next() string {
 }
 
 // ListExperiments reads one page of experiments.
-func (d *DatasetsClient) ListExperiments(ctx context.Context, query url.Values) (CursorPage[ExperimentRecord], error) {
-	return listCursorPage(ctx, d, "experiment list", "/experiments", query,
-		func(record *ExperimentRecord) bool { return record.valid() })
+func (d *DatasetsClient) ListExperiments(
+	ctx context.Context, query url.Values,
+) (Page[ExperimentRecord, CursorMeta], error) {
+	return listPage[ExperimentRecord, CursorMeta](ctx, d, "experiment list", "/experiments", query,
+		(*ExperimentRecord).valid)
 }
 
 // ListExperimentItems reads one page of experiment items.
 func (d *DatasetsClient) ListExperimentItems(
 	ctx context.Context, query url.Values,
-) (CursorPage[ExperimentItemRecord], error) {
-	return listCursorPage(ctx, d, "experiment item list", "/experiment-items", query,
-		func(record *ExperimentItemRecord) bool { return record.valid() })
+) (Page[ExperimentItemRecord, CursorMeta], error) {
+	return listPage[ExperimentItemRecord, CursorMeta](ctx, d, "experiment item list", "/experiment-items", query,
+		(*ExperimentItemRecord).valid)
 }
 
-func listCursorPage[T any](
+// listPage reads one page of a listing, which must carry its data and
+// metadata and only valid entries.
+func listPage[T, M any](
 	ctx context.Context, d *DatasetsClient, op, path string, query url.Values, valid func(*T) bool,
-) (CursorPage[T], error) {
+) (Page[T, M], error) {
 	call := datasetCall{
 		op: op, method: http.MethodGet, url: d.base + path + "?" + query.Encode(), limit: datasetPageResponseLimit,
 	}
-	return send(ctx, d, call, func(page *CursorPage[T]) bool {
-		if page.Data == nil || page.Meta == nil {
+	return send(ctx, d, call, func(page *Page[T, M]) bool {
+		return page.Data != nil && page.Meta != nil && allValid(page.Data, valid)
+	})
+}
+
+func allValid[T any](values []T, valid func(*T) bool) bool {
+	for index := range values {
+		if !valid(&values[index]) {
 			return false
 		}
-		for index := range page.Data {
-			if !valid(&page.Data[index]) {
-				return false
-			}
-		}
-		return true
-	})
+	}
+	return true
 }

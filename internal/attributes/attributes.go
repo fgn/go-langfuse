@@ -82,7 +82,7 @@ const (
 // Encode applies mask and produces the string representation expected by
 // Langfuse. Strings stay strings; all other values are deterministic JSON.
 func Encode(value any, mask func(string, any) any, field string) (encoded string, ok bool) {
-	if isNil(value) {
+	if IsNil(value) {
 		return "", false
 	}
 	if mask != nil {
@@ -100,7 +100,7 @@ func Encode(value any, mask func(string, any) any, field string) (encoded string
 			return "", false
 		}
 	}
-	if isNil(value) {
+	if IsNil(value) {
 		return "", false
 	}
 	if value, isString := value.(string); isString {
@@ -147,8 +147,8 @@ func ScoreMetadata(metadata map[string]any, mask func(string, any) any) map[stri
 	if len(metadata) == 0 {
 		return nil
 	}
-	masked, ok := applyMask(metadata, mask, "score metadata")
-	if !ok || isNil(masked) {
+	masked, ok := ApplyMask(metadata, mask, "score metadata")
+	if !ok || IsNil(masked) {
 		return nil
 	}
 	values, ok := masked.(map[string]any)
@@ -170,8 +170,8 @@ func ObservationMetadataWithExisting(
 	if len(metadata) == 0 {
 		return nil
 	}
-	masked, ok := applyMask(metadata, mask, "observation metadata")
-	if !ok || isNil(masked) {
+	masked, ok := ApplyMask(metadata, mask, "observation metadata")
+	if !ok || IsNil(masked) {
 		return nil
 	}
 	values, ok := masked.(map[string]any)
@@ -216,8 +216,8 @@ func TraceMetadataWithExisting(
 	if len(metadata) == 0 {
 		return nil, nil
 	}
-	masked, ok := applyMask(metadata, mask, "trace metadata")
-	if !ok || isNil(masked) {
+	masked, ok := ApplyMask(metadata, mask, "trace metadata")
+	if !ok || IsNil(masked) {
 		return nil, nil
 	}
 	values, ok := masked.(map[string]any)
@@ -748,7 +748,9 @@ func jsonStringSize(value string) int {
 	return size
 }
 
-func applyMask(value any, mask func(string, any) any, field string) (result any, ok bool) {
+// ApplyMask applies mask to one value as telemetry does: ok is false when the
+// masker panicked, which is reported as a diagnostic.
+func ApplyMask(value any, mask func(string, any) any, field string) (result any, ok bool) {
 	if mask == nil {
 		return value, true
 	}
@@ -762,17 +764,9 @@ func applyMask(value any, mask func(string, any) any, field string) (result any,
 	return mask(field, value), true
 }
 
-// ApplyMask applies mask to one value as telemetry does: ok is false when the
-// masker panicked, which is reported once as a diagnostic.
-func ApplyMask(value any, mask func(string, any) any, field string) (any, bool) {
-	return applyMask(value, mask, field)
-}
-
 // IsNil reports whether value is nil or a nil chan, func, interface, map,
 // pointer, or slice.
-func IsNil(value any) bool { return isNil(value) }
-
-func isNil(value any) bool {
+func IsNil(value any) bool {
 	if value == nil {
 		return true
 	}

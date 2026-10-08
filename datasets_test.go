@@ -650,6 +650,7 @@ func TestDatasetItemsPages(t *testing.T) {
 			want:  []string{"a", "b"}, fails: true,
 		},
 		"page without meta": {pages: []string{`{"data":[]}`}, fails: true},
+		"page without data": {pages: []string{`{"meta":{"totalPages":1}}`}, fails: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -845,6 +846,7 @@ func TestDatasetsPages(t *testing.T) {
 		"none":           {pages: []string{datasetsPage(0)}},
 		"invalid entry":  {pages: []string{`{"data":[{"id":"x"}],"meta":{"totalPages":1}}`}, fails: true},
 		"missing meta":   {pages: []string{`{"data":[]}`}, fails: true},
+		"missing data":   {pages: []string{`{"meta":{"totalPages":1}}`}, fails: true},
 		"overstated end": {pages: []string{datasetsPage(3, "a"), datasetsPage(3)}, want: []string{"a"}},
 	} {
 		t.Run(name, func(t *testing.T) {

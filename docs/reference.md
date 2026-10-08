@@ -386,10 +386,11 @@ fmt.Print(result.Summary(false))
 
 For each item, in up to `MaxConcurrency` goroutines (50 by default):
 
-1. An item without `Input` (nil or JSON null) fails. Otherwise the item root observation
-   `experiment-item-run` starts in a new trace with the item input and the
-   item and run metadata, plus `experiment_name`, `experiment_run_name`,
-   `dataset_id`, and `dataset_item_id`, as in the official SDKs.
+1. An item without `Input` (nil or JSON null) fails. Otherwise the item root
+   observation `experiment-item-run` starts in a new trace with the item input
+   and the item and run metadata, plus `experiment_name`,
+   `experiment_run_name`, `dataset_id`, and `dataset_item_id`, as in the
+   official SDKs.
 2. A dataset item (one with `DatasetID`) is linked with
    `POST /api/public/dataset-run-items` to the dataset run named `RunName`,
    and the returned run ID becomes the experiment ID. On a Langfuse v4 server
@@ -406,13 +407,13 @@ For each item, in up to `MaxConcurrency` goroutines (50 by default):
    starts join the item trace. The root ends when the task returns; Langfuse
    measures item latency on it.
 4. Each evaluator runs in its own evaluator observation, named after the
-   function, whose input holds the item input, the output, the expected
-   output, and the item metadata, each masked once and frozen before the
-   next callback could change it, and
-   whose output holds the evaluations with their metadata masked once as
-   `MaskScoreMetadata`, the same copy the score sends. `CompositeEvaluator` then runs with the
-   evaluations so far when there are any. Each evaluation becomes a score on
-   the item root in environment `sdk-experiment`.
+   function, whose input holds the item input, the output, the expected output,
+   and the item metadata, each masked once and frozen before the next callback
+   could change it, and whose output holds the evaluations with their metadata
+   masked once as `MaskScoreMetadata`, the same copy the score sends.
+   `CompositeEvaluator` then runs with the evaluations so far when there are
+   any. Each evaluation becomes a score on the item root in environment
+   `sdk-experiment`.
 
 After every item has finished, `RunEvaluators` run with all item results,
 including failed ones, and for a dataset run their evaluations become scores
@@ -425,18 +426,17 @@ Everything else is per item: `ExperimentItemResult.Err` for a failed start,
 link, or task, `EvaluationErr` for failed evaluators and rejected scores, and
 `ExperimentResult.RunEvaluationErr` for run evaluators. Task and evaluator
 errors are recorded on their observations with `RecordError`, so their text is
-content: masked as `MaskErrorMessage`, or `"error"` with content capture off.
-A panic is recovered and recorded as a fixed error without the panic value.
-Canceling
-`ctx` stops starting items, marks the rest with the context error, stops
-running run evaluators, skips run scores and the flush, and returns the
-context error with the partial result; `RunExperiment` still waits for
-running tasks and evaluators to return, and callers who keep the partial
-telemetry should flush with a fresh context. A flush failure is returned with
-the complete result. `Summary` counts task failures and items with
-evaluation errors separately and shows run evaluation errors; its averages
-are local evaluation values, including any whose score was rejected. On a nil or disabled client
-the tasks and evaluators run and nothing is exported or linked.
+content: masked as `MaskErrorMessage`, or `"error"` with content capture off. A
+panic is recovered and recorded as a fixed error without the panic value.
+Canceling `ctx` stops starting items, marks the rest with the context error,
+stops running run evaluators, skips run scores and the flush, and returns the
+context error with the partial result; `RunExperiment` still waits for running
+tasks and evaluators to return, and callers who keep the partial telemetry
+should flush with a fresh context. A flush failure is returned with the
+complete result. `Summary` counts task failures and items with evaluation
+errors separately and shows run evaluation errors; its averages are local
+evaluation values, including any whose score was rejected. On a nil or disabled
+client the tasks and evaluators run and nothing is exported or linked.
 
 Go adaptations of the official runners:
 

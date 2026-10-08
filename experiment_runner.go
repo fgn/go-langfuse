@@ -264,12 +264,11 @@ func validateExperimentRun(run ExperimentRun) error {
 			return fmt.Errorf("%w: run evaluator is nil", ErrInvalidExperiment)
 		}
 	}
-	experiment := Experiment{Name: run.RunName, Description: run.Description}
-	if err := validateExperiment(experiment, ExperimentItem{ID: "run"}, false); err != nil {
+	if err := validateExperiment(Experiment{Name: run.RunName, Description: run.Description}, false); err != nil {
 		return err
 	}
 	for index, item := range run.Items {
-		if err := validateExperiment(experiment, item, false); err != nil {
+		if err := validateExperimentItem(item); err != nil {
 			return fmt.Errorf("item %d: %w", index, err)
 		}
 	}

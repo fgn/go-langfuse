@@ -21,7 +21,8 @@ import (
 	lfattr "github.com/fgn/go-langfuse/internal/attributes"
 )
 
-// ErrInvalidExperiment reports that [Client.StartExperimentItem] rejected its input.
+// ErrInvalidExperiment reports an experiment, run, or item that
+// [Client.StartExperimentItem] or [Client.RunExperiment] rejected.
 var ErrInvalidExperiment = errors.New("langfuse: invalid experiment")
 
 // ErrExperimentItemNotExported reports that a borrowed provider's sampler
@@ -119,8 +120,8 @@ func (c *Client) StartExperimentItem(
 // experimentStart holds the runner's additions to an item start.
 type experimentStart struct {
 	// link, when set, resolves the experiment ID once the root has started,
-	// replacing Experiment.ID; metadata is the masked experiment metadata
-	// JSON, or empty.
+	// replacing Experiment.ID; the ID it returns is already validated.
+	// metadata is the masked experiment metadata JSON, or empty.
 	link func(root *Observation, metadata string) (experimentID string, err error)
 	// rootMetadata, when set, builds the root's observation metadata from the
 	// masked experiment and item metadata.
@@ -138,7 +139,11 @@ func (c *Client) startExperimentItem(
 	if ctx == nil {
 		return nil, &Observation{}, maskedExperimentItem{}, errors.New("langfuse: experiment context is nil")
 	}
-	if err := validateExperiment(experiment, item, start.link == nil); err != nil {
+	err := validateExperiment(experiment, start.link == nil)
+	if err == nil {
+		err = validateExperimentItem(item)
+	}
+	if err != nil {
 		return c.failedExperimentContext(ctx), &Observation{}, maskedExperimentItem{}, err
 	}
 	if c == nil || c.isDisabled() {
@@ -178,9 +183,6 @@ func (c *Client) startExperimentItem(
 	experimentID := experiment.ID
 	if start.link != nil {
 		experimentID, err = start.link(root, attributes.metadata)
-		if err == nil {
-			err = validateExperimentIdentifier("experiment ID", experimentID)
-		}
 		if err != nil {
 			root.RecordError(errExperimentLinkFailed)
 			root.End()
@@ -545,17 +547,12 @@ func jsonObject(field MaskField, value any) (object map[string]any, isObject boo
 	return object, true, nil
 }
 
-func (c *Client) maskExperimentValue(field MaskField, value any) (masked any, err error) {
-	if c.mask == nil {
-		return value, nil
+func (c *Client) maskExperimentValue(field MaskField, value any) (any, error) {
+	masked, ok := c.maskStrict(field, value)
+	if !ok {
+		return nil, fmt.Errorf("%w: masker panicked on %s", ErrInvalidExperiment, field)
 	}
-	defer func() {
-		if recover() != nil {
-			masked = nil
-			err = fmt.Errorf("%w: masker panicked on %s", ErrInvalidExperiment, field)
-		}
-	}()
-	return c.mask(string(field), value), nil
+	return masked, nil
 }
 
 func encodeExperimentValue(field MaskField, value any, limit int) (string, bool, error) {
@@ -566,26 +563,31 @@ func encodeExperimentValue(field MaskField, value any, limit int) (string, bool,
 	return encoded, present, nil
 }
 
-func validateExperiment(experiment Experiment, item ExperimentItem, requireID bool) error {
-	for _, field := range []struct {
-		name     string
-		value    string
-		optional bool
-	}{
-		{"experiment ID", experiment.ID, !requireID},
-		{"experiment name", experiment.Name, false},
-		{"experiment item ID", item.ID, false},
-		{"experiment item dataset ID", item.DatasetID, true},
-	} {
-		if field.value == "" && field.optional {
-			continue
-		}
-		if err := validateExperimentIdentifier(field.name, field.value); err != nil {
+// validateExperiment checks the run-level fields; an empty ID passes unless
+// requireID is set.
+func validateExperiment(experiment Experiment, requireID bool) error {
+	if experiment.ID != "" || requireID {
+		if err := validateExperimentIdentifier("experiment ID", experiment.ID); err != nil {
 			return err
 		}
 	}
+	if err := validateExperimentIdentifier("experiment name", experiment.Name); err != nil {
+		return err
+	}
 	if !utf8.ValidString(experiment.Description) || len(experiment.Description) > maxExperimentDescription {
 		return fmt.Errorf("%w: description is invalid UTF-8 or exceeds 16 KiB", ErrInvalidExperiment)
+	}
+	return nil
+}
+
+func validateExperimentItem(item ExperimentItem) error {
+	if err := validateExperimentIdentifier("experiment item ID", item.ID); err != nil {
+		return err
+	}
+	if item.DatasetID != "" {
+		if err := validateExperimentIdentifier("experiment item dataset ID", item.DatasetID); err != nil {
+			return err
+		}
 	}
 	if !item.Version.IsZero() && !validDatasetInstant(item.Version) {
 		return fmt.Errorf("%w: item version is outside the RFC 3339 year range", ErrInvalidExperiment)

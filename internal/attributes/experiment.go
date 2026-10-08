@@ -37,7 +37,7 @@ var (
 // decoded string, as the official SDKs decode stored JSON; other raw JSON
 // keeps its exact number tokens.
 func EncodeContent(value any, limit int) (encoded string, present bool, err error) {
-	if isNil(value) {
+	if IsNil(value) {
 		return "", false, nil
 	}
 	switch value := value.(type) {

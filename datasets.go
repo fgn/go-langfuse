@@ -82,9 +82,9 @@ type DatasetItemSpec struct {
 	// dataset fails with status 409, as does a concurrent edit of the item.
 	ID string
 	// Input, ExpectedOutput, and Metadata are any JSON values, masked as
-	// MaskDatasetItemInput,
-	// MaskDatasetItemExpectedOutput, and MaskDatasetItemMetadata, and are
-	// limited to 1 MiB each. json.RawMessage values are sent verbatim.
+	// MaskDatasetItemInput, MaskDatasetItemExpectedOutput, and
+	// MaskDatasetItemMetadata, and are limited to 1 MiB each. json.RawMessage
+	// values are sent verbatim.
 	Input               any
 	ExpectedOutput      any
 	Metadata            any
@@ -290,8 +290,8 @@ func (c *Client) datasetFailure(ctx context.Context, notFound, err error) error 
 }
 
 // UpsertDataset creates or updates the named dataset. A nil or panicking Mask
-// result for Metadata fails before any request. The write is
-// sent once; a failure after sending wraps [ErrWriteOutcomeUnknown].
+// result for Metadata fails before any request. The write is sent once; a
+// failure after sending wraps [ErrWriteOutcomeUnknown].
 func (c *Client) UpsertDataset(ctx context.Context, spec DatasetSpec) (Dataset, error) {
 	if err := c.datasetReady(ctx, requireDataset("dataset name", spec.Name)); err != nil {
 		return Dataset{}, err
@@ -335,13 +335,12 @@ func (c *Client) GetDataset(ctx context.Context, name string) (Dataset, error) {
 	return Dataset(result), err
 }
 
-// UpsertDatasetItem creates or updates one dataset item and returns the
-// stored item; every accepted write adds a version and earlier versions
-// remain. A nil, panicking, oversized, or unserializable Mask result fails
-// before any request. The write is sent once; a failure
-// after sending wraps [ErrWriteOutcomeUnknown], and repeating it can add a
-// version or, without an ID, a duplicate item. A missing dataset wraps
-// [ErrDatasetNotFound].
+// UpsertDatasetItem creates or updates one dataset item and returns the stored
+// item; every accepted write adds a version and earlier versions remain. A
+// nil, panicking, oversized, or unserializable Mask result fails before any
+// request. The write is sent once; a failure after sending wraps
+// [ErrWriteOutcomeUnknown], and repeating it can add a version or, without an
+// ID, a duplicate item. A missing dataset wraps [ErrDatasetNotFound].
 func (c *Client) UpsertDatasetItem(ctx context.Context, spec DatasetItemSpec) (DatasetItem, error) {
 	if err := c.datasetReady(ctx, requireDataset("dataset name", spec.DatasetName)); err != nil {
 		return DatasetItem{}, err
@@ -436,8 +435,8 @@ func (c *Client) DatasetItems(ctx context.Context, query DatasetItemQuery) iter.
 			request := list // each traversal may run concurrently
 			request.Page = page
 			wire, err := c.datasetTransport.ListItems(ctx, request)
-			items := make([]DatasetItem, len(wire.Items))
-			for index, item := range wire.Items {
+			items := make([]DatasetItem, len(wire.Data))
+			for index, item := range wire.Data {
 				items[index] = datasetItemFromWire(item)
 				items[index].Version = version
 			}
@@ -462,8 +461,8 @@ func (c *Client) Datasets(ctx context.Context, query DatasetQuery) iter.Seq2[Dat
 	}
 	return datasetPages(ctx, c, nil, nil, func(ctx context.Context, page int) ([]Dataset, int, error) {
 		wire, err := c.datasetTransport.ListDatasets(ctx, page, pageSize)
-		datasets := make([]Dataset, len(wire.Datasets))
-		for index, dataset := range wire.Datasets {
+		datasets := make([]Dataset, len(wire.Data))
+		for index, dataset := range wire.Data {
 			datasets[index] = Dataset(dataset)
 		}
 		return datasets, wire.Meta.Pages(), err
@@ -520,23 +519,12 @@ func datasetPages[T any](
 // value, because an omitted field keeps the stored value.
 func (c *Client) maskedDatasetContent(field MaskField, value any) (json.RawMessage, error) {
 	name := string(field)
-	masked := value
-	if c.mask != nil {
-		var panicked bool
-		func() {
-			defer func() {
-				if recover() != nil {
-					panicked = true
-				}
-			}()
-			masked = c.mask(name, value)
-		}()
-		if panicked {
-			return nil, errors.New("langfuse: masker panicked on " + name)
-		}
-		if isNilValue(masked) {
-			return nil, errors.New("langfuse: masker removed " + name + "; omitting it would keep the stored value")
-		}
+	masked, ok := c.maskStrict(field, value)
+	if !ok {
+		return nil, errors.New("langfuse: masker panicked on " + name)
+	}
+	if isNilValue(masked) {
+		return nil, errors.New("langfuse: masker removed " + name + "; omitting it would keep the stored value")
 	}
 	if raw, ok := masked.(json.RawMessage); ok {
 		if !json.Valid(raw) || !utf8.Valid(raw) {
