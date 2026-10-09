@@ -5,6 +5,8 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-09
+
 - **Breaking**: require Go 1.26 and update `golang.org/x/net` to v0.60.0 for
   GO-2026-6603, GO-2026-6610, GO-2026-6611, GO-2026-6612, and GO-2026-6617
   (HTTP/2 crashes, resource exhaustion, and malformed header handling);
