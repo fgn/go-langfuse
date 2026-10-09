@@ -17,9 +17,6 @@ import (
 	"github.com/fgn/go-langfuse/internal/otlpreceiver"
 )
 
-// rate returns a pointer for Config.SampleRate literals.
-func rate(fraction float64) *float64 { return &fraction }
-
 func randomTraceIDHex(rng *rand.Rand) string {
 	var raw [16]byte
 	for {
@@ -141,7 +138,7 @@ func FuzzTraceSampledAt(f *testing.F) {
 func TestSampleRateZeroExportsNoTraces(t *testing.T) {
 	t.Parallel()
 	client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
-		config.SampleRate = rate(0)
+		config.SampleRate = new(0.0)
 	})
 
 	rootCtx, root := client.StartObservation(context.Background(), "root", langfuse.TypeAgent,
@@ -172,7 +169,7 @@ func TestSampleRateZeroExportsNoTraces(t *testing.T) {
 func TestSampleRateOneExportsEverything(t *testing.T) {
 	t.Parallel()
 	client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
-		config.SampleRate = rate(1)
+		config.SampleRate = new(1.0)
 	})
 	_, root := client.StartObservation(context.Background(), "root", langfuse.TypeSpan, langfuse.ObservationAttributes{})
 	if !root.Sampled() {
@@ -185,7 +182,7 @@ func TestSampleRateOneExportsEverything(t *testing.T) {
 func TestFractionalRateExportsExactlyTheDeterministicSubset(t *testing.T) {
 	t.Parallel()
 	client, receiver := newObservationWireClient(t, func(config *langfuse.Config) {
-		config.SampleRate = rate(0.5)
+		config.SampleRate = new(0.5)
 	})
 
 	kept := make(map[string]bool)
@@ -407,7 +404,7 @@ func TestSamplerPreservesForeignTraceState(t *testing.T) {
 
 	// Dropped: no wire span exists, so assert on the returned span context.
 	droppedClient, _ := newObservationWireClient(t, func(config *langfuse.Config) {
-		config.SampleRate = rate(0)
+		config.SampleRate = new(0.0)
 	})
 	droppedCtx := oteltrace.ContextWithSpanContext(context.Background(), remoteParent(rng))
 	childCtx, dropped := droppedClient.StartObservation(droppedCtx, "dropped", langfuse.TypeSpan, langfuse.ObservationAttributes{})
@@ -428,7 +425,7 @@ func TestSampledOutObservationSkipsMaskAndErrorCalls(t *testing.T) {
 	t.Parallel()
 	var maskCalls atomic.Int64
 	client, _ := newObservationWireClient(t, func(config *langfuse.Config) {
-		config.SampleRate = rate(0)
+		config.SampleRate = new(0.0)
 		config.Mask = func(_ langfuse.MaskField, value any) any {
 			maskCalls.Add(1)
 			return value
@@ -515,7 +512,7 @@ func TestNewRejectsInvalidSampleRates(t *testing.T) {
 			BaseURL:    "https://cloud.langfuse.com",
 			PublicKey:  "pk-lf-x",
 			SecretKey:  "sk-lf-x",
-			SampleRate: rate(fraction),
+			SampleRate: new(fraction),
 		})
 		if err == nil {
 			t.Errorf("New with SampleRate %s = nil error, want the sample-rate validation error", name)
@@ -638,7 +635,7 @@ func TestBorrowedConfigSampleRateIsIgnoredWithDiagnostic(t *testing.T) {
 		PublicKey:      "pk-lf-borrowed-config-rate",
 		SecretKey:      "sk-lf-borrowed-config-rate",
 		TracerProvider: provider,
-		SampleRate:     rate(0),
+		SampleRate:     new(0.0),
 	})
 	if err != nil {
 		t.Fatalf("langfuse.New() error = %v", err)

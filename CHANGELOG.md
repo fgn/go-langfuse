@@ -5,6 +5,14 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+- **Breaking**: require Go 1.26 and update `golang.org/x/net` to v0.60.0 for
+  GO-2026-6603, GO-2026-6610, GO-2026-6611, GO-2026-6612, and GO-2026-6617
+  (HTTP/2 crashes, resource exhaustion, and malformed header handling);
+  x/net v0.60.0 requires Go 1.26, and Go 1.25 no longer receives security
+  fixes. `golang.org/x/sys` and `golang.org/x/text` follow as x/net
+  requirements. The suggested toolchain is go1.26.9, which fixes the Go 1.25.13
+  standard-library advisories in `net/http`, `net/textproto`, `crypto/tls`,
+  and `html/template`.
 ## [0.12.0] - 2026-10-08
 
 - Update `google.golang.org/grpc` to v1.83.2 for GO-2026-6443 (server panic

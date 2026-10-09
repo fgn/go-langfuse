@@ -479,6 +479,6 @@ task ci
 This checks formatting and module tidiness, runs static analysis, compiles
 the examples and README quickstart, and runs the test, fuzz-smoke, and
 vulnerability suites. Run `task format` to apply source and module
-formatting. The module language version is Go 1.25; `go.mod` records the
+formatting. The module language version is Go 1.26; `go.mod` records the
 suggested patched toolchain. Tests never require Langfuse credentials.
 Release steps are documented in [RELEASING.md](RELEASING.md).

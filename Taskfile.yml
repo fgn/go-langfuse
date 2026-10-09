@@ -75,8 +75,8 @@ tasks:
     cmds:
       - test -f LICENSE
       - grep -q "Apache License" LICENSE
-      - test "$(go mod edit -json | jq -r .Go)" = "1.25.0"
-      - test "$(go mod edit -json | jq -r .Toolchain)" = "go1.25.13"
+      - test "$(go mod edit -json | jq -r .Go)" = "1.26.0"
+      - test "$(go mod edit -json | jq -r .Toolchain)" = "go1.26.9"
 
   contrib:sync:
     desc: Mirror the wiretap package from contrib/openai into contrib/googlegenai

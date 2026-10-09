@@ -46,7 +46,7 @@ func TestScoreSuppressedOnSampledOutAuthoritativePathWithOneDiagnostic(t *testin
 	defer restore()
 
 	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) {
-		config.SampleRate = rate(0)
+		config.SampleRate = new(0.0)
 	})
 	rootCtx, root := client.StartObservation(context.Background(), "root", langfuse.TypeAgent,
 		langfuse.ObservationAttributes{})
@@ -75,7 +75,7 @@ func TestScoreSuppressedOnSampledOutAuthoritativePathWithOneDiagnostic(t *testin
 func TestScoreDeliveryOutsideTheSuppressionConditions(t *testing.T) {
 	t.Parallel()
 	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) {
-		config.SampleRate = rate(0)
+		config.SampleRate = new(0.0)
 	})
 	foreign := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
 	t.Cleanup(func() {
@@ -134,7 +134,7 @@ func TestScoreDeliveryOutsideTheSuppressionConditions(t *testing.T) {
 func TestScoreValidationPrecedesSuppression(t *testing.T) {
 	t.Parallel()
 	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) {
-		config.SampleRate = rate(0)
+		config.SampleRate = new(0.0)
 	})
 	rootCtx, root := client.StartObservation(context.Background(), "root", langfuse.TypeAgent,
 		langfuse.ObservationAttributes{})

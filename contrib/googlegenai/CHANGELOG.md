@@ -5,6 +5,14 @@ follows Semantic Versioning independently of the core module.
 
 ## [Unreleased]
 
+- **Breaking**: require Go 1.26 and update `golang.org/x/net` to v0.60.0 for
+  GO-2026-6603, GO-2026-6610, GO-2026-6611, GO-2026-6612, and GO-2026-6617
+  (HTTP/2 crashes, resource exhaustion, and malformed header handling);
+  x/net v0.60.0 requires Go 1.26, and Go 1.25 no longer receives security
+  fixes. `golang.org/x/sys` and `golang.org/x/text` follow as x/net
+  requirements. The suggested toolchain is go1.26.9, which fixes the Go 1.25.13
+  standard-library advisories in `net/http`, `net/textproto`, `crypto/tls`,
+  and `html/template`.
 - Update `google.golang.org/grpc` to v1.83.2 for GO-2026-6443 (server panic
   on a missing authority or Host header) and `golang.org/x/text` to v0.41.0
   for GO-2026-6629 (panic parsing crafted PRECIS input); govulncheck finds
