@@ -492,13 +492,95 @@ Known limits:
 `Experiments` and `ExperimentItems` read the Langfuse v4 experiment API
 (`/api/public/experiments` and `/api/public/experiment-items`) with all field
 groups, one cursor page per request. `From` is required, filters take values
-without commas, and each experiment or item carries at most 50 scores, with
+without commas or surrounding whitespace, and each experiment or item carries
+at most 50 scores, with
 BOOLEAN values as 0 or 1 and the target in the `Score` target fields.
 Langfuse builds experiments from ingested traces, so a run appears only after
 its spans are exported and processed. Item input, output, and expected output
 are returned as Langfuse stores them: the exported text, so a structured value
 usually arrives as a JSON string that holds its JSON. Metadata arrives
 flattened into dotted keys with string values.
+
+## Annotation review
+
+Score configs, annotation queues, `CreateScore`, `Scores`, and comments are
+REST calls with the rules of [datasets](#datasets): each call blocks within a
+30-second budget, reads retry transient failures, a write is sent once and
+classified by the same table, and error text names the operation and status,
+never content. A missing object wraps the call's not-found sentinel, such as
+`ErrAnnotationQueueNotFound`; `CreateComment` wraps `ErrCommentObjectNotFound`
+for a missing target, and the assignment calls report status 404 without a
+sentinel, because it can also mean a user outside the project.
+
+A typical review loop:
+
+1. Find or create a CATEGORICAL score config per reviewed field and a queue
+   that lists them.
+2. Export the trace, then prefill each field with `CreateScore`
+   (`Source: ScoreSourceAnnotation`, `ConfigID`, `QueueID`, and a fixed `ID`
+   such as `traceID + "-" + field`, so a retry rewrites the same score).
+3. Queue the trace with `CreateAnnotationQueueItem`. Reviewers change what is
+   wrong in the Langfuse UI, comment, and complete the item.
+4. List completed items with `AnnotationQueueItems`, read their scores with
+   `Scores` (`TraceIDs`, `Sources: ANNOTATION`), keeping the latest
+   `UpdatedAt` per name, and their comments with `Comments`.
+
+`RecordScore` and `CreateScore` write the same `Score`:
+
+| | `RecordScore` | `CreateScore` |
+| --- | --- | --- |
+| Transport | ingestion, queued in the client and retried | score REST endpoint, sent once |
+| Errors returned | validation and a full queue | validation, HTTP status, and uncertain outcomes |
+| `Source` | API only | API or ANNOTATION; ANNOTATION needs `ConfigID` unless CORRECTION |
+| `Timestamp` | backdates the score | must be zero; the server stamps it |
+| Sampling | suppressed on a sampled-out SDK trace path | never suppressed |
+| Disabled client | nil, nothing sent | an error |
+
+Langfuse accepts a score before processing it, for both calls, and processes
+it a few seconds later. The SDK and the endpoint check the request shape; the
+server checks the config afterwards and drops a score whose config is missing
+or archived, whose data type differs, or whose value is not a category label
+or lies outside the config's range, without telling the client. Check values
+against the config before writing when that matters. With `ConfigID`, the
+stored score takes the config's name. Writing an existing score ID merges
+into it: an omitted `Comment`, `ConfigID`, `ObservationID`, `SessionID`, or
+`DatasetRunID` keeps its stored value, an omitted `QueueID` or `Source` does
+not, metadata keys accumulate, and the trace ID, environment, and timestamp of
+the first write remain. `CreateScore` returns the score ID with every error
+once the request is built, so a write that may have been applied can be
+repeated under the same ID.
+
+Score configs are not keyed by name: creating the same spec twice stores two
+configs, and `ScoreConfigs` returns archived ones too, newest first. A config
+cannot be deleted; archive it with `UpdateScoreConfig`. An update cannot
+change the data type or remove `MinValue` or `MaxValue`; a pointer to `""`
+empties `Description`. The SDK rejects a CATEGORICAL config without
+categories, which Langfuse would accept and then drop every score against.
+
+Annotation queue names are unique per project; a duplicate fails with status
+400. A queue cannot be updated or deleted through the API. Langfuse neither
+checks that a queued object exists nor deduplicates items, so list the queue
+before adding an object again. Completing an item stamps `CompletedAt`, and
+returning it to PENDING keeps the stamp. `AssignAnnotationQueue` needs a
+project member and fails with status 404 for anyone else; assigning and
+unassigning are idempotent. Listings are newest first.
+
+`Scores` reads `GET /api/public/v3/scores`, the score listing that servers in
+events-only mode serve, with every field group, one cursor page per request.
+Filter values must not contain commas or surrounding whitespace, which
+Langfuse would split or trim away. `TraceIDs`, `SessionIDs`, and
+`DatasetRunIDs` exclude each other, `ObservationIDs` requires `TraceIDs`,
+`Values` requires one NUMERIC, BOOLEAN (`"true"` or `"false"`), or
+CATEGORICAL data type, and `MinValue` and `MaxValue` require exactly NUMERIC.
+Results are ordered by timestamp, newest first. A BOOLEAN value reads as
+`NumericValue` 0 or 1 and a CATEGORICAL value as its label in `StringValue`.
+
+`CreateComment` attaches Markdown of up to 5000 UTF-16 code units, after
+trimming, to a trace,
+observation, session, or prompt. The object must exist: Langfuse looks traces
+up in its analytics store, so commenting on a trace exported moments ago can
+fail with `ErrCommentObjectNotFound` until it is processed. `Comments` returns
+comments in no defined order; sort them by `CreatedAt`.
 
 ## Buffering and backpressure
 

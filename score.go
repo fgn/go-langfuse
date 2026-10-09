@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 	"unicode/utf8"
 
@@ -28,6 +29,20 @@ const (
 	ScoreTypeCorrection  ScoreDataType = "CORRECTION"
 	ScoreTypeNumeric     ScoreDataType = "NUMERIC"
 	ScoreTypeText        ScoreDataType = "TEXT"
+)
+
+// ScoreSource records how a score was produced.
+type ScoreSource string
+
+const (
+	// ScoreSourceAPI is the default for scores written through the SDK.
+	ScoreSourceAPI ScoreSource = "API"
+	// ScoreSourceAnnotation marks a human annotation, or a prefilled value
+	// for a reviewer to confirm in an annotation queue.
+	ScoreSourceAnnotation ScoreSource = "ANNOTATION"
+	// ScoreSourceEval marks a score from a Langfuse-managed evaluator; the
+	// SDK reads it but cannot write it.
+	ScoreSourceEval ScoreSource = "EVAL"
 )
 
 const (
@@ -66,13 +81,13 @@ type Score struct {
 	StringValue  *string
 	// DataType is optional; when empty, Langfuse infers NUMERIC or
 	// CATEGORICAL from the value type. TEXT values must contain 1 to 500
-	// characters.
+	// UTF-16 code units.
 	DataType ScoreDataType
 	// ConfigID references a Langfuse score config by its identifier.
-	// Optional; at most 200 characters. Langfuse validates the score against
-	// the config server-side, so a violating score is rejected during
-	// asynchronous delivery and dropped with a diagnostic rather than
-	// returned as a RecordScore error. Correction scores cannot use ConfigID.
+	// Optional; at most 200 characters. Langfuse checks the score against the
+	// config only after accepting it and drops a violating score without
+	// reporting it to the client, for RecordScore and CreateScore alike.
+	// Correction scores cannot use ConfigID.
 	ConfigID string
 	// Comment is explicit content supplied by the caller. It is not
 	// processed by Config.Mask; sanitize it before calling the SDK.
@@ -85,7 +100,14 @@ type Score struct {
 	// when feedback is computed by a batch job hours after the trace. The
 	// zero value stamps the score with the time RecordScore accepted it. The
 	// UTC year must stay within the four-digit RFC 3339 range.
+	// [Client.CreateScore] cannot set it.
 	Timestamp time.Time
+	// Source is empty or ScoreSourceAPI for RecordScore. CreateScore also
+	// accepts ScoreSourceAnnotation, which requires ConfigID unless the
+	// score is CORRECTION, so the value can prefill an annotation queue.
+	Source ScoreSource
+	// QueueID names the annotation queue the score belongs to. Optional.
+	QueueID string
 }
 
 // RecordScore submits one score through the Langfuse JSON ingestion endpoint
@@ -107,6 +129,70 @@ func (c *Client) RecordScore(ctx context.Context, score Score) error {
 	return c.recordScore(ctx, score, false)
 }
 
+// CreateScore sends one score to the Langfuse score REST endpoint and waits
+// for the server to accept it, so a rejected request returns an error;
+// [Client.RecordScore] queues scores for background delivery instead. It is
+// the call for a score whose Source is ScoreSourceAnnotation, such as a value
+// prefilled for an annotation queue. Langfuse checks the request shape
+// before accepting the score but processes it asynchronously: a score whose
+// value does not fit its ConfigID, or whose config is archived, is dropped
+// later without an error, and the score appears in [Client.Scores] after a
+// few seconds. With ConfigID, the score takes the config's name.
+//
+// The score is validated as RecordScore validates it and uses the same
+// environment and Metadata masking, but is never suppressed by sampling.
+// Timestamp must be zero because the server stamps the time.
+//
+// CreateScore returns the score ID, Score.ID or a generated one, with
+// success and with every error once the request is built, including
+// [ErrWriteOutcomeUnknown]; invalid scores and unavailable clients return
+// "". The write is sent once, and repeating it with the returned ID updates
+// the same score. Writing an existing ID merges into it: an omitted Comment,
+// ConfigID, ObservationID, SessionID, or DatasetRunID keeps its stored
+// value, an omitted QueueID or Source does not, metadata keys accumulate,
+// and the trace ID, environment, and timestamp of the first write remain.
+func (c *Client) CreateScore(ctx context.Context, score Score) (string, error) {
+	invalid := validateScore(score)
+	if invalid == nil {
+		invalid = validateScoreSource(score)
+	}
+	if err := c.restReady(ctx, invalid); err != nil {
+		return "", err
+	}
+	body, err := c.scoreBody(score, c.scoreEnvironment(ctx, score), false)
+	if err != nil {
+		return "", err
+	}
+	id, _ := body["id"].(string)
+	if score.Source != "" {
+		body["source"] = string(score.Source)
+	}
+	payload, err := marshalScore(body)
+	if err != nil {
+		return id, err
+	}
+	_, err = runREST(ctx, c, nil, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, c.restTransport.CreateScore(ctx, payload, id)
+	})
+	return id, err
+}
+
+func validateScoreSource(score Score) error {
+	if !score.Timestamp.IsZero() {
+		return errors.New("langfuse: CreateScore cannot set a score timestamp")
+	}
+	switch score.Source {
+	case "", ScoreSourceAPI:
+	case ScoreSourceAnnotation:
+		if score.ConfigID == "" && score.DataType != ScoreTypeCorrection {
+			return errors.New("langfuse: an ANNOTATION score requires a config ID unless it is CORRECTION")
+		}
+	default:
+		return errors.New("langfuse: CreateScore source must be API or ANNOTATION")
+	}
+	return nil
+}
+
 // recordScore records score; metadataMasked marks Metadata that Mask has
 // already processed.
 func (c *Client) recordScore(ctx context.Context, score Score, metadataMasked bool) error {
@@ -121,6 +207,9 @@ func (c *Client) recordScore(ctx context.Context, score Score, metadataMasked bo
 	}
 	if err := validateScore(score); err != nil {
 		return err
+	}
+	if score.Source != "" && score.Source != ScoreSourceAPI {
+		return errors.New("langfuse: RecordScore sends only API scores; use CreateScore for another source")
 	}
 	if c.suppressScore(ctx, score) {
 		return nil
@@ -191,6 +280,7 @@ func validateScore(score Score) error {
 		"score dataset run ID": score.DatasetRunID,
 		"score observation ID": score.ObservationID,
 		"score config ID":      score.ConfigID,
+		"score queue ID":       score.QueueID,
 	} {
 		if err := validScoreString(field, value, true); err != nil {
 			return err
@@ -210,6 +300,9 @@ func validateScore(score Score) error {
 	}
 	if (score.NumericValue == nil) == (score.StringValue == nil) {
 		return errors.New("langfuse: score requires exactly one of numeric value or string value")
+	}
+	if score.NumericValue != nil && (math.IsNaN(*score.NumericValue) || math.IsInf(*score.NumericValue, 0)) {
+		return errors.New("langfuse: score numeric value must be finite")
 	}
 	if score.StringValue != nil && !utf8.ValidString(*score.StringValue) {
 		return errors.New("langfuse: score string value is not valid UTF-8")
@@ -242,9 +335,9 @@ func validateScore(score Score) error {
 		if score.StringValue == nil {
 			return errors.New("langfuse: TEXT score requires a string value")
 		}
-		length := utf8.RuneCountInString(*score.StringValue)
+		length := lengthJS(*score.StringValue)
 		if length == 0 || length > maxTextScoreCharacters {
-			return errors.New("langfuse: TEXT score must contain 1 to 500 characters")
+			return errors.New("langfuse: TEXT score must contain 1 to 500 UTF-16 code units")
 		}
 	default:
 		return errors.New("langfuse: unsupported score data type")
@@ -266,6 +359,39 @@ func validateScore(score Score) error {
 // ingestion request, returning the envelope event ID the ingestion result
 // must account for.
 func (c *Client) buildScorePayload(score Score, environment string, metadataMasked bool) ([]byte, string, error) {
+	payload, err := c.scoreBody(score, environment, metadataMasked)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// The ingestion event envelope carries the score's timestamp: Langfuse
+	// stores a score-create event's envelope timestamp as the score time, which
+	// is how the official SDKs backdate scores. The envelope is serialized once
+	// here, so a retried delivery resends the identical event and stays
+	// idempotent through the event ID and the score ID upsert.
+	timestamp := score.Timestamp.UTC()
+	if score.Timestamp.IsZero() {
+		timestamp = time.Now().UTC()
+	}
+	eventID, err := newScoreID()
+	if err != nil {
+		return nil, "", err
+	}
+	event := map[string]any{
+		"batch": []any{map[string]any{
+			"id":        eventID,
+			"type":      "score-create",
+			"timestamp": timestamp.Format(time.RFC3339Nano),
+			"body":      payload,
+		}},
+	}
+	encoded, err := marshalScore(event)
+	return encoded, eventID, err
+}
+
+// scoreBody builds the score fields shared by ingestion and the score REST
+// endpoint, generating an ID when the score has none.
+func (c *Client) scoreBody(score Score, environment string, metadataMasked bool) (map[string]any, error) {
 	payload := map[string]any{
 		"name":        score.Name,
 		"environment": environment,
@@ -280,7 +406,7 @@ func (c *Client) buildScorePayload(score Score, environment string, metadataMask
 	if scoreID == "" {
 		generated, err := newScoreID()
 		if err != nil {
-			return nil, "", err
+			return nil, err
 		}
 		scoreID = generated
 	}
@@ -306,6 +432,9 @@ func (c *Client) buildScorePayload(score Score, environment string, metadataMask
 	if score.Comment != "" {
 		payload["comment"] = score.Comment
 	}
+	if score.QueueID != "" {
+		payload["queueId"] = score.QueueID
+	}
 	metadata := score.Metadata
 	if !metadataMasked {
 		metadata = lfattr.ScoreMetadata(score.Metadata, c.mask)
@@ -313,37 +442,18 @@ func (c *Client) buildScorePayload(score Score, environment string, metadataMask
 	if len(metadata) != 0 {
 		payload["metadata"] = metadata
 	}
+	return payload, nil
+}
 
-	// The ingestion event envelope carries the score's timestamp: Langfuse
-	// stores a score-create event's envelope timestamp as the score time, which
-	// is how the official SDKs backdate scores. The envelope is serialized once
-	// here, so a retried delivery resends the identical event and stays
-	// idempotent through the event ID and the score ID upsert.
-	timestamp := score.Timestamp.UTC()
-	if score.Timestamp.IsZero() {
-		timestamp = time.Now().UTC()
-	}
-	eventID, err := newScoreID()
-	if err != nil {
-		return nil, "", err
-	}
-	event := map[string]any{
-		"batch": []any{map[string]any{
-			"id":        eventID,
-			"type":      "score-create",
-			"timestamp": timestamp.Format(time.RFC3339Nano),
-			"body":      payload,
-		}},
-	}
-
-	encoded, err, panicked := lfattr.MarshalJSON(event, maxScorePayloadBytes)
+func marshalScore(value any) ([]byte, error) {
+	encoded, err, panicked := lfattr.MarshalJSON(value, maxScorePayloadBytes)
 	if panicked || err != nil {
-		return nil, "", errors.New("langfuse: score could not be serialized")
+		return nil, errors.New("langfuse: score could not be serialized")
 	}
 	if len(encoded) > maxScorePayloadBytes {
-		return nil, "", errors.New("langfuse: score exceeds the 128 KiB payload limit")
+		return nil, errors.New("langfuse: score exceeds the 128 KiB payload limit")
 	}
-	return encoded, eventID, nil
+	return encoded, nil
 }
 
 // newScoreID returns a random UUID version 4 string, used both as the score

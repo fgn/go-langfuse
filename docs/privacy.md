@@ -31,6 +31,8 @@ The privacy boundary is deliberately narrow:
 | Evaluation names, values, and comments (scores) | No | Evaluation metadata only, as `Score` metadata |
 | Experiment and dataset IDs, names, run names, and descriptions; dataset schemas; item versions, statuses, and source trace and observation IDs | No | No |
 | `Score` comment and value | No | No |
+| `CreateScore` metadata (REST write) | No | Yes, once as `MaskScoreMetadata`, as for `RecordScore` |
+| `CommentSpec.Content`; score config, annotation queue, and comment IDs, names, descriptions, categories, and statuses | No | No |
 | OpenTelemetry resource attributes (`resource.Default`/`OTEL_RESOURCE_ATTRIBUTES` in isolated mode; caller resource in borrowed mode) | No | No |
 | Third-party OTel span attributes and events | No | No |
 
@@ -54,6 +56,11 @@ and masking fails closed. A nil or panicking `Mask` result fails the write
 before anything is sent, because an omitted field keeps its stored value.
 Langfuse keeps earlier item versions after an upsert or a delete. Dataset and
 experiment reads return stored content unmasked.
+
+Annotation review calls are REST calls too. Comment content and score
+comments are explicit caller content, like `Score.Comment`, and are sent as
+given: sanitize them before calling the SDK. Score, comment, and queue reads
+return stored data unmasked.
 
 `RunExperiment` passes items, outputs, and evaluations to the task and
 evaluators unmasked; masking applies only where they leave the process.

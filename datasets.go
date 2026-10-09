@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"iter"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -21,13 +19,8 @@ var ErrDatasetNotFound = errors.New("langfuse: dataset not found")
 // not exist.
 var ErrDatasetItemNotFound = errors.New("langfuse: dataset item not found")
 
-// ErrWriteOutcomeUnknown reports a dataset write that failed after it was
-// sent and may have been applied. The SDK never repeats a write.
-var ErrWriteOutcomeUnknown = errors.New("langfuse: write outcome unknown")
-
 const (
-	datasetOperationBudget = 30 * time.Second
-	maxDatasetFieldBytes   = 1 << 20
+	maxDatasetFieldBytes = 1 << 20
 	// The server accepts 4.5 MB item bodies and 1 MB dataset bodies.
 	maxDatasetItemBodyBytes = 4 << 20
 	maxDatasetBodyBytes     = 1 << 20
@@ -146,154 +139,11 @@ type DatasetItemQuery struct {
 	PageSize int
 }
 
-type datasetGate struct {
-	mu                  sync.Mutex
-	closing             bool
-	wg                  sync.WaitGroup
-	newOperationContext func(parent context.Context) (context.Context, context.CancelFunc)
-	cancelLifecycle     context.CancelFunc
-	stop                <-chan struct{}
-}
-
-func newDatasetGate() *datasetGate {
-	lifecycle, cancel := context.WithCancel(context.Background())
-	return &datasetGate{
-		newOperationContext: func(parent context.Context) (context.Context, context.CancelFunc) {
-			operation, cancelOperation := context.WithTimeout(parent, datasetOperationBudget)
-			detach := context.AfterFunc(lifecycle, cancelOperation)
-			return operation, func() { detach(); cancelOperation() }
-		},
-		cancelLifecycle: cancel,
-		stop:            lifecycle.Done(),
-	}
-}
-
-var errDatasetShutdown = errors.New("langfuse: dataset request after client shutdown")
-
-// enter must follow Mask and serialization, so a callback that calls
-// Shutdown cannot block the drain. Call release once the I/O has finished.
-func (g *datasetGate) enter(parent context.Context) (ctx context.Context, release func(), err error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.closing {
-		return nil, nil, errDatasetShutdown
-	}
-	g.wg.Add(1)
-	ctx, cancel := g.newOperationContext(parent)
-	return ctx, func() { cancel(); g.wg.Done() }, nil
-}
-
-func (g *datasetGate) lifecycleEnded() bool {
-	select {
-	case <-g.stop:
-		return true
-	default:
-		return false
-	}
-}
-
-func (g *datasetGate) beginShutdown() {
-	if g == nil {
-		return
-	}
-	g.mu.Lock()
-	g.closing = true
-	g.mu.Unlock()
-	g.cancelLifecycle()
-}
-
-func (g *datasetGate) shutdown(ctx context.Context) error {
-	if g == nil {
-		return nil
-	}
-	g.beginShutdown()
-	done := make(chan struct{})
-	go func() {
-		g.wg.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return fmt.Errorf("langfuse: dataset shutdown: %w", ctx.Err())
-	}
-}
-
-func (c *Client) datasetReady(ctx context.Context, invalid error) error {
-	if ctx == nil {
-		return errors.New("langfuse: dataset context is nil")
-	}
-	if invalid != nil {
-		return invalid
-	}
-	return c.datasetUnavailable()
-}
-
-func (c *Client) datasetUnavailable() error {
-	if c == nil || c.isDisabled() || c.datasets == nil || c.datasetTransport == nil {
-		return errors.New("langfuse: dataset request on a disabled client")
-	}
-	if c.stopped.Load() {
-		return errDatasetShutdown
-	}
-	return nil
-}
-
-func requireDataset(field, value string) error {
-	if value == "" {
-		return errors.New("langfuse: " + field + " is required")
-	}
-	return nil
-}
-
-// runDatasetOperation maps a 404 to notFound unless it is nil.
-func runDatasetOperation[T any](
-	ctx context.Context, c *Client, notFound error, call func(context.Context) (T, error),
-) (T, error) {
-	var zero T
-	operationCtx, release, err := c.datasets.enter(ctx)
-	if err != nil {
-		return zero, err
-	}
-	result, err := call(operationCtx)
-	release()
-	if err != nil {
-		return zero, c.datasetFailure(ctx, notFound, err)
-	}
-	return result, nil
-}
-
-func (c *Client) datasetFailure(ctx context.Context, notFound, err error) error {
-	var failure *transport.DatasetError
-	if !errors.As(err, &failure) {
-		return errors.New("langfuse: dataset request failed")
-	}
-	if failure.NotFound && notFound != nil {
-		return notFound
-	}
-	result := errors.New("langfuse: " + failure.Message)
-	if failure.OutcomeUnknown {
-		result = fmt.Errorf("%w: %s", ErrWriteOutcomeUnknown, failure.Message)
-	}
-	cause := failure.Cause // the operation budget expired, or nil
-	switch {
-	case ctx.Err() != nil:
-		cause = ctx.Err()
-	case c.datasets.lifecycleEnded():
-		cause = errDatasetShutdown
-	}
-	if cause != nil {
-		result = fmt.Errorf("%w: %w", result, cause)
-	}
-	return result
-}
-
 // UpsertDataset creates or updates the named dataset. A nil or panicking Mask
 // result for Metadata fails before any request. The write is sent once; a
 // failure after sending wraps [ErrWriteOutcomeUnknown].
 func (c *Client) UpsertDataset(ctx context.Context, spec DatasetSpec) (Dataset, error) {
-	if err := c.datasetReady(ctx, requireDataset("dataset name", spec.Name)); err != nil {
+	if err := c.restReady(ctx, requireField("dataset name", spec.Name)); err != nil {
 		return Dataset{}, err
 	}
 	body := map[string]any{"name": spec.Name}
@@ -313,12 +163,12 @@ func (c *Client) UpsertDataset(ctx context.Context, spec DatasetSpec) (Dataset, 
 	if len(spec.ExpectedOutputSchema) != 0 {
 		body["expectedOutputSchema"] = spec.ExpectedOutputSchema
 	}
-	payload, err := marshalDatasetBody(body, maxDatasetBodyBytes, "dataset")
+	payload, err := marshalBody(body, maxDatasetBodyBytes, "dataset")
 	if err != nil {
 		return Dataset{}, err
 	}
-	result, err := runDatasetOperation(ctx, c, nil, func(ctx context.Context) (transport.Dataset, error) {
-		return c.datasetTransport.UpsertDataset(ctx, payload, spec.Name)
+	result, err := runREST(ctx, c, nil, func(ctx context.Context) (transport.Dataset, error) {
+		return c.restTransport.UpsertDataset(ctx, payload, spec.Name)
 	})
 	return Dataset(result), err
 }
@@ -326,11 +176,11 @@ func (c *Client) UpsertDataset(ctx context.Context, spec DatasetSpec) (Dataset, 
 // GetDataset reads one dataset by name. A missing dataset wraps
 // [ErrDatasetNotFound].
 func (c *Client) GetDataset(ctx context.Context, name string) (Dataset, error) {
-	if err := c.datasetReady(ctx, requireDataset("dataset name", name)); err != nil {
+	if err := c.restReady(ctx, requireField("dataset name", name)); err != nil {
 		return Dataset{}, err
 	}
-	result, err := runDatasetOperation(ctx, c, ErrDatasetNotFound, func(ctx context.Context) (transport.Dataset, error) {
-		return c.datasetTransport.GetDataset(ctx, name)
+	result, err := runREST(ctx, c, ErrDatasetNotFound, func(ctx context.Context) (transport.Dataset, error) {
+		return c.restTransport.GetDataset(ctx, name)
 	})
 	return Dataset(result), err
 }
@@ -342,7 +192,7 @@ func (c *Client) GetDataset(ctx context.Context, name string) (Dataset, error) {
 // [ErrWriteOutcomeUnknown], and repeating it can add a version or, without an
 // ID, a duplicate item. A missing dataset wraps [ErrDatasetNotFound].
 func (c *Client) UpsertDatasetItem(ctx context.Context, spec DatasetItemSpec) (DatasetItem, error) {
-	if err := c.datasetReady(ctx, requireDataset("dataset name", spec.DatasetName)); err != nil {
+	if err := c.restReady(ctx, requireField("dataset name", spec.DatasetName)); err != nil {
 		return DatasetItem{}, err
 	}
 	body := map[string]any{"datasetName": spec.DatasetName}
@@ -376,12 +226,12 @@ func (c *Client) UpsertDatasetItem(ctx context.Context, spec DatasetItemSpec) (D
 	if spec.Status != "" {
 		body["status"] = string(spec.Status)
 	}
-	payload, err := marshalDatasetBody(body, maxDatasetItemBodyBytes, "dataset item")
+	payload, err := marshalBody(body, maxDatasetItemBodyBytes, "dataset item")
 	if err != nil {
 		return DatasetItem{}, err
 	}
-	result, err := runDatasetOperation(ctx, c, ErrDatasetNotFound, func(ctx context.Context) (transport.DatasetItem, error) {
-		return c.datasetTransport.UpsertItem(ctx, payload, spec.DatasetName, spec.ID)
+	result, err := runREST(ctx, c, ErrDatasetNotFound, func(ctx context.Context) (transport.DatasetItem, error) {
+		return c.restTransport.UpsertItem(ctx, payload, spec.DatasetName, spec.ID)
 	})
 	return datasetItemFromWire(result), err
 }
@@ -389,11 +239,11 @@ func (c *Client) UpsertDatasetItem(ctx context.Context, spec DatasetItemSpec) (D
 // GetDatasetItem reads one dataset item by ID. A missing item or dataset
 // wraps [ErrDatasetItemNotFound].
 func (c *Client) GetDatasetItem(ctx context.Context, id string) (DatasetItem, error) {
-	if err := c.datasetReady(ctx, requireDataset("dataset item ID", id)); err != nil {
+	if err := c.restReady(ctx, requireField("dataset item ID", id)); err != nil {
 		return DatasetItem{}, err
 	}
-	result, err := runDatasetOperation(ctx, c, ErrDatasetItemNotFound, func(ctx context.Context) (transport.DatasetItem, error) {
-		return c.datasetTransport.GetItem(ctx, id)
+	result, err := runREST(ctx, c, ErrDatasetItemNotFound, func(ctx context.Context) (transport.DatasetItem, error) {
+		return c.restTransport.GetItem(ctx, id)
 	})
 	return datasetItemFromWire(result), err
 }
@@ -402,11 +252,11 @@ func (c *Client) GetDatasetItem(ctx context.Context, id string) (DatasetItem, er
 // versions remain. A missing item wraps [ErrDatasetItemNotFound], and a
 // failure after sending wraps [ErrWriteOutcomeUnknown].
 func (c *Client) DeleteDatasetItem(ctx context.Context, id string) error {
-	if err := c.datasetReady(ctx, requireDataset("dataset item ID", id)); err != nil {
+	if err := c.restReady(ctx, requireField("dataset item ID", id)); err != nil {
 		return err
 	}
-	_, err := runDatasetOperation(ctx, c, ErrDatasetItemNotFound, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, c.datasetTransport.DeleteItem(ctx, id)
+	_, err := runREST(ctx, c, ErrDatasetItemNotFound, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, c.restTransport.DeleteItem(ctx, id)
 	})
 	return err
 }
@@ -430,11 +280,11 @@ func (c *Client) DatasetItems(ctx context.Context, query DatasetItemQuery) iter.
 		list.Version = formatDatasetInstant(query.AsOf)
 	}
 	version := query.AsOf.UTC().Truncate(time.Millisecond)
-	return datasetPages(ctx, c, requireDataset("dataset name", query.DatasetName), ErrDatasetNotFound,
+	return numberedPages(ctx, c, requireField("dataset name", query.DatasetName), ErrDatasetNotFound,
 		func(ctx context.Context, page int) ([]DatasetItem, int, error) {
 			request := list // each traversal may run concurrently
 			request.Page = page
-			wire, err := c.datasetTransport.ListItems(ctx, request)
+			wire, err := c.restTransport.ListItems(ctx, request)
 			items := make([]DatasetItem, len(wire.Data))
 			for index, item := range wire.Data {
 				items[index] = datasetItemFromWire(item)
@@ -459,60 +309,14 @@ func (c *Client) Datasets(ctx context.Context, query DatasetQuery) iter.Seq2[Dat
 	if pageSize == 0 {
 		pageSize = defaultDatasetPageSize
 	}
-	return datasetPages(ctx, c, nil, nil, func(ctx context.Context, page int) ([]Dataset, int, error) {
-		wire, err := c.datasetTransport.ListDatasets(ctx, page, pageSize)
+	return numberedPages(ctx, c, nil, nil, func(ctx context.Context, page int) ([]Dataset, int, error) {
+		wire, err := c.restTransport.ListDatasets(ctx, page, pageSize)
 		datasets := make([]Dataset, len(wire.Data))
 		for index, dataset := range wire.Data {
 			datasets[index] = Dataset(dataset)
 		}
 		return datasets, wire.Meta.Pages(), err
 	})
-}
-
-// datasetPages yields the values of fetch page by page until a short listing
-// or the reported page count ends it.
-func datasetPages[T any](
-	ctx context.Context, c *Client, invalid, notFound error,
-	fetch func(ctx context.Context, page int) ([]T, int, error),
-) iter.Seq2[T, error] {
-	return func(yield func(T, error) bool) {
-		var zero T
-		if ctx == nil {
-			yield(zero, errors.New("langfuse: dataset context is nil"))
-			return
-		}
-		if invalid != nil {
-			yield(zero, invalid)
-			return
-		}
-		for page := 1; ; page++ {
-			if err := c.datasetUnavailable(); err != nil {
-				yield(zero, err)
-				return
-			}
-			type pageResult struct {
-				values []T
-				total  int
-			}
-			result, err := runDatasetOperation(ctx, c, notFound, func(ctx context.Context) (pageResult, error) {
-				values, total, err := fetch(ctx, page)
-				return pageResult{values, total}, err
-			})
-			if err != nil {
-				yield(zero, err)
-				return
-			}
-			for _, value := range result.values {
-				if !yield(value, nil) {
-					return
-				}
-			}
-			// An empty page ends a listing whose page count overstates it.
-			if len(result.values) == 0 || page >= result.total {
-				return
-			}
-		}
-	}
 }
 
 // maskedDatasetContent fails where observation masking would omit the
@@ -540,24 +344,6 @@ func (c *Client) maskedDatasetContent(field MaskField, value any) (json.RawMessa
 	}
 	if string(data) == "null" {
 		return nil, errors.New("langfuse: " + name + " is JSON null; omitting it would keep the stored value")
-	}
-	return data, nil
-}
-
-// marshalDatasetBody checks strings first because encoding/json silently
-// replaces invalid UTF-8.
-func marshalDatasetBody(body map[string]any, limit int, kind string) ([]byte, error) {
-	for _, value := range body {
-		if text, ok := value.(string); ok && !utf8.ValidString(text) {
-			return nil, errors.New("langfuse: " + kind + " request contains invalid UTF-8")
-		}
-	}
-	data, err := json.Marshal(body)
-	if err != nil || !utf8.Valid(data) {
-		return nil, errors.New("langfuse: " + kind + " request could not be serialized")
-	}
-	if len(data) > limit {
-		return nil, fmt.Errorf("langfuse: %s request exceeds the %d MiB limit", kind, limit>>20)
 	}
 	return data, nil
 }

@@ -153,6 +153,56 @@ async function readExperiment(langfuse, request) {
   return withoutFunctions({ settled, counts: result.counts, experiments: result.experiments, items: result.items });
 }
 
+async function reviewRead(langfuse, request) {
+  const deadline = Date.now() + 90_000;
+  let scores = [];
+  for (;;) {
+    const page = await langfuse.api.scoresV3.getManyV3({
+      traceId: request.trace_id, source: "ANNOTATION", fields: "details,subject,annotation", limit: 100,
+    });
+    scores = page.data.filter((score) => score.id === request.score_id);
+    if ((scores.length && scores[0].value === request.value) || Date.now() > deadline) break;
+    await sleep(2000);
+  }
+  const items = [];
+  for (let page = 1; ; page++) {
+    const result = await langfuse.api.annotationQueues.listQueueItems(request.queue_id, { page, limit: 100 });
+    items.push(...result.data.filter((item) => item.objectId === request.trace_id));
+    if (page >= result.meta.totalPages) break;
+  }
+  const comments = await langfuse.api.comments.get({ objectType: "TRACE", objectId: request.trace_id, limit: 50 });
+  return {
+    config: await langfuse.api.scoreConfigs.getById(request.config_id),
+    queue: await langfuse.api.annotationQueues.getQueue(request.queue_id),
+    items,
+    scores,
+    comments: comments.data,
+  };
+}
+
+async function reviewWrite(langfuse, request) {
+  await langfuse.api.scores.create({
+    id: request.score_id, traceId: request.trace_id, name: request.config_name, value: request.value,
+    configId: request.config_id, queueId: request.queue_id, source: "ANNOTATION", comment: request.comment,
+  });
+  const item = await langfuse.api.annotationQueues.createQueueItem(request.queue_id, {
+    objectId: request.trace_id, objectType: "TRACE", status: "COMPLETED",
+  });
+  const projectId = (await langfuse.api.projects.get()).data[0].id;
+  const deadline = Date.now() + 90_000;
+  for (;;) {
+    try {
+      const comment = await langfuse.api.comments.create({
+        projectId, objectType: "TRACE", objectId: request.trace_id, content: request.comment,
+      });
+      return { item_id: item.id, comment_id: comment.id };
+    } catch (error) {
+      if (!(error instanceof LangfuseAPIError) || error.statusCode !== 404 || Date.now() > deadline) throw error;
+      await sleep(2000);
+    }
+  }
+}
+
 async function perform(langfuse, request) {
   switch (request.op) {
     case "create_dataset": {
@@ -217,6 +267,10 @@ async function perform(langfuse, request) {
       return await runExperiment(langfuse, request);
     case "read_experiment":
       return await readExperiment(langfuse, request);
+    case "review_read":
+      return withoutFunctions(await reviewRead(langfuse, request));
+    case "review_write":
+      return await reviewWrite(langfuse, request);
     default:
       throw new Error(`unknown op ${request.op}`);
   }

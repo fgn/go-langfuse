@@ -56,6 +56,10 @@ func (r *scoreWireReceiver) ServeHTTP(w http.ResponseWriter, req *http.Request) 
 		w.WriteHeader(http.StatusOK)
 		return
 	}
+	if strings.HasSuffix(req.URL.Path, "/api/public/scores") && status == 0 {
+		_, _ = fmt.Fprintf(w, `{"id":%q}`, record.body["id"])
+		return
+	}
 	if status == 0 {
 		// Answer like the real ingestion endpoint: 207 with per-item results
 		// accounting for the submitted envelope event ID.
@@ -390,6 +394,8 @@ func TestScoreWireTimestampAndConfigID(t *testing.T) {
 		SessionID:    "conversation:610",
 		NumericValue: &rating,
 		ConfigID:     "config-123",
+		QueueID:      "queue-7",
+		Source:       langfuse.ScoreSourceAPI,
 		Timestamp:    backdated,
 	})
 	if err != nil {
@@ -416,10 +422,15 @@ func TestScoreWireTimestampAndConfigID(t *testing.T) {
 	if got := body["configId"]; got != "config-123" {
 		t.Fatalf("score payload configId = %v, want config-123", got)
 	}
+	if body["queueId"] != "queue-7" || body["source"] != nil {
+		t.Fatalf("score payload queueId = %v, source = %v; want queue-7 and no source", body["queueId"], body["source"])
+	}
 
 	defaulted, defaultedBody := scoreWireEvent(t, requests[1])
-	if _, exists := defaultedBody["configId"]; exists {
-		t.Fatalf("score payload configId = %v, want it omitted", defaultedBody["configId"])
+	for _, key := range []string{"configId", "queueId"} {
+		if _, exists := defaultedBody[key]; exists {
+			t.Fatalf("score payload %s = %v, want it omitted", key, defaultedBody[key])
+		}
 	}
 	stamp, err := time.Parse(time.RFC3339Nano, defaulted["timestamp"].(string))
 	if err != nil {

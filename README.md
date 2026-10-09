@@ -22,6 +22,8 @@ Langfuse.
 - **Datasets and experiments.** Dataset reads and writes over REST, an
   experiment runner with evaluators and run evaluators over dataset or local
   items, and reads of stored Langfuse v4 experiment results.
+- **Annotation review.** Score configs, annotation queues with prefilled
+  scores, comments, and score reads for human review loops.
 - **Deterministic trace sampling.** Per-request rates in one process, and a
   pure predicate for correlated app-level sampling such as gating an
   expensive LLM-judge evaluation to a subset of the traces kept for export.
@@ -284,6 +286,31 @@ that may have been applied wraps `ErrWriteOutcomeUnknown`. See the
 [reference](docs/reference.md#experiments) and the runnable
 [experiments example](examples/experiments/main.go).
 
+## Annotation review
+
+Annotation queues put traces in front of human reviewers in the Langfuse UI.
+`CreateScore` with an ANNOTATION source prefills a reviewer's field with a
+model's guess, and `Scores` reads the reviewed values back:
+
+```go
+_, err := lf.CreateScore(ctx, langfuse.Score{
+	ID: traceID + "-route", TraceID: traceID, Name: "route", StringValue: &guess,
+	ConfigID: config.ID, QueueID: queue.ID, Source: langfuse.ScoreSourceAnnotation,
+})
+if err != nil {
+	return err
+}
+_, err = lf.CreateAnnotationQueueItem(ctx, langfuse.AnnotationQueueItemSpec{
+	QueueID: queue.ID, ObjectID: traceID, ObjectType: langfuse.AnnotationObjectTrace,
+})
+```
+
+Langfuse processes scores asynchronously, so a reviewed value appears in
+`Scores` after a few seconds, and a value that does not fit its score config
+is dropped without an error. See the
+[reference](docs/reference.md#annotation-review) and the runnable
+[annotation example](examples/annotation/main.go).
+
 ## Content capture
 
 `Config.DisableContentCapture` is the client default for SDK-supplied
@@ -462,8 +489,8 @@ example are in the [privacy guide](docs/privacy.md).
 
 - [API reference and examples on pkg.go.dev](https://pkg.go.dev/github.com/fgn/go-langfuse)
 - [Configuration and behavior reference](docs/reference.md): environment
-  variables, datasets and experiments, buffering and backpressure,
-  flush/shutdown, limits, sampling, and current limitations
+  variables, datasets and experiments, annotation review, buffering and
+  backpressure, flush/shutdown, limits, sampling, and current limitations
 - [Privacy guide](docs/privacy.md): the content-capture and masking boundary
 - [Existing OpenTelemetry guide](docs/existing-opentelemetry.md): borrowed
   provider lifecycle

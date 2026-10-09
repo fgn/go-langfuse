@@ -183,6 +183,57 @@ def trace_observations(langfuse, request):
     return {"observations": [dump(o) for o in page.data]}
 
 
+def review_read(langfuse, request):
+    """Reads a review written by another SDK, waiting for its score."""
+    deadline = time.time() + 90
+    while True:
+        page = langfuse.api.scores_v3.get_many_v3(
+            trace_id=request["trace_id"], source="ANNOTATION", fields="details,subject,annotation", limit=100
+        )
+        scores = [dump(score) for score in page.data if score.id == request["score_id"]]
+        if (scores and scores[0]["value"] == request["value"]) or time.time() > deadline:
+            break
+        time.sleep(2)
+    items, page_number = [], 1
+    while True:
+        result = langfuse.api.annotation_queues.list_queue_items(request["queue_id"], page=page_number, limit=100)
+        items.extend(dump(item) for item in result.data if item.object_id == request["trace_id"])
+        if page_number >= result.meta.total_pages:
+            break
+        page_number += 1
+    comments = langfuse.api.comments.get(object_type="TRACE", object_id=request["trace_id"], limit=50)
+    return {
+        "config": dump(langfuse.api.score_configs.get_by_id(request["config_id"])),
+        "queue": dump(langfuse.api.annotation_queues.get_queue(request["queue_id"])),
+        "items": items,
+        "scores": scores,
+        "comments": [dump(comment) for comment in comments.data],
+    }
+
+
+def review_write(langfuse, request):
+    """Prefills an annotation score, queues the trace completed, and comments."""
+    langfuse.api.scores.create(
+        id=request["score_id"], trace_id=request["trace_id"], name=request["config_name"], value=request["value"],
+        config_id=request["config_id"], queue_id=request["queue_id"], source="ANNOTATION", comment=request["comment"],
+    )
+    item = langfuse.api.annotation_queues.create_queue_item(
+        request["queue_id"], object_id=request["trace_id"], object_type="TRACE", status="COMPLETED"
+    )
+    project_id = langfuse.api.projects.get().data[0].id
+    deadline = time.time() + 90
+    while True:
+        try:
+            comment = langfuse.api.comments.create(
+                project_id=project_id, object_type="TRACE", object_id=request["trace_id"], content=request["comment"]
+            )
+            return {"item_id": item.id, "comment_id": comment.id}
+        except ApiError as error:
+            if error.status_code != 404 or time.time() > deadline:
+                raise
+            time.sleep(2)
+
+
 def main():
     request = json.load(sys.stdin)
     op = request["op"]
@@ -253,6 +304,10 @@ def main():
             return run_experiment(langfuse, request)
         if op == "read_experiment":
             return read_experiment(langfuse, request)
+        if op == "review_read":
+            return review_read(langfuse, request)
+        if op == "review_write":
+            return review_write(langfuse, request)
         if op == "legacy_runs":
             try:
                 runs = langfuse.get_dataset_runs(dataset_name=request["dataset_name"])

@@ -39,6 +39,25 @@ var (
 	_ func(*langfuse.Client, context.Context, langfuse.ExperimentRun) (langfuse.ExperimentResult, error)                                                                            = (*langfuse.Client).RunExperiment
 	_ func(*langfuse.Client, context.Context, langfuse.ExperimentQuery) iter.Seq2[langfuse.StoredExperiment, error]                                                                 = (*langfuse.Client).Experiments
 	_ func(*langfuse.Client, context.Context, langfuse.ExperimentItemQuery) iter.Seq2[langfuse.StoredExperimentItem, error]                                                         = (*langfuse.Client).ExperimentItems
+	_ func(*langfuse.Client, context.Context, langfuse.Score) (string, error)                                                                                                       = (*langfuse.Client).CreateScore
+	_ func(*langfuse.Client, context.Context, langfuse.ScoreQuery) iter.Seq2[langfuse.StoredScore, error]                                                                           = (*langfuse.Client).Scores
+	_ func(*langfuse.Client, context.Context, langfuse.ScoreConfigSpec) (langfuse.ScoreConfig, error)                                                                               = (*langfuse.Client).CreateScoreConfig
+	_ func(*langfuse.Client, context.Context, string) (langfuse.ScoreConfig, error)                                                                                                 = (*langfuse.Client).GetScoreConfig
+	_ func(*langfuse.Client, context.Context, string, langfuse.ScoreConfigUpdate) (langfuse.ScoreConfig, error)                                                                     = (*langfuse.Client).UpdateScoreConfig
+	_ func(*langfuse.Client, context.Context, langfuse.ScoreConfigQuery) iter.Seq2[langfuse.ScoreConfig, error]                                                                     = (*langfuse.Client).ScoreConfigs
+	_ func(*langfuse.Client, context.Context, langfuse.AnnotationQueueSpec) (langfuse.AnnotationQueue, error)                                                                       = (*langfuse.Client).CreateAnnotationQueue
+	_ func(*langfuse.Client, context.Context, string) (langfuse.AnnotationQueue, error)                                                                                             = (*langfuse.Client).GetAnnotationQueue
+	_ func(*langfuse.Client, context.Context, langfuse.AnnotationQueueQuery) iter.Seq2[langfuse.AnnotationQueue, error]                                                             = (*langfuse.Client).AnnotationQueues
+	_ func(*langfuse.Client, context.Context, langfuse.AnnotationQueueItemSpec) (langfuse.AnnotationQueueItem, error)                                                               = (*langfuse.Client).CreateAnnotationQueueItem
+	_ func(*langfuse.Client, context.Context, string, string) (langfuse.AnnotationQueueItem, error)                                                                                 = (*langfuse.Client).GetAnnotationQueueItem
+	_ func(*langfuse.Client, context.Context, string, string, langfuse.AnnotationStatus) (langfuse.AnnotationQueueItem, error)                                                      = (*langfuse.Client).UpdateAnnotationQueueItem
+	_ func(*langfuse.Client, context.Context, string, string) error                                                                                                                 = (*langfuse.Client).DeleteAnnotationQueueItem
+	_ func(*langfuse.Client, context.Context, langfuse.AnnotationQueueItemQuery) iter.Seq2[langfuse.AnnotationQueueItem, error]                                                     = (*langfuse.Client).AnnotationQueueItems
+	_ func(*langfuse.Client, context.Context, string, string) error                                                                                                                 = (*langfuse.Client).AssignAnnotationQueue
+	_ func(*langfuse.Client, context.Context, string, string) error                                                                                                                 = (*langfuse.Client).UnassignAnnotationQueue
+	_ func(*langfuse.Client, context.Context, langfuse.CommentSpec) (string, error)                                                                                                 = (*langfuse.Client).CreateComment
+	_ func(*langfuse.Client, context.Context, string) (langfuse.Comment, error)                                                                                                     = (*langfuse.Client).GetComment
+	_ func(*langfuse.Client, context.Context, langfuse.CommentQuery) iter.Seq2[langfuse.Comment, error]                                                                             = (*langfuse.Client).Comments
 	_ func(*langfuse.Client, context.Context, langfuse.Experiment, langfuse.ExperimentItem, string, langfuse.ObservationAttributes) (context.Context, *langfuse.Observation, error) = (*langfuse.Client).StartExperimentItem
 	_ func(*langfuse.Client, context.Context) error                                                                                                                                 = (*langfuse.Client).Flush
 	_ func(*langfuse.Client, context.Context) error                                                                                                                                 = (*langfuse.Client).Shutdown
@@ -99,22 +118,41 @@ func TestPublicMethodSurface(t *testing.T) {
 	t.Parallel()
 
 	assertMethodNames(t, (*langfuse.Client)(nil), []string{
+		"AnnotationQueueItems",
+		"AnnotationQueues",
+		"AssignAnnotationQueue",
+		"Comments",
+		"CreateAnnotationQueue",
+		"CreateAnnotationQueueItem",
+		"CreateComment",
+		"CreateScore",
+		"CreateScoreConfig",
 		"DatasetItems",
 		"Datasets",
+		"DeleteAnnotationQueueItem",
 		"DeleteDatasetItem",
 		"Event",
 		"ExperimentItems",
 		"Experiments",
 		"Flush",
+		"GetAnnotationQueue",
+		"GetAnnotationQueueItem",
+		"GetComment",
 		"GetDataset",
 		"GetDatasetItem",
 		"GetPrompt",
+		"GetScoreConfig",
 		"Observe",
 		"RecordScore",
 		"RunExperiment",
+		"ScoreConfigs",
+		"Scores",
 		"Shutdown",
 		"StartExperimentItem",
 		"StartObservation",
+		"UnassignAnnotationQueue",
+		"UpdateAnnotationQueueItem",
+		"UpdateScoreConfig",
 		"UpsertDataset",
 		"UpsertDatasetItem",
 		"WithBaggagePropagation",
@@ -193,7 +231,46 @@ func TestPublicStructSurface(t *testing.T) {
 		"Comment",
 		"Metadata",
 		"Timestamp",
+		"Source",
+		"QueueID",
 	})
+	assertFieldNames(t, langfuse.StoredScore{}, []string{
+		"Score",
+		"Environment",
+		"AuthorUserID",
+		"CreatedAt",
+		"UpdatedAt",
+	})
+	assertFieldNames(t, langfuse.ScoreQuery{}, []string{
+		"IDs", "Names", "Sources", "DataTypes", "Environments", "ConfigIDs", "QueueIDs", "AuthorUserIDs",
+		"TraceIDs", "ObservationIDs", "SessionIDs", "DatasetRunIDs", "Values", "MinValue", "MaxValue",
+		"From", "To", "PageSize",
+	})
+	assertFieldNames(t, langfuse.ScoreConfigSpec{}, []string{
+		"Name", "DataType", "Categories", "MinValue", "MaxValue", "Description",
+	})
+	assertFieldNames(t, langfuse.ScoreConfig{}, []string{
+		"ID", "Name", "DataType", "Archived", "Categories", "MinValue", "MaxValue", "Description",
+		"CreatedAt", "UpdatedAt",
+	})
+	assertFieldNames(t, langfuse.ScoreConfigUpdate{}, []string{
+		"Archived", "Name", "Description", "Categories", "MinValue", "MaxValue",
+	})
+	assertFieldNames(t, langfuse.ScoreCategory{}, []string{"Label", "Value"})
+	assertFieldNames(t, langfuse.AnnotationQueueSpec{}, []string{"Name", "Description", "ScoreConfigIDs"})
+	assertFieldNames(t, langfuse.AnnotationQueue{}, []string{
+		"ID", "Name", "Description", "ScoreConfigIDs", "CreatedAt", "UpdatedAt",
+	})
+	assertFieldNames(t, langfuse.AnnotationQueueItemSpec{}, []string{"QueueID", "ObjectID", "ObjectType", "Status"})
+	assertFieldNames(t, langfuse.AnnotationQueueItem{}, []string{
+		"ID", "QueueID", "ObjectID", "ObjectType", "Status", "CompletedAt", "CreatedAt", "UpdatedAt",
+	})
+	assertFieldNames(t, langfuse.AnnotationQueueItemQuery{}, []string{"QueueID", "Status", "PageSize"})
+	assertFieldNames(t, langfuse.CommentSpec{}, []string{"ObjectType", "ObjectID", "Content", "AuthorUserID", "ObjectStartTime"})
+	assertFieldNames(t, langfuse.Comment{}, []string{
+		"ID", "ObjectType", "ObjectID", "Content", "AuthorUserID", "CreatedAt", "UpdatedAt",
+	})
+	assertFieldNames(t, langfuse.CommentQuery{}, []string{"ObjectType", "ObjectID", "AuthorUserID", "PageSize"})
 	assertFieldNames(t, langfuse.ObservationAttributes{}, []string{
 		"Input",
 		"Output",

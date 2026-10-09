@@ -41,6 +41,15 @@ Python SDK 4.17.0 and TypeScript SDK 5.13.1. The legacy dataset-run read
 endpoints are not used; they are unavailable in that mode. Write and retry
 semantics are described in the [reference](reference.md#datasets).
 
+Annotation review uses `/api/public/score-configs`,
+`/api/public/annotation-queues` with its items and assignments,
+`POST /api/public/scores`, `GET /api/public/v3/scores`, and
+`/api/public/comments`. The legacy score reads (`GET /api/public/scores` and
+`/api/public/v2/scores`) are not used; they return 404 in events_only mode.
+Verified on 2026-10-09 against self-hosted Langfuse v4.48.0 in its default
+events_only mode; the endpoints match those of v4.47.0. Server processing
+rules are described in the [reference](reference.md#annotation-review).
+
 go-langfuse uses the instrumentation scope `langfuse-sdk.go`. Langfuse treats
 the `langfuse-sdk` prefix as an ingestion marker that prevents semantic
 attributes from being copied into generic `metadata.attributes`; the `.go`

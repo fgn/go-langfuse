@@ -414,19 +414,19 @@ func (c *Client) linkDatasetRunItem(
 	if !item.Version.IsZero() {
 		body["datasetVersion"] = formatDatasetInstant(item.Version)
 	}
-	payload, err := marshalDatasetBody(body, maxDatasetBodyBytes, "dataset run item")
+	payload, err := marshalBody(body, maxDatasetBodyBytes, "dataset run item")
 	if err != nil {
 		return "", err
 	}
-	if err := c.datasetUnavailable(); err != nil {
+	if err := c.restUnavailable(); err != nil {
 		return "", err
 	}
 	want := transport.DatasetRunItem{
 		DatasetRunName: run.RunName, DatasetItemID: item.ID, TraceID: root.TraceID(), ObservationID: root.ID(),
 	}
-	link, err := runDatasetOperation(ctx, c, ErrDatasetItemNotFound,
+	link, err := runREST(ctx, c, ErrDatasetItemNotFound,
 		func(ctx context.Context) (string, error) {
-			link, err := c.datasetTransport.CreateRunItem(ctx, payload, want)
+			link, err := c.restTransport.CreateRunItem(ctx, payload, want)
 			return link.DatasetRunID, err
 		})
 	return link, err
