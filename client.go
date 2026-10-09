@@ -58,17 +58,17 @@ var ErrShutdownInProgress = errors.New("langfuse: shutdown is in progress")
 // Client owns all Langfuse exporter, processor, and lifecycle state. Its zero
 // value is a safe no-op.
 type Client struct {
-	tracer           oteltrace.Tracer
-	provider         *sdktrace.TracerProvider
-	processor        *lfprocessor.Processor
-	scores           *transport.ScoresClient
-	prompts          *promptCache
-	datasets         *datasetGate
-	datasetTransport *transport.DatasetsClient
-	environment      string
-	owned            bool
-	reserved         bool
-	disabled         bool
+	tracer        oteltrace.Tracer
+	provider      *sdktrace.TracerProvider
+	processor     *lfprocessor.Processor
+	scores        *transport.ScoresClient
+	prompts       *promptCache
+	rest          *restGate
+	restTransport *transport.RESTClient
+	environment   string
+	owned         bool
+	reserved      bool
+	disabled      bool
 
 	disableContentCapture bool
 	mask                  func(string, any) any
@@ -206,12 +206,12 @@ func New(ctx context.Context, cfg Config) (*Client, error) {
 		return nil, err
 	}
 	client.prompts = newPromptCache(promptFetcher)
-	datasetTransport, err := transport.NewDatasetsClient(transportConfig)
+	restTransport, err := transport.NewRESTClient(transportConfig)
 	if err != nil {
 		return nil, err
 	}
-	client.datasetTransport = datasetTransport
-	client.datasets = newDatasetGate()
+	client.restTransport = restTransport
+	client.rest = newRESTGate()
 	if cfg.TracerProvider != nil {
 		if !reserveBorrowedProvider(cfg.TracerProvider, client) {
 			return nil, ErrTracerProviderInUse
@@ -448,7 +448,7 @@ func (c *Client) Shutdown(ctx context.Context) error {
 	// has begun; the drains themselves wait at the end alongside the score
 	// queue.
 	c.prompts.beginShutdown()
-	c.datasets.beginShutdown()
+	c.rest.beginShutdown()
 	var result error
 	if c.owned {
 		flushErr := c.provider.ForceFlush(ctx)
@@ -458,14 +458,14 @@ func (c *Client) Shutdown(ctx context.Context) error {
 		processorErr := c.processor.Shutdown(ctx)
 		providerErr := c.provider.Shutdown(ctx)
 		result = errors.Join(flushErr, processorErr, providerErr, c.scores.Shutdown(ctx), c.prompts.shutdown(ctx),
-			c.datasets.shutdown(ctx))
+			c.rest.shutdown(ctx))
 	} else {
 		flushErr := c.processor.ForceFlush(ctx)
 		shutdownErr := c.processor.Shutdown(ctx)
 		c.provider.UnregisterSpanProcessor(c.processor)
 		c.releaseReservation()
 		result = errors.Join(flushErr, shutdownErr, c.scores.Shutdown(ctx), c.prompts.shutdown(ctx),
-			c.datasets.shutdown(ctx))
+			c.rest.shutdown(ctx))
 	}
 	c.shutdownResultMu.Lock()
 	c.shutdownResult = result

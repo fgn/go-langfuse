@@ -650,19 +650,30 @@ func TestExperimentScoresUseTheItemEnvironment(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("%s: RecordScore() error = %v", name, err)
 		}
+		if _, err := client.CreateScore(ctx, langfuse.Score{
+			Name: name + "-rest", TraceID: test.traceID, ObservationID: root.ID(), NumericValue: &value,
+		}); err != nil {
+			t.Fatalf("%s: CreateScore() error = %v", name, err)
+		}
 	}
 	flushClient(t, client)
 	got := map[string]any{}
 	for _, request := range receiver.all() {
-		if strings.HasSuffix(request.path, "/api/public/ingestion") {
-			_, body := scoreWireEvent(t, request)
-			name, _ := body["name"].(string)
-			got[name] = body["environment"]
+		body := request.body
+		switch {
+		case strings.HasSuffix(request.path, "/api/public/ingestion"):
+			_, body = scoreWireEvent(t, request)
+		case !strings.HasSuffix(request.path, "/api/public/scores"):
+			continue
 		}
+		name, _ := body["name"].(string)
+		got[name] = body["environment"]
 	}
 	for name, test := range cases {
-		if got[name] != test.want {
-			t.Errorf("score %q environment = %#v, want %q", name, got[name], test.want)
+		for _, scoreName := range []string{name, name + "-rest"} {
+			if got[scoreName] != test.want {
+				t.Errorf("score %q environment = %#v, want %q", scoreName, got[scoreName], test.want)
+			}
 		}
 	}
 }

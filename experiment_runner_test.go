@@ -172,10 +172,6 @@ func spanByID(spans []*tracepb.Span, id string) *tracepb.Span {
 	return nil
 }
 
-func float(value float64) *float64 { return &value }
-
-func text(value string) *string { return &value }
-
 // exactMatch is a named evaluator so its observation name is predictable.
 func exactMatch(_ context.Context, input langfuse.EvaluatorInput) ([]langfuse.Evaluation, error) {
 	value := 0.0
@@ -222,11 +218,11 @@ func TestRunExperimentLocalItemsWire(t *testing.T) {
 			if input.Output == "PARIS" {
 				compositeInput = input
 			}
-			return []langfuse.Evaluation{{Name: "verdict", StringValue: text("ok"), DataType: langfuse.ScoreTypeCategorical}}, nil
+			return []langfuse.Evaluation{{Name: "verdict", StringValue: new("ok"), DataType: langfuse.ScoreTypeCategorical}}, nil
 		},
 		RunEvaluators: []langfuse.RunEvaluator{func(_ context.Context, results []langfuse.ExperimentItemResult) ([]langfuse.Evaluation, error) {
 			runInput = results
-			return []langfuse.Evaluation{{Name: "accuracy", NumericValue: float(0.5)}}, nil
+			return []langfuse.Evaluation{{Name: "accuracy", NumericValue: new(0.5)}}, nil
 		}},
 	})
 	if err != nil {
@@ -366,7 +362,7 @@ func TestRunExperimentDatasetItemsLinkTheRun(t *testing.T) {
 		Task:       upperTask,
 		Evaluators: []langfuse.Evaluator{exactMatch},
 		RunEvaluators: []langfuse.RunEvaluator{func(context.Context, []langfuse.ExperimentItemResult) ([]langfuse.Evaluation, error) {
-			return []langfuse.Evaluation{{Name: "accuracy", NumericValue: float(0.5), Comment: "half"}}, nil
+			return []langfuse.Evaluation{{Name: "accuracy", NumericValue: new(0.5), Comment: "half"}}, nil
 		}},
 	})
 	if err != nil {
@@ -513,7 +509,7 @@ func TestRunExperimentTaskAndEvaluatorFailures(t *testing.T) {
 			},
 			func(context.Context, langfuse.EvaluatorInput) ([]langfuse.Evaluation, error) { panic("judge panic") },
 			func(context.Context, langfuse.EvaluatorInput) ([]langfuse.Evaluation, error) {
-				return []langfuse.Evaluation{{Name: "invalid"}, {Name: "valid", NumericValue: float(1)}}, nil
+				return []langfuse.Evaluation{{Name: "invalid"}, {Name: "valid", NumericValue: new(1.0)}}, nil
 			},
 		},
 	})
@@ -692,7 +688,7 @@ func TestRunExperimentOnDisabledClientsRunsWithoutExport(t *testing.T) {
 			Task:       upperTask,
 			Evaluators: []langfuse.Evaluator{exactMatch},
 			RunEvaluators: []langfuse.RunEvaluator{func(context.Context, []langfuse.ExperimentItemResult) ([]langfuse.Evaluation, error) {
-				return []langfuse.Evaluation{{Name: "run", NumericValue: float(1)}}, nil
+				return []langfuse.Evaluation{{Name: "run", NumericValue: new(1.0)}}, nil
 			}},
 		})
 		item := result.ItemResults[0]
@@ -712,15 +708,15 @@ func TestExperimentResultSummary(t *testing.T) {
 				Item:   langfuse.ExperimentItem{ID: "a", Input: strings.Repeat("é", 60), ExpectedOutput: json.RawMessage(`"Paris"`)},
 				Output: "Paris", TraceID: "trace-a",
 				Evaluations: []langfuse.Evaluation{
-					{Name: "exact", NumericValue: float(1), Comment: "match"},
-					{Name: "label", StringValue: text("good")},
+					{Name: "exact", NumericValue: new(1.0), Comment: "match"},
+					{Name: "label", StringValue: new("good")},
 				},
 			},
 			{Item: langfuse.ExperimentItem{ID: "b", Input: map[string]any{"q": 1}}, Err: errors.New("boom")},
 			{Item: langfuse.ExperimentItem{ID: "d", Input: 4}, Output: 4, EvaluationErr: errors.New("judge down")},
-			{Item: langfuse.ExperimentItem{ID: "c", Input: 2}, Output: 3, Evaluations: []langfuse.Evaluation{{Name: "exact", NumericValue: float(0)}}},
+			{Item: langfuse.ExperimentItem{ID: "c", Input: 2}, Output: 3, Evaluations: []langfuse.Evaluation{{Name: "exact", NumericValue: new(0.0)}}},
 		},
-		RunEvaluations:   []langfuse.Evaluation{{Name: "accuracy", NumericValue: float(0.5), Comment: "half"}},
+		RunEvaluations:   []langfuse.Evaluation{{Name: "accuracy", NumericValue: new(0.5), Comment: "half"}},
 		RunEvaluationErr: errors.New("aggregate failed"),
 	}
 	summary := result.Summary(false)
@@ -885,7 +881,7 @@ func TestScoreDatasetRunTarget(t *testing.T) {
 		"run and trace":       {Name: "s", DatasetRunID: "run-1", TraceID: "0123456789abcdef0123456789abcdef", NumericValue: &value},
 		"run and session":     {Name: "s", DatasetRunID: "run-1", SessionID: "session", NumericValue: &value},
 		"run and observation": {Name: "s", DatasetRunID: "run-1", ObservationID: "0123456789abcdef", NumericValue: &value},
-		"correction on run":   {Name: "s", DatasetRunID: "run-1", StringValue: text("fix"), DataType: langfuse.ScoreTypeCorrection},
+		"correction on run":   {Name: "s", DatasetRunID: "run-1", StringValue: new("fix"), DataType: langfuse.ScoreTypeCorrection},
 		"invalid run ID":      {Name: "s", DatasetRunID: "\xff", NumericValue: &value},
 	} {
 		if err := client.RecordScore(context.Background(), score); err == nil {
@@ -1011,7 +1007,7 @@ func TestRunExperimentMasksEveryExportedCopyOnce(t *testing.T) {
 					}
 				})
 				evaluation := func(name string) langfuse.Evaluation {
-					return langfuse.Evaluation{Name: name, NumericValue: float(1), Metadata: map[string]any{"sk": "SENT_SCORE_META"}}
+					return langfuse.Evaluation{Name: name, NumericValue: new(1.0), Metadata: map[string]any{"sk": "SENT_SCORE_META"}}
 				}
 				result, err := client.RunExperiment(context.Background(), langfuse.ExperimentRun{
 					Name: "privacy", RunName: "privacy", Metadata: map[string]any{"rk": "SENT_RUN_META"},
@@ -1074,7 +1070,7 @@ func TestRunExperimentCancellationDuringRunEvaluators(t *testing.T) {
 			RunEvaluators: []langfuse.RunEvaluator{
 				func(context.Context, []langfuse.ExperimentItemResult) ([]langfuse.Evaluation, error) {
 					cancel()
-					return []langfuse.Evaluation{{Name: "first", NumericValue: float(1)}}, nil
+					return []langfuse.Evaluation{{Name: "first", NumericValue: new(1.0)}}, nil
 				},
 				func(context.Context, []langfuse.ExperimentItemResult) ([]langfuse.Evaluation, error) {
 					second.Store(true)
@@ -1132,14 +1128,14 @@ func TestRunExperimentExportsFrozenMaskedSnapshots(t *testing.T) {
 					first = false
 					output["text"] = "PRIVATE_OUTPUT"
 				}
-				return []langfuse.Evaluation{{Name: "one", NumericValue: float(1)}}, nil
+				return []langfuse.Evaluation{{Name: "one", NumericValue: new(1.0)}}, nil
 			},
 			func(context.Context, langfuse.EvaluatorInput) ([]langfuse.Evaluation, error) {
-				return []langfuse.Evaluation{{Name: "two", NumericValue: float(1)}}, nil
+				return []langfuse.Evaluation{{Name: "two", NumericValue: new(1.0)}}, nil
 			},
 		},
 		CompositeEvaluator: func(context.Context, langfuse.EvaluatorInput) ([]langfuse.Evaluation, error) {
-			return []langfuse.Evaluation{{Name: "composite", NumericValue: float(1)}}, nil
+			return []langfuse.Evaluation{{Name: "composite", NumericValue: new(1.0)}}, nil
 		},
 	})
 	if err != nil {
@@ -1177,8 +1173,8 @@ func TestRunExperimentFreezesMaskedMetadataAtTheMaskBoundary(t *testing.T) {
 			Task:  func(context.Context, langfuse.ExperimentItem) (any, error) { return 1, nil },
 			Evaluators: []langfuse.Evaluator{func(context.Context, langfuse.EvaluatorInput) ([]langfuse.Evaluation, error) {
 				return []langfuse.Evaluation{
-					{Name: "one", NumericValue: float(1), Metadata: map[string]any{"x": 1}},
-					{Name: "two", NumericValue: float(1), Metadata: map[string]any{"x": 2}},
+					{Name: "one", NumericValue: new(1.0), Metadata: map[string]any{"x": 1}},
+					{Name: "two", NumericValue: new(1.0), Metadata: map[string]any{"x": 2}},
 				}, nil
 			}},
 		})
@@ -1324,13 +1320,13 @@ func TestRunExperimentRejectsScoresWhoseMetadataCannotBeSent(t *testing.T) {
 	client := newRunnerClient(t, server, nil)
 	evaluate := func(context.Context, langfuse.EvaluatorInput) ([]langfuse.Evaluation, error) {
 		return []langfuse.Evaluation{
-			{Name: "unsupported", NumericValue: float(1), Metadata: map[string]any{"channel": make(chan int)}},
-			{Name: "oversized", NumericValue: float(1), Metadata: map[string]any{"text": strings.Repeat("x", 129<<10)}},
+			{Name: "unsupported", NumericValue: new(1.0), Metadata: map[string]any{"channel": make(chan int)}},
+			{Name: "oversized", NumericValue: new(1.0), Metadata: map[string]any{"text": strings.Repeat("x", 129<<10)}},
 			{
-				Name: "envelope", NumericValue: float(1), Comment: strings.Repeat("c", 100<<10),
+				Name: "envelope", NumericValue: new(1.0), Comment: strings.Repeat("c", 100<<10),
 				Metadata: map[string]any{"text": strings.Repeat("x", 100<<10)},
 			},
-			{Name: "valid", NumericValue: float(1), Metadata: map[string]any{"ok": true}},
+			{Name: "valid", NumericValue: new(1.0), Metadata: map[string]any{"ok": true}},
 		}, nil
 	}
 	result, err := client.RunExperiment(context.Background(), langfuse.ExperimentRun{
@@ -1383,7 +1379,7 @@ func TestRunExperimentPreparesNoTelemetryOnDisabledClients(t *testing.T) {
 			Task:  func(context.Context, langfuse.ExperimentItem) (any, error) { return counter, nil },
 			Evaluators: []langfuse.Evaluator{func(context.Context, langfuse.EvaluatorInput) ([]langfuse.Evaluation, error) {
 				evaluated.Add(1)
-				return []langfuse.Evaluation{{Name: "e", NumericValue: float(1), Metadata: map[string]any{"score": counter}}}, nil
+				return []langfuse.Evaluation{{Name: "e", NumericValue: new(1.0), Metadata: map[string]any{"score": counter}}}, nil
 			}},
 		})
 		item := result.ItemResults[0]

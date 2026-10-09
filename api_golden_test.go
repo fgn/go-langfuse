@@ -202,7 +202,25 @@ func formatAPINode(t *testing.T, set *token.FileSet, node ast.Node) string {
 	return output.String()
 }
 
-const wantPublicAPI = `const DatasetItemActive DatasetItemStatus = "ACTIVE"
+const wantPublicAPI = `const AnnotationCompleted AnnotationStatus = "COMPLETED"
+
+const AnnotationObjectObservation AnnotationObjectType = "OBSERVATION"
+
+const AnnotationObjectSession AnnotationObjectType = "SESSION"
+
+const AnnotationObjectTrace AnnotationObjectType = "TRACE"
+
+const AnnotationPending AnnotationStatus = "PENDING"
+
+const CommentObjectObservation CommentObjectType = "OBSERVATION"
+
+const CommentObjectPrompt CommentObjectType = "PROMPT"
+
+const CommentObjectSession CommentObjectType = "SESSION"
+
+const CommentObjectTrace CommentObjectType = "TRACE"
+
+const DatasetItemActive DatasetItemStatus = "ACTIVE"
 
 const DatasetItemArchived DatasetItemStatus = "ARCHIVED"
 
@@ -252,6 +270,12 @@ const PromptTypeChat PromptType = "chat"
 
 const PromptTypeText PromptType = "text"
 
+const ScoreSourceAPI ScoreSource = "API"
+
+const ScoreSourceAnnotation ScoreSource = "ANNOTATION"
+
+const ScoreSourceEval ScoreSource = "EVAL"
+
 const ScoreTypeBoolean ScoreDataType = "BOOLEAN"
 
 const ScoreTypeCategorical ScoreDataType = "CATEGORICAL"
@@ -282,9 +306,33 @@ const TypeSpan ObservationType = "span"
 
 const TypeTool ObservationType = "tool"
 
+func (c *Client) AnnotationQueueItems(
+	ctx context.Context, query AnnotationQueueItemQuery,
+) iter.Seq2[AnnotationQueueItem, error]
+
+func (c *Client) AnnotationQueues(ctx context.Context, query AnnotationQueueQuery) iter.Seq2[AnnotationQueue, error]
+
+func (c *Client) AssignAnnotationQueue(ctx context.Context, queueID, userID string) error
+
+func (c *Client) Comments(ctx context.Context, query CommentQuery) iter.Seq2[Comment, error]
+
+func (c *Client) CreateAnnotationQueue(ctx context.Context, spec AnnotationQueueSpec) (AnnotationQueue, error)
+
+func (c *Client) CreateAnnotationQueueItem(
+	ctx context.Context, spec AnnotationQueueItemSpec,
+) (AnnotationQueueItem, error)
+
+func (c *Client) CreateComment(ctx context.Context, spec CommentSpec) (string, error)
+
+func (c *Client) CreateScore(ctx context.Context, score Score) (string, error)
+
+func (c *Client) CreateScoreConfig(ctx context.Context, spec ScoreConfigSpec) (ScoreConfig, error)
+
 func (c *Client) DatasetItems(ctx context.Context, query DatasetItemQuery) iter.Seq2[DatasetItem, error]
 
 func (c *Client) Datasets(ctx context.Context, query DatasetQuery) iter.Seq2[Dataset, error]
+
+func (c *Client) DeleteAnnotationQueueItem(ctx context.Context, queueID, itemID string) error
 
 func (c *Client) DeleteDatasetItem(ctx context.Context, id string) error
 
@@ -298,11 +346,19 @@ func (c *Client) Experiments(ctx context.Context, query ExperimentQuery) iter.Se
 
 func (c *Client) Flush(ctx context.Context) error
 
+func (c *Client) GetAnnotationQueue(ctx context.Context, id string) (AnnotationQueue, error)
+
+func (c *Client) GetAnnotationQueueItem(ctx context.Context, queueID, itemID string) (AnnotationQueueItem, error)
+
+func (c *Client) GetComment(ctx context.Context, id string) (Comment, error)
+
 func (c *Client) GetDataset(ctx context.Context, name string) (Dataset, error)
 
 func (c *Client) GetDatasetItem(ctx context.Context, id string) (DatasetItem, error)
 
 func (c *Client) GetPrompt(ctx context.Context, name string, query PromptQuery) (Prompt, error)
+
+func (c *Client) GetScoreConfig(ctx context.Context, id string) (ScoreConfig, error)
 
 func (c *Client) Observe(
 	ctx context.Context,
@@ -315,6 +371,10 @@ func (c *Client) Observe(
 func (c *Client) RecordScore(ctx context.Context, score Score) error
 
 func (c *Client) RunExperiment(ctx context.Context, run ExperimentRun) (ExperimentResult, error)
+
+func (c *Client) ScoreConfigs(ctx context.Context, query ScoreConfigQuery) iter.Seq2[ScoreConfig, error]
+
+func (c *Client) Scores(ctx context.Context, query ScoreQuery) iter.Seq2[StoredScore, error]
 
 func (c *Client) Shutdown(ctx context.Context) error
 
@@ -332,6 +392,14 @@ func (c *Client) StartObservation(
 	observationType ObservationType,
 	values ObservationAttributes,
 ) (context.Context, *Observation)
+
+func (c *Client) UnassignAnnotationQueue(ctx context.Context, queueID, userID string) error
+
+func (c *Client) UpdateAnnotationQueueItem(
+	ctx context.Context, queueID, itemID string, status AnnotationStatus,
+) (AnnotationQueueItem, error)
+
+func (c *Client) UpdateScoreConfig(ctx context.Context, id string, update ScoreConfigUpdate) (ScoreConfig, error)
 
 func (c *Client) UpsertDataset(ctx context.Context, spec DatasetSpec) (Dataset, error)
 
@@ -389,7 +457,81 @@ func New(ctx context.Context, cfg Config) (*Client, error)
 
 func TraceSampledAt(traceID string, fraction float64) (bool, error)
 
+type AnnotationObjectType string
+
+type AnnotationQueue struct {
+	ID string
+	Name string
+	Description string
+	ScoreConfigIDs []string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type AnnotationQueueItem struct {
+	ID string
+	QueueID string
+	ObjectID string
+	ObjectType AnnotationObjectType
+	Status AnnotationStatus
+	CompletedAt time.Time
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type AnnotationQueueItemQuery struct {
+	QueueID string
+	Status AnnotationStatus
+	PageSize int
+}
+
+type AnnotationQueueItemSpec struct {
+	QueueID string
+	ObjectID string
+	ObjectType AnnotationObjectType
+	Status AnnotationStatus
+}
+
+type AnnotationQueueQuery struct {
+	PageSize int
+}
+
+type AnnotationQueueSpec struct {
+	Name string
+	Description string
+	ScoreConfigIDs []string
+}
+
+type AnnotationStatus string
+
 type Client struct {
+}
+
+type Comment struct {
+	ID string
+	ObjectType CommentObjectType
+	ObjectID string
+	Content string
+	AuthorUserID string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type CommentObjectType string
+
+type CommentQuery struct {
+	ObjectType CommentObjectType
+	ObjectID string
+	AuthorUserID string
+	PageSize int
+}
+
+type CommentSpec struct {
+	ObjectType CommentObjectType
+	ObjectID string
+	Content string
+	AuthorUserID string
+	ObjectStartTime time.Time
 }
 
 type Config struct {
@@ -641,9 +783,74 @@ type Score struct {
 	Comment string
 	Metadata map[string]any
 	Timestamp time.Time
+	Source ScoreSource
+	QueueID string
+}
+
+type ScoreCategory struct {
+	Label string
+	Value float64
+}
+
+type ScoreConfig struct {
+	ID string
+	Name string
+	DataType ScoreDataType
+	Archived bool
+	Categories []ScoreCategory
+	MinValue *float64
+	MaxValue *float64
+	Description string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type ScoreConfigQuery struct {
+	PageSize int
+}
+
+type ScoreConfigSpec struct {
+	Name string
+	DataType ScoreDataType
+	Categories []ScoreCategory
+	MinValue *float64
+	MaxValue *float64
+	Description string
+}
+
+type ScoreConfigUpdate struct {
+	Archived *bool
+	Name *string
+	Description *string
+	Categories []ScoreCategory
+	MinValue *float64
+	MaxValue *float64
 }
 
 type ScoreDataType string
+
+type ScoreQuery struct {
+	IDs []string
+	Names []string
+	Sources []ScoreSource
+	DataTypes []ScoreDataType
+	Environments []string
+	ConfigIDs []string
+	QueueIDs []string
+	AuthorUserIDs []string
+	TraceIDs []string
+	ObservationIDs []string
+	SessionIDs []string
+	DatasetRunIDs []string
+	Values []string
+	MinValue *float64
+	MaxValue *float64
+	From time.Time
+	To time.Time
+	PageSize int
+}
+
+type ScoreSource string
 
 type StoredExperiment struct {
 	ID string
@@ -654,7 +861,7 @@ type StoredExperiment struct {
 	EndTime time.Time
 	ItemCount int
 	Metadata json.RawMessage
-	Scores []Score
+	Scores []StoredScore
 }
 
 type StoredExperimentItem struct {
@@ -676,7 +883,15 @@ type StoredExperimentItem struct {
 	Metadata json.RawMessage
 	ItemMetadata json.RawMessage
 	ExperimentMetadata json.RawMessage
-	Scores []Score
+	Scores []StoredScore
+}
+
+type StoredScore struct {
+	Score
+	Environment string
+	AuthorUserID string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type TraceAttributes struct {
@@ -698,6 +913,14 @@ type Usage struct {
 	Details map[string]int64
 }
 
+var ErrAnnotationQueueItemNotFound = errors.New("langfuse: annotation queue item not found")
+
+var ErrAnnotationQueueNotFound = errors.New("langfuse: annotation queue not found")
+
+var ErrCommentNotFound = errors.New("langfuse: comment not found")
+
+var ErrCommentObjectNotFound = errors.New("langfuse: comment object not found")
+
 var ErrDatasetItemNotFound = errors.New("langfuse: dataset item not found")
 
 var ErrDatasetNotFound = errors.New("langfuse: dataset not found")
@@ -709,6 +932,8 @@ var ErrInvalidExperiment = errors.New("langfuse: invalid experiment")
 var ErrPromptNotFound = errors.New("langfuse: prompt not found")
 
 var ErrPromptTypeMismatch = errors.New("langfuse: prompt type mismatch")
+
+var ErrScoreConfigNotFound = errors.New("langfuse: score config not found")
 
 var ErrScoreQueueFull = errors.New("langfuse: score queue is full")
 

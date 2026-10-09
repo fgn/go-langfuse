@@ -120,7 +120,7 @@ func TestWithParentKeepsTheParentRootClaimAfterItEnds(t *testing.T) {
 }
 
 func TestWithParentDoesNotRestoreLostScoreAuthority(t *testing.T) {
-	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) { config.SampleRate = rate(0) })
+	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) { config.SampleRate = new(0.0) })
 	application := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
 	t.Cleanup(func() { _ = application.Shutdown(context.Background()) })
 	rootCtx, root := client.StartObservation(context.Background(), "root", langfuse.TypeAgent,
@@ -141,7 +141,7 @@ func TestWithParentDoesNotRestoreLostScoreAuthority(t *testing.T) {
 }
 
 func TestWithParentFromAnotherTraceKeepsScoreAuthority(t *testing.T) {
-	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) { config.SampleRate = rate(0) })
+	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) { config.SampleRate = new(0.0) })
 	application := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
 	t.Cleanup(func() { _ = application.Shutdown(context.Background()) })
 	requestCtx, request := application.Tracer("application").Start(context.Background(), "request")
@@ -164,7 +164,7 @@ func TestWithParentFromAnotherTraceKeepsScoreAuthority(t *testing.T) {
 }
 
 func TestWithParentKeepsScoreAuthorityAcrossSDKDescendants(t *testing.T) {
-	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) { config.SampleRate = rate(0) })
+	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) { config.SampleRate = new(0.0) })
 	rootCtx, root := client.StartObservation(context.Background(), "root", langfuse.TypeAgent,
 		langfuse.ObservationAttributes{})
 	defer root.End()

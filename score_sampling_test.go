@@ -46,7 +46,7 @@ func TestScoreSuppressedOnSampledOutAuthoritativePathWithOneDiagnostic(t *testin
 	defer restore()
 
 	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) {
-		config.SampleRate = rate(0)
+		config.SampleRate = new(0.0)
 	})
 	rootCtx, root := client.StartObservation(context.Background(), "root", langfuse.TypeAgent,
 		langfuse.ObservationAttributes{})
@@ -72,10 +72,34 @@ func TestScoreSuppressedOnSampledOutAuthoritativePathWithOneDiagnostic(t *testin
 	}
 }
 
+func TestCreateScoreIsNeverSuppressed(t *testing.T) {
+	t.Parallel()
+	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) {
+		config.SampleRate = new(0.0)
+	})
+	rootCtx, root := client.StartObservation(context.Background(), "root", langfuse.TypeAgent,
+		langfuse.ObservationAttributes{})
+	defer root.End()
+	value := 1.0
+	id, err := client.CreateScore(rootCtx, langfuse.Score{Name: "quality", TraceID: root.TraceID(), NumericValue: &value})
+	if err != nil {
+		t.Fatalf("CreateScore() = %q, %v", id, err)
+	}
+	sent := 0
+	for _, request := range receiver.all() {
+		if strings.HasSuffix(request.path, "/api/public/scores") && request.body["id"] == id {
+			sent++
+		}
+	}
+	if sent != 1 {
+		t.Fatalf("score REST requests = %d, want 1 although the trace is sampled out", sent)
+	}
+}
+
 func TestScoreDeliveryOutsideTheSuppressionConditions(t *testing.T) {
 	t.Parallel()
 	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) {
-		config.SampleRate = rate(0)
+		config.SampleRate = new(0.0)
 	})
 	foreign := sdktrace.NewTracerProvider(sdktrace.WithSampler(sdktrace.AlwaysSample()))
 	t.Cleanup(func() {
@@ -134,7 +158,7 @@ func TestScoreDeliveryOutsideTheSuppressionConditions(t *testing.T) {
 func TestScoreValidationPrecedesSuppression(t *testing.T) {
 	t.Parallel()
 	client, receiver := newScoreWireClient(t, func(config *langfuse.Config) {
-		config.SampleRate = rate(0)
+		config.SampleRate = new(0.0)
 	})
 	rootCtx, root := client.StartObservation(context.Background(), "root", langfuse.TypeAgent,
 		langfuse.ObservationAttributes{})

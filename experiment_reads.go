@@ -1,17 +1,13 @@
 package langfuse
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"iter"
 	"net/url"
 	"strconv"
-	"strings"
 	"time"
-
-	"github.com/fgn/go-langfuse/internal/transport"
 )
 
 const (
@@ -27,7 +23,7 @@ type ExperimentQuery struct {
 	To time.Time
 	// IDs, Names, and DatasetIDs, when set, each restrict the result to
 	// experiments matching one of their values; values must not contain
-	// commas.
+	// commas or surrounding whitespace.
 	IDs, Names, DatasetIDs []string
 	// PageSize is the number of experiments per request; 0 selects 50 and
 	// Langfuse accepts at most 100.
@@ -48,8 +44,9 @@ type StoredExperiment struct {
 	// Metadata is the server's JSON object; nil when absent.
 	Metadata json.RawMessage
 	// Scores holds up to 50 scores on the experiment itself, such as run
-	// evaluations.
-	Scores []Score
+	// evaluations, without the fields that [StoredScore] lists as missing
+	// from experiment reads.
+	Scores []StoredScore
 }
 
 // ExperimentItemQuery selects stored experiment items for
@@ -61,7 +58,7 @@ type ExperimentItemQuery struct {
 	To time.Time
 	// ExperimentIDs, ExperimentNames, ItemIDs, and DatasetIDs, when set, each
 	// restrict the result to items matching one of their values; values must
-	// not contain commas.
+	// not contain commas or surrounding whitespace.
 	ExperimentIDs, ExperimentNames, ItemIDs, DatasetIDs []string
 	// PageSize is the number of items per request; 0 selects 50 and Langfuse
 	// accepts at most 100.
@@ -96,8 +93,10 @@ type StoredExperimentItem struct {
 	ItemMetadata       json.RawMessage
 	ExperimentMetadata json.RawMessage
 
-	// Scores holds up to 50 scores on the item's trace and observations.
-	Scores []Score
+	// Scores holds up to 50 scores on the item's trace and observations,
+	// without the fields that [StoredScore] lists as missing from experiment
+	// reads.
+	Scores []StoredScore
 }
 
 // Experiments lazily iterates over stored experiments, most recently active
@@ -109,7 +108,7 @@ func (c *Client) Experiments(ctx context.Context, query ExperimentQuery) iter.Se
 		"id": query.IDs, "name": query.Names, "datasetId": query.DatasetIDs,
 	})
 	return cursorPages(ctx, c, err, values, func(ctx context.Context, values url.Values) ([]StoredExperiment, string, error) {
-		page, err := c.datasetTransport.ListExperiments(ctx, values)
+		page, err := c.restTransport.ListExperiments(ctx, values)
 		experiments := make([]StoredExperiment, len(page.Data))
 		for index, wire := range page.Data {
 			experiments[index] = StoredExperiment{
@@ -133,7 +132,7 @@ func (c *Client) ExperimentItems(
 			"experimentItemId": query.ItemIDs, "datasetId": query.DatasetIDs,
 		})
 	return cursorPages(ctx, c, err, values, func(ctx context.Context, values url.Values) ([]StoredExperimentItem, string, error) {
-		page, err := c.datasetTransport.ListExperimentItems(ctx, values)
+		page, err := c.restTransport.ListExperimentItems(ctx, values)
 		items := make([]StoredExperimentItem, len(page.Data))
 		for index, wire := range page.Data {
 			item := StoredExperimentItem{
@@ -174,131 +173,5 @@ func experimentReadQuery(from, to time.Time, pageSize int, fields string, filter
 	if !to.IsZero() {
 		values.Set("toStartTime", formatDatasetInstant(to))
 	}
-	for key, filter := range filters {
-		for _, value := range filter {
-			if value == "" || strings.Contains(value, ",") {
-				return nil, errors.New("langfuse: experiment query filter values must be non-empty and contain no commas")
-			}
-		}
-		if len(filter) != 0 {
-			values.Set(key, strings.Join(filter, ","))
-		}
-	}
-	return values, nil
-}
-
-// cursorPages yields the values of fetch page by page until a page has no
-// next cursor. A repeated cursor ends the iteration with an error rather than
-// looping.
-func cursorPages[T any](
-	ctx context.Context, c *Client, invalid error, query url.Values,
-	fetch func(ctx context.Context, query url.Values) ([]T, string, error),
-) iter.Seq2[T, error] {
-	return func(yield func(T, error) bool) {
-		var zero T
-		if ctx == nil {
-			yield(zero, errors.New("langfuse: dataset context is nil"))
-			return
-		}
-		if invalid != nil {
-			yield(zero, invalid)
-			return
-		}
-		request := cloneValues(query) // each traversal starts at the first page
-		seen := map[string]bool{}
-		for {
-			if err := c.datasetUnavailable(); err != nil {
-				yield(zero, err)
-				return
-			}
-			type pageResult struct {
-				values []T
-				cursor string
-			}
-			result, err := runDatasetOperation(ctx, c, nil, func(ctx context.Context) (pageResult, error) {
-				values, cursor, err := fetch(ctx, request)
-				return pageResult{values, cursor}, err
-			})
-			if err != nil {
-				yield(zero, err)
-				return
-			}
-			for _, value := range result.values {
-				if !yield(value, nil) {
-					return
-				}
-			}
-			if result.cursor == "" {
-				return
-			}
-			if seen[result.cursor] {
-				yield(zero, errors.New("langfuse: experiment listing repeated a page cursor"))
-				return
-			}
-			seen[result.cursor] = true
-			request.Set("cursor", result.cursor)
-		}
-	}
-}
-
-func cloneValues(values url.Values) url.Values {
-	clone := make(url.Values, len(values))
-	for key, value := range values {
-		clone[key] = append([]string(nil), value...)
-	}
-	return clone
-}
-
-// scoresFromWire converts v3 scores; a BOOLEAN value becomes NumericValue 0
-// or 1, as [Score] writes it.
-func scoresFromWire(wire []transport.ScoreRecord) []Score {
-	if len(wire) == 0 {
-		return nil
-	}
-	scores := make([]Score, 0, len(wire))
-	for _, record := range wire {
-		score := Score{
-			ID: record.ID, Name: record.Name, DataType: ScoreDataType(record.DataType),
-			ConfigID: record.ConfigID, Comment: record.Comment, Timestamp: record.Timestamp,
-		}
-		switch value := bytes.TrimSpace(record.Value); {
-		case string(value) == "true" || string(value) == "false":
-			number := 0.0
-			if string(value) == "true" {
-				number = 1
-			}
-			score.NumericValue = &number
-		case len(value) != 0 && value[0] == '"':
-			var text string
-			if json.Unmarshal(value, &text) == nil {
-				score.StringValue = &text
-			}
-		default:
-			if number, err := strconv.ParseFloat(string(value), 64); err == nil {
-				score.NumericValue = &number
-			}
-		}
-		if record.Subject != nil {
-			switch record.Subject.Kind {
-			case "trace":
-				score.TraceID = record.Subject.ID
-			case "observation":
-				score.TraceID, score.ObservationID = record.Subject.TraceID, record.Subject.ID
-			case "session":
-				score.SessionID = record.Subject.ID
-			case "experiment":
-				score.DatasetRunID = record.Subject.ID
-			}
-		}
-		if len(record.Metadata) != 0 {
-			decoder := json.NewDecoder(bytes.NewReader(record.Metadata))
-			decoder.UseNumber()
-			var metadata map[string]any
-			if decoder.Decode(&metadata) == nil {
-				score.Metadata = metadata
-			}
-		}
-		scores = append(scores, score)
-	}
-	return scores
+	return values, setListFilters(values, filters)
 }

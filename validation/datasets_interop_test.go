@@ -1233,6 +1233,17 @@ func TestDatasetInterop(t *testing.T) {
 		})
 	})
 
+	t.Run("E8 annotation review", func(t *testing.T) {
+		review := h.reviewSetup(t)
+		for _, direction := range directions {
+			writer, reader := direction[0], direction[1]
+			var evidence []string
+			h.record(t, "E8 annotation review", writer+"→"+reader, &evidence, func(t *testing.T) {
+				h.annotationRoundTrip(t, review, writer, reader, &evidence)
+			})
+		}
+	})
+
 	t.Run("E6 legacy dataset runs", func(t *testing.T) {
 		// Not an interoperability pass: the case only classifies the
 		// server's mode. Its status is UNSUPPORTED when the server rejects
@@ -1696,7 +1707,7 @@ func (h *interopHarness) readWithGoSDK(t *testing.T, run experimentRun, from tim
 	return stored
 }
 
-func goStoredScore(score langfuse.Score) storedScore {
+func goStoredScore(score langfuse.StoredScore) storedScore {
 	result := storedScore{id: score.ID, name: score.Name, dataType: string(score.DataType)}
 	switch {
 	case score.ObservationID != "":

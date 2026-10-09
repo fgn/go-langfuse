@@ -5,6 +5,41 @@ Versioning once the first release is tagged.
 
 ## [Unreleased]
 
+- **Breaking**: require Go 1.26 and update `golang.org/x/net` to v0.60.0 for
+  GO-2026-6603, GO-2026-6610, GO-2026-6611, GO-2026-6612, and GO-2026-6617
+  (HTTP/2 crashes, resource exhaustion, and malformed header handling);
+  x/net v0.60.0 requires Go 1.26, and Go 1.25 no longer receives security
+  fixes. `golang.org/x/sys` and `golang.org/x/text` follow as x/net
+  requirements. The suggested toolchain is go1.26.9, which fixes the Go 1.25.13
+  standard-library advisories in `net/http`, `net/textproto`, `crypto/tls`,
+  and `html/template`.
+- Add annotation review: score configs (`CreateScoreConfig`,
+  `GetScoreConfig`, `UpdateScoreConfig`, `ScoreConfigs`), annotation queues
+  (`CreateAnnotationQueue`, `GetAnnotationQueue`, `AnnotationQueues`, and
+  their items and assignments), comments (`CreateComment`, `GetComment`,
+  `Comments`), and score reads through the Langfuse v3 score API (`Scores`,
+  returning `StoredScore`). `CreateScore` sends one score through the score
+  REST endpoint and returns the server's answer; with the new `Score.Source`
+  set to `ScoreSourceAnnotation` and `Score.QueueID`, it prefills a value for
+  reviewers in an annotation queue. REST writes follow the dataset rules: they
+  are never retried, and a failure after sending wraps
+  `ErrWriteOutcomeUnknown`.
+- `RecordScore` sends `Score.QueueID` and rejects a `Score.Source` other than
+  empty or `ScoreSourceAPI`; ingestion documents no source. Both score calls
+  now count TEXT values in UTF-16 code units, as Langfuse does, and reject a
+  non-finite numeric value before serializing it.
+- **Breaking**: `StoredExperiment.Scores` and `StoredExperimentItem.Scores`
+  are `[]StoredScore`, which embeds `Score`; field access is unchanged, and an
+  element's `Score` field is the former value. Stored scores now carry
+  `Source` and `QueueID`, empty score metadata reads as nil, and experiment
+  reads reject scores without their core fields or subject.
+- **Behavior**: page-numbered listings, including `Datasets` and
+  `DatasetItems`, fail on a response without its page count instead of
+  stopping early, and experiment read filters reject values with surrounding
+  whitespace, which Langfuse would trim. REST error text says "API request"
+  or "request" where it said "dataset request" or "dataset context", and a
+  repeated cursor reports "listing repeated a page cursor".
+
 ## [0.12.0] - 2026-10-08
 
 - Update `google.golang.org/grpc` to v1.83.2 for GO-2026-6443 (server panic
