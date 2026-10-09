@@ -101,13 +101,15 @@ jobs:
       - name: Run vet
         run: go vet -mod=readonly ./...
 
+      # Execution counts, not durations: when a -fuzztime duration expires, the
+      # Go fuzz coordinator can report "context deadline exceeded" as a failure.
       - name: Fuzz smoke tests
         run: |
-          go test -mod=readonly ./internal/attributes -run='^$' -fuzz='^FuzzEncode$' -fuzztime=2s
-          go test -mod=readonly ./internal/attributes -run='^$' -fuzz=FuzzNormalizeUsage -fuzztime=2s
-          go test -mod=readonly ./internal/attributes -run='^$' -fuzz='^FuzzEncodeContent$' -fuzztime=2s
-          go test -mod=readonly ./internal/transport -run='^$' -fuzz=FuzzNormalizeEndpoint -fuzztime=2s
-          go test -mod=readonly . -run='^$' -fuzz=FuzzPromptCompile -fuzztime=2s
+          go test -mod=readonly ./internal/attributes -run='^$' -fuzz='^FuzzEncode$' -fuzztime=10000x
+          go test -mod=readonly ./internal/attributes -run='^$' -fuzz=FuzzNormalizeUsage -fuzztime=10000x
+          go test -mod=readonly ./internal/attributes -run='^$' -fuzz='^FuzzEncodeContent$' -fuzztime=10000x
+          go test -mod=readonly ./internal/transport -run='^$' -fuzz=FuzzNormalizeEndpoint -fuzztime=10000x
+          go test -mod=readonly . -run='^$' -fuzz=FuzzPromptCompile -fuzztime=10000x
 
       - name: Vulnerability scan
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
@@ -143,7 +145,7 @@ jobs:
           providers='sashabaranov|github.com/openai/|google.golang.org/genai|cloud.google.com'
           ! grep -E "$providers" go.mod go.sum
           GOWORK=off go list -deps ./... | (! grep -E "$providers")
-          GOWORK=off go test -mod=readonly ./internal/wiretap -run='^$' -fuzz=FuzzSSEFramer -fuzztime=2s
+          GOWORK=off go test -mod=readonly ./internal/wiretap -run='^$' -fuzz=FuzzSSEFramer -fuzztime=10000x
           GOWORK=off go run golang.org/x/vuln/cmd/govulncheck@v1.7.0 ./...
 
       - name: Verify repository and release metadata
